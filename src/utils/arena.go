@@ -4,6 +4,7 @@ import (
 	"github.com/pkg/errors"
 	"log"
 	"sync/atomic"
+	"trainKv/model"
 	"unsafe"
 )
 
@@ -83,11 +84,10 @@ func (a *Arena) PutKey(key []byte) uint32 {
 	return offset
 }
 
-func (a *Arena) PutVal(val []byte) uint32 {
-	keyLen := uint32(len(val))
-	offset := a.allocate(keyLen)
-	bytes := a.data[offset : offset+keyLen]
-	copy(bytes, val)
+func (a *Arena) PutVal(val model.ValueExt) uint32 {
+	encodeValSize := val.EncodeValSize()
+	offset := a.allocate(encodeValSize)
+	val.EncodeVal(a.data[offset:])
 	return offset
 }
 
@@ -95,8 +95,9 @@ func (a *Arena) getKey(offset uint32, size uint32) []byte {
 	return a.data[offset : offset+size]
 }
 
-func (a *Arena) getVal(offset uint32, size uint32) []byte {
-	return a.data[offset : offset+size]
+func (a *Arena) getVal(offset uint32, size uint32) (ret model.ValueExt) {
+	ret.DecodeVal(a.data[offset : offset+size])
+	return
 }
 
 func AssertTrue(b bool) {

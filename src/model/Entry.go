@@ -5,8 +5,8 @@ import "time"
 type Entry struct {
 	Key       []byte
 	Value     []byte
-	Mete      byte
-	ExpiresAt uint64
+	Meta      byte
+	ExpiresAt int64
 	Version   uint64
 	HeaderLen int
 	Offset    uint32
@@ -20,14 +20,14 @@ func NewEntry(key, val []byte) *Entry {
 }
 
 func (e *Entry) WithTTL(dur time.Duration) *Entry {
-	e.ExpiresAt = uint64(time.Now().Add(dur).Unix())
+	e.ExpiresAt = time.Now().Add(dur).Unix()
 	return e
 }
 
 func (e Entry) EncodeSize() uint32 {
 	keyLen := len(e.Key)
 	valLen := len(e.Value)
-	varIntLen := sizeVarInt(uint64(e.Mete))
+	varIntLen := sizeVarInt(uint64(e.Meta))
 	ExpiresAtLen := sizeVarInt(uint64(e.ExpiresAt))
 	return uint32(keyLen + valLen + varIntLen + ExpiresAtLen)
 }
@@ -41,7 +41,7 @@ func (e *Entry) IsDeleteOrExpired() bool {
 		return false
 	}
 
-	return e.ExpiresAt <= uint64(time.Now().Unix())
+	return e.ExpiresAt <= time.Now().Unix()
 }
 
 func (e *Entry) EstimateSize(valThreshold int) int {

@@ -31,20 +31,20 @@ func TestSkipListBasicCRUD(t *testing.T) {
 	entry1 := model.NewEntry([]byte(RandString(10)), []byte("Val1"))
 	list.Put(entry1)
 	vs := list.Get(entry1.Key)
-	assert.Equal(t, entry1.Value, vs)
+	assert.Equal(t, entry1.Value, vs.Value)
 
 	entry2 := model.NewEntry([]byte(RandString(10)), []byte("Val2"))
 	list.Put(entry2)
 	vs = list.Get(entry2.Key)
-	assert.Equal(t, entry2.Value, vs)
+	assert.Equal(t, entry2.Value, vs.Value)
 
 	//Get a not exist entry
-	assert.Nil(t, list.Get([]byte(RandString(10))))
+	assert.Nil(t, list.Get([]byte(RandString(10))).Value)
 
 	//Update a entry
 	entry2_new := model.NewEntry(entry1.Key, []byte("Val1+1"))
 	list.Put(entry2_new)
-	assert.Equal(t, entry2_new.Value, list.Get(entry2_new.Key))
+	assert.Equal(t, entry2_new.Value, list.Get(entry2_new.Key).Value)
 }
 
 func Benchmark_SkipListBasicCRUD(b *testing.B) {
@@ -56,7 +56,7 @@ func Benchmark_SkipListBasicCRUD(b *testing.B) {
 		key, val = RandString(10), fmt.Sprintf("Val%d", i)
 		entry := model.NewEntry([]byte(key), []byte(val))
 		list.Put(entry)
-		searchVal := list.Get([]byte(key))
+		searchVal := list.Get([]byte(key)).Value
 		assert.Equal(b, searchVal, []byte(val))
 	}
 }
@@ -96,7 +96,7 @@ func TestConcurrentBasic(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			v := l.Get(key(i))
+			v := l.Get(key(i)).Value
 			require.EqualValues(t, key(i), v)
 			return
 
@@ -127,7 +127,7 @@ func Benchmark_ConcurrentBasic(b *testing.B) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			v := l.Get(key(i))
+			v := l.Get(key(i)).Value
 			require.EqualValues(b, key(i), v)
 			require.NotNil(b, v)
 		}(i)
@@ -141,16 +141,16 @@ func TestSkipListIterator(t *testing.T) {
 	//Put & Get
 	entry1 := model.NewEntry([]byte(RandString(10)), []byte(RandString(10)))
 	list.Put(entry1)
-	assert.Equal(t, entry1.Value, list.Get(entry1.Key))
+	assert.Equal(t, entry1.Value, list.Get(entry1.Key).Value)
 
 	entry2 := model.NewEntry([]byte(RandString(10)), []byte(RandString(10)))
 	list.Put(entry2)
-	assert.Equal(t, entry2.Value, list.Get(entry2.Key))
+	assert.Equal(t, entry2.Value, list.Get(entry2.Key).Value)
 
 	//Update a entry
 	entry2_new := model.NewEntry([]byte(RandString(10)), []byte(RandString(10)))
 	list.Put(entry2_new)
-	assert.Equal(t, entry2_new.Value, list.Get(entry2_new.Key))
+	assert.Equal(t, entry2_new.Value, list.Get(entry2_new.Key).Value)
 
 	iter := list.NewSkipListIterator()
 	for iter.Rewind(); iter.Valid(); iter.Next() {

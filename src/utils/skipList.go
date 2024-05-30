@@ -28,15 +28,16 @@ type skipNode struct {
 	next   [maxHeight]uint32
 }
 
-func newSkipNode(arena *Arena, key, value []byte, height int) *skipNode {
+func newSkipNode(arena *Arena, key []byte, value model.ValueExt, height int) *skipNode {
 	nodeOffset := arena.AllocateNode(height)
 	keyOffset := arena.PutKey(key)
 	valOffset := arena.PutVal(value)
 	node := arena.getNode(nodeOffset)
+
 	node.height = uint16(height)
 	node.keyOffset = keyOffset
 	node.keySize = uint32(len(key))
-	node.value = encodeVal(valOffset, uint32(len(value)))
+	node.value = encodeVal(valOffset, value.EncodeValSize())
 	return node
 }
 func encodeVal(valOffset, valSize uint32) uint64 {
@@ -64,7 +65,7 @@ func (n *skipNode) getNextOffset(height int) uint32 {
 func (n *skipNode) casNextOffset(h int, old, new uint32) bool {
 	return atomic.CompareAndSwapUint32(&n.next[h], old, new)
 }
-func (n *skipNode) getVal(arena *Arena) []byte {
+func (n *skipNode) getVal(arena *Arena) model.ValueExt {
 	return arena.getVal(n.getValOffset())
 }
 
@@ -78,7 +79,7 @@ type SkipList struct {
 
 func NewSkipList(arenaSize int64) *SkipList {
 	arena := NewArena(arenaSize)
-	head := newSkipNode(arena, nil, nil, maxHeight)
+	head := newSkipNode(arena, nil, model.ValueExt{}, maxHeight)
 	headOffset := arena.getNodeOffset(head)
 	return &SkipList{
 		arena:      arena,
@@ -116,7 +117,7 @@ func (skipList *SkipList) getHead() *skipNode {
 func (skipList *SkipList) getHeight() int32 {
 	return atomic.LoadInt32(&skipList.height)
 }
-func (skipList *SkipList) getMemSize() int64 {
+func (skipList *SkipList) GetMemSize() int64 {
 	return skipList.arena.size()
 }
 func (skipList *SkipList) findLast() *skipNode {
@@ -223,21 +224,27 @@ func (skipList *SkipList) findSpliceForLevel(key []byte, before uint32, level in
 		before = nextOffset
 	}
 }
-func (skipList *SkipList) Get(key []byte) []byte {
+func (skipList *SkipList) Get(key []byte) model.ValueExt {
 	findNear, _ := skipList.findNear(key, false, true)
 	if findNear == nil {
-		return nil
+		return model.ValueExt{}
 	}
 	nextKey := skipList.arena.getKey(findNear.keyOffset, findNear.keySize)
 	if !model.SameKey(key, nextKey) {
-		return nil
+		return model.ValueExt{}
 	}
 	valOffset, valSize := findNear.getValOffset()
 	val := skipList.arena.getVal(valOffset, valSize)
 	return val
 }
 func (skipList *SkipList) Put(e *model.Entry) {
-	key, v := e.Key, e.Value
+	key, v := e.Key, model.ValueExt{
+		Meta:      e.Meta,
+		Value:     e.Value,
+		ExpiresAt: e.ExpiresAt,
+		Version:   e.Version,
+	}
+
 	listHeight := skipList.getHeight()
 	var prev [maxHeight + 1]uint32
 	var next [maxHeight + 1]uint32
@@ -247,7 +254,7 @@ func (skipList *SkipList) Put(e *model.Entry) {
 		prev[i], next[i] = skipList.findSpliceForLevel(key, prev[i+1], i)
 		if prev[i] == next[i] {
 			vo := skipList.arena.PutVal(v)
-			encValue := encodeVal(vo, uint32(len(v)))
+			encValue := encodeVal(vo, v.EncodeValSize())
 			prevNode := skipList.arena.getNode(prev[i])
 			prevNode.setVal(encValue)
 			return
@@ -286,7 +293,7 @@ func (skipList *SkipList) Put(e *model.Entry) {
 			if prev[i] == next[i] {
 				AssertTruef(i == 0, "Equality can happen only on base level: %d", i)
 				vo := skipList.arena.PutVal(v)
-				encValue := encodeVal(vo, uint32(len(v)))
+				encValue := encodeVal(vo, v.EncodeValSize())
 				prevNode := skipList.arena.getNode(prev[i])
 				prevNode.setVal(encValue)
 				return
@@ -305,7 +312,7 @@ func (skipList *SkipList) Draw(align bool) {
 			if next != nil {
 				key := next.getKey(skipList.arena)
 				vs := next.getVal(skipList.arena)
-				nodeStr = fmt.Sprintf("%s(%s)", key, vs)
+				nodeStr = fmt.Sprintf("%s(%s)", key, vs.Value)
 			} else {
 				break
 			}
@@ -362,7 +369,7 @@ type SkipListIterator struct {
 func (s *SkipListIterator) Key() []byte {
 	return s.list.arena.getKey(s.curr.keyOffset, s.curr.keySize)
 }
-func (s *SkipListIterator) Value() []byte {
+func (s *SkipListIterator) Value() model.ValueExt {
 	valOffset, valSize := s.curr.getValOffset()
 	val := s.list.arena.getVal(valOffset, valSize)
 	return val
@@ -386,13 +393,11 @@ func (s *SkipListIterator) Rewind() {
 }
 func (s *SkipListIterator) Item() interfaces.Item {
 	return interfaces.Item{Item: &model.Entry{
-		Key:       nil,
-		Value:     nil,
-		Mete:      0,
-		ExpiresAt: 0,
-		Version:   0,
-		HeaderLen: 0,
-		Offset:    0,
+		Key:       s.Key(),
+		Value:     s.Value().Value,
+		Meta:      s.Value().Meta,
+		ExpiresAt: s.Value().ExpiresAt,
+		Version:   s.Value().Version,
 	}}
 }
 func (s *SkipListIterator) Seek(key []byte) {
