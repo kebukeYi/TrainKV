@@ -2,13 +2,15 @@ package model
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
+	"time"
 	errors "trainKv/common"
 )
 
 func CompareKey(key1, key2 []byte) int {
 	errors.CondPanic(len(key1) <= 8 || len(key2) <= 8,
-		fmt.Errorf("CompareKeys: %s,%s < 8", string(key1), string(key2)))
+		fmt.Errorf("CompareKeys:key1:%s < 8 || key2:%s < 8", string(key1), string(key2)))
 	if compare := bytes.Compare(key1[0:len(key1)-8], key2[0:len(key2)-8]); compare != 0 {
 		return compare
 	}
@@ -29,4 +31,12 @@ func SameKey(src, dst []byte) bool {
 		return false
 	}
 	return bytes.Equal(ParseKey(src), ParseKey(dst))
+}
+
+func KeyWithTs(key []byte, ts uint64) []byte {
+	out := make([]byte, len(key)+8)
+	copy(out, key)
+	//binary.BigEndian.PutUint64(out[len(key):], math.MaxUint64-ts)
+	binary.BigEndian.PutUint64(out[len(key):], uint64(time.Now().UnixNano()/1e9))
+	return out
 }

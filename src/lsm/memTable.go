@@ -37,6 +37,9 @@ func (lsm *LSM) NewMemoryTable() *memoryTable {
 }
 
 func (m *memoryTable) Get(key []byte) (*model.Entry, error) {
+	if key == nil {
+		return nil, errors.ErrNotFound
+	}
 	val := m.skipList.Get(key)
 	if val.Value == nil {
 		return nil, errors.ErrNotFound

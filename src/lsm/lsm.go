@@ -35,17 +35,20 @@ type LSM struct {
 }
 
 func NewLSM(opt *Options) *LSM {
-	lsm := &LSM{}
+	lsm := &LSM{
+		option: opt,
+	}
+	lsm.levelManger = InitLevelManger(opt)
 	lsm.memoryTable, lsm.imemoryTables = lsm.recovery()
 	return lsm
 }
 
 func (lsm *LSM) Get(key []byte) (*model.Entry, error) {
 	if len(key) == 0 {
-		return nil, errors.ErrEmptyKey
+		return nil, common.ErrEmptyKey
 	}
 	entry, err := lsm.memoryTable.Get(key)
-	errors.PrintErr(err, "lsm.memoryTable.Get()")
+	common.PrintErr(err, "lsm.memoryTable.Get()")
 	if entry != nil {
 		return entry, nil
 	}
@@ -54,10 +57,11 @@ func (lsm *LSM) Get(key []byte) (*model.Entry, error) {
 			return entry, err
 		}
 	}
-	return nil, errors.ErrNotFound
+	return nil, common.ErrNotFound
 }
 
 func (lsm *LSM) Put(entry *model.Entry) bool {
+	entry.Key = model.KeyWithTs(entry.Key, 0)
 	err := lsm.memoryTable.Put(entry)
 	if err != nil {
 		return false

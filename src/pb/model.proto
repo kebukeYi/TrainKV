@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+option go_package = "../pb;pb";
+
+message ManifestChangeSet{
+  repeated ManifestChange changes = 1;
+}
+
+message ManifestChange{
+  uint64 Id = 1;
+  enum ChangeType{
+    Create = 0;
+    Delete = 1;
+  }
+  ChangeType Type = 2;
+  uint32 LevelId = 3; // Only used for CREATE
+  bytes CheckSum = 4;// Only used for CREATE
+}

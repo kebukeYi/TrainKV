@@ -7,6 +7,7 @@ import (
 	"os"
 	errors "trainKv/common"
 	"trainKv/interfaces"
+	"trainKv/mmap"
 	"trainKv/model"
 )
 
@@ -50,23 +51,22 @@ func (h *WalHeader) decode(buf []byte) {
 }
 
 type WAL struct {
-	file    *os.File
-	opt     interfaces.FileOptions
-	size    uint32
-	writeAt uint64
-	readAt  uint64
+	file   *mmap.MmapFile
+	opt    interfaces.FileOptions
+	size   uint32
+	readAt uint64
 }
 
 func OpenWalFile(opt *interfaces.FileOptions) *WAL {
-	file, err := os.OpenFile(opt.FileName, os.O_CREATE|os.O_RDWR, 0666)
+	//file, err := os.OpenFile(opt.FileName, os.O_CREATE|os.O_RDWR, 0666)
+	file, err := mmap.OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
 	if err != nil {
 		return nil
 	}
-	fileInfo, err := file.Stat()
+	fileInfo, err := file.Fd.Stat()
 	wal := &WAL{
-		file:    file,
-		writeAt: 0,
-		size:    uint32(fileInfo.Size()),
+		file: file,
+		size: uint32(fileInfo.Size()),
 	}
 	if err != nil {
 		return nil
@@ -76,14 +76,13 @@ func OpenWalFile(opt *interfaces.FileOptions) *WAL {
 
 func (w *WAL) Write(e *model.Entry) error {
 	walEncode, size := w.WalEncode(e)
-	n, err := w.file.WriteAt(walEncode, int64(w.writeAt))
+	n, err := w.file.Write(walEncode)
 	if err != nil {
 		return err
 	}
 	if n != size {
 		return nil
 	}
-	w.writeAt += uint64(size)
 	return nil
 }
 
@@ -121,7 +120,7 @@ func (w *WAL) WalEncode(e *model.Entry) ([]byte, int) {
 func (w *WAL) WalDecode(offset uint64) (*model.Entry, error) {
 	entry := &model.Entry{}
 	headerBuf := make([]byte, WalHeaderSize)
-	readN, err := w.file.ReadAt(headerBuf, int64(offset))
+	readN, err := w.file.Read(headerBuf, int64(offset))
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +130,7 @@ func (w *WAL) WalDecode(offset uint64) (*model.Entry, error) {
 	offset = offset + uint64(readN)
 
 	dataBuf := make([]byte, header.keyLen+header.valLen)
-	readN, err = w.file.ReadAt(dataBuf, int64(offset))
+	readN, err = w.file.Read(dataBuf, int64(offset))
 	entry.Key = dataBuf[:header.keyLen]
 	entry.Value = dataBuf[header.keyLen:]
 	entry.Meta = header.Meta
@@ -141,7 +140,7 @@ func (w *WAL) WalDecode(offset uint64) (*model.Entry, error) {
 	offset = offset + uint64(readN)
 
 	crcBuf := make([]byte, crcSize)
-	readN, err = w.file.ReadAt(crcBuf, int64(offset))
+	readN, err = w.file.Read(crcBuf, int64(offset))
 	readChecksumIEEE := binary.LittleEndian.Uint32(crcBuf[:])
 	if readChecksumIEEE != currChecksumIEEE {
 		return nil, errors.ErrWalInvalidCrc
@@ -155,21 +154,18 @@ func (w *WAL) EstimateWalEncodeSize(e *model.Entry) int {
 	return len(e.Key) + len(e.Value) + WalHeaderSize + 8 // crc 8B
 }
 
-// Fid _
 func (wf *WAL) Fid() uint64 {
 	return wf.opt.FID
 }
 
-// Close _
 func (wf *WAL) Close() error {
-	fileName := wf.file.Name()
+	fileName := wf.file.Fd.Name()
 	if err := wf.file.Close(); err != nil {
 		return err
 	}
 	return os.Remove(fileName)
 }
 
-// Name _
 func (wf *WAL) Name() string {
-	return wf.file.Name()
+	return wf.file.Fd.Name()
 }

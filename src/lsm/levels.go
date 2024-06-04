@@ -9,7 +9,12 @@ type levelManger struct {
 }
 
 func InitLevelManger(opt *Options) *levelManger {
-	return nil
+	lm := &levelManger{
+		maxFID: 0,
+		levels: make([]*levelHandler, 0),
+		opt:    opt,
+	}
+	return lm
 }
 
 func (receiver *levelManger) Get(key []byte) (*model.Entry, error) {
