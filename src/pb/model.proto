@@ -2,6 +2,8 @@ syntax = "proto3";
 
 option go_package = "../pb;pb";
 
+// protoc --gofast_out=. .\model.proto
+
 message ManifestChangeSet{
   repeated ManifestChange changes = 1;
 }
@@ -15,4 +17,18 @@ message ManifestChange{
   ChangeType Type = 2;
   uint32 LevelId = 3; // Only used for CREATE
   bytes CheckSum = 4;// Only used for CREATE
+}
+
+message tableIndex{
+  repeated blockOffset offsets = 1;
+  bytes bloomFilter = 2;
+  uint64 maxVersion = 3;
+  uint32 keyCount = 4;
+  uint32 staleDataSize = 5;
+}
+
+message blockOffset{
+  bytes key = 1;
+  uint64 offset = 2;
+  uint32 size = 3;
 }

@@ -2,6 +2,7 @@ package model
 
 import "encoding/binary"
 
+// ValueExt is the value with meta and expiresAt for skipList;
 type ValueExt struct {
 	Meta      byte // delete or normal
 	Value     []byte

@@ -30,7 +30,7 @@ type Options struct {
 type LSM struct {
 	memoryTable   *memoryTable
 	imemoryTables []*memoryTable
-	levelManger   *levelManger
+	levelManger   *levelsManger
 	option        *Options
 }
 

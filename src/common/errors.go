@@ -17,6 +17,7 @@ var (
 
 var ErrEmptyKey = errors.New("Key cannot be empty")
 var ErrNotFound = errors.New("not found")
+var ErrKeyNotFound = errors.New("not found key ")
 var ErrWalInvalidCrc = errors.New("walFile: invalid crc")
 var ErrBadReadMagic = errors.New("read magic failed")
 var ErrBadMagic = errors.New("bad magic")
@@ -24,6 +25,9 @@ var ErrBadCRC = errors.New("bad crc from read manifestFile")
 var ErrBadReadCRC = errors.New("read crc failed from manifestFile")
 var ErrBadChecksum = errors.New("bad Checksum from manifestFile")
 var ErrBadRemoveSST = errors.New("While removing table")
+
+// ErrChecksumMismatch is returned at checksum mismatch.
+var ErrChecksumMismatch = errors.New("checksum mismatch")
 
 func location(deep int, fullPath bool) string {
 	_, file, line, ok := runtime.Caller(deep)

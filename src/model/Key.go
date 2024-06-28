@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"time"
 	errors "trainKv/common"
 )
@@ -16,6 +17,13 @@ func CompareKey(key1, key2 []byte) int {
 	}
 	// key 相同的情况下, 比较后面的 时间戳; 但是会返回 cmp == 0 吗? 时间戳会相同吗?
 	return bytes.Compare(key1[len(key1)-8:], key2[len(key2)-8:])
+}
+
+func ParseTs(key []byte) uint64 {
+	if len(key) <= 8 {
+		return 0
+	}
+	return math.MaxUint64 - binary.BigEndian.Uint64(key[len(key)-8:])
 }
 
 // ParseKey parses the actual key from the key bytes.
