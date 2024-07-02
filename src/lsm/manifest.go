@@ -326,12 +326,13 @@ func (mf *ManifestFile) Close() error {
 }
 
 func (mf *ManifestFile) checkSSTable(ids map[uint64]struct{}) error {
+	// 1. Check all files in manifest exist.
 	for _, table := range mf.manifest.Tables {
 		if _, ok := ids[table.ID]; !ok {
 			return fmt.Errorf("sst file  can`t does not exist for table %d", table.ID)
 		}
 	}
-
+	// 2. Delete files that shouldn't exist.
 	for id := range ids {
 		if _, ok := mf.manifest.Tables[id]; !ok {
 			common.Err(fmt.Errorf("Table file %d  not referenced in MANIFEST", id))

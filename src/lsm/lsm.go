@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"time"
 	"trainKv/common"
 	"trainKv/model"
 	"trainKv/utils"
@@ -32,15 +33,33 @@ type LSM struct {
 	imemoryTables []*memoryTable
 	levelManger   *levelsManger
 	option        *Options
+	maxMemFID     uint32
 }
 
 func NewLSM(opt *Options) *LSM {
 	lsm := &LSM{
 		option: opt,
 	}
-	lsm.levelManger = InitLevelManger(opt)
+	lsm.levelManger = lsm.InitLevelManger(opt)
 	lsm.memoryTable, lsm.imemoryTables = lsm.recovery()
+	//go lsm.flushTask()
 	return lsm
+}
+
+func (lsm *LSM) Put(entry *model.Entry) (err error) {
+	if entry == nil || len(entry.Key) == 0 {
+		return common.ErrEmptyKey
+	}
+	if int64(lsm.memoryTable.wal.size)+int64(EstimateWalEncodeSize(entry)) >
+		lsm.option.MemTableSize {
+		lsm.Rotate()
+	}
+
+	err = lsm.memoryTable.Put(entry)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (lsm *LSM) Get(key []byte) (*model.Entry, error) {
@@ -52,21 +71,14 @@ func (lsm *LSM) Get(key []byte) (*model.Entry, error) {
 	if entry != nil {
 		return entry, nil
 	}
+
 	for i := len(lsm.imemoryTables) - 1; i >= 0; i-- {
 		if entry, err = lsm.imemoryTables[i].Get(key); entry != nil && entry.Value != nil {
 			return entry, err
 		}
 	}
-	return nil, common.ErrNotFound
-}
 
-func (lsm *LSM) Put(entry *model.Entry) bool {
-	entry.Key = model.KeyWithTs(entry.Key, 0)
-	err := lsm.memoryTable.Put(entry)
-	if err != nil {
-		return false
-	}
-	return true
+	return lsm.levelManger.Get(key)
 }
 
 func (lsm *LSM) MemSize() int64 {
@@ -84,4 +96,16 @@ func (lsm *LSM) GetSkipListFromMemTable() *utils.SkipList {
 func (lsm *LSM) Rotate() {
 	lsm.imemoryTables = append(lsm.imemoryTables, lsm.memoryTable)
 	lsm.memoryTable = lsm.NewMemoryTable()
+}
+
+func (lsm *LSM) flushTask() {
+	time.Sleep(time.Second * 10)
+	// 检查是否存在immutable需要刷盘;
+	for _, immutable := range lsm.imemoryTables {
+		if err := lsm.levelManger.flush(immutable); err != nil {
+			common.Err(err)
+		}
+		err := immutable.close()
+		common.Err(err)
+	}
 }

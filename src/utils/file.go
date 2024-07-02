@@ -1,14 +1,34 @@
 package utils
 
 import (
+	"fmt"
 	"github.com/pkg/errors"
 	"hash/crc32"
+	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"trainKv/common"
 	"trainKv/model"
 )
+
+// LoadIDMap Get the id of all sst files in the current folder
+func LoadIDMap(dir string) map[uint64]struct{} {
+	fileInfos, err := os.ReadDir(dir)
+	common.Err(err)
+	idMap := make(map[uint64]struct{})
+	for _, info := range fileInfos {
+		if info.IsDir() {
+			continue
+		}
+		fileID := FID(info.Name())
+		if fileID != 0 {
+			idMap[fileID] = struct{}{}
+		}
+	}
+	return idMap
+}
 
 // FID 根据file name 获取其fid
 func FID(name string) uint64 {
@@ -24,6 +44,9 @@ func FID(name string) uint64 {
 		return 0
 	}
 	return uint64(id)
+}
+func FileNameSSTable(dir string, id uint64) string {
+	return filepath.Join(dir, fmt.Sprintf("%05d.sst", id))
 }
 
 // VerifyChecksum crc32

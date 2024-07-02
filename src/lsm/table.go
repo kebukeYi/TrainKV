@@ -88,7 +88,7 @@ func (t *table) getBlock(idx int) (*block, error) {
 	}
 	var b *block
 	blockCacheKey := t.blockCacheKey(idx)
-	blk, ok := t.lm.cache.Get(blockCacheKey)
+	blk, ok := t.lm.cache.Get(string(blockCacheKey))
 	if ok && blk != nil {
 		b, _ = blk.(*block)
 		return b, nil
@@ -125,7 +125,7 @@ func (t *table) getBlock(idx int) (*block, error) {
 	entriesIndexEnd := entriesIndexStart + (numEntries * 4)
 	b.entryOffsets = model.BytesToU32Slice(b.data[entriesIndexStart:entriesIndexEnd])
 	b.entriesIndexOff = entriesIndexStart
-	t.lm.cache.Set(blockCacheKey, b)
+	t.lm.cache.Set(string(blockCacheKey), b)
 	return b, nil
 }
 

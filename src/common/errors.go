@@ -17,6 +17,7 @@ var (
 
 var ErrEmptyKey = errors.New("Key cannot be empty")
 var ErrNotFound = errors.New("not found")
+var ErrNotFoundTable = errors.New("not found table of key")
 var ErrKeyNotFound = errors.New("not found key ")
 var ErrWalInvalidCrc = errors.New("walFile: invalid crc")
 var ErrBadReadMagic = errors.New("read magic failed")

@@ -150,7 +150,7 @@ func (w *WAL) WalDecode(offset uint64) (*model.Entry, error) {
 	return entry, nil
 }
 
-func (w *WAL) EstimateWalEncodeSize(e *model.Entry) int {
+func EstimateWalEncodeSize(e *model.Entry) int {
 	return len(e.Key) + len(e.Value) + WalHeaderSize + 8 // crc 8B
 }
 
