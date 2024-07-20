@@ -65,8 +65,18 @@ func Panic(err error) {
 	}
 }
 
+func Panic2(_ interface{}, err error) {
+	Panic(err)
+}
+
 func CondPanic(condition bool, err error) {
 	if condition {
 		Panic(err)
 	}
+}
+func WarpErr(format string, err error) error {
+	if err != nil {
+		fmt.Printf("%s %s %s", format, location(2, true), err)
+	}
+	return err
 }

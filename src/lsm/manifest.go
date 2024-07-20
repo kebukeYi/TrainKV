@@ -250,6 +250,7 @@ func doRewrite(path string, manifest *Manifest) (*os.File, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
+	// HEAD:4 version:4
 	headerBuf := make([]byte, common.ManifestFileHeaderLen)
 	copy(headerBuf[0:4], common.MagicText[:])
 	binary.BigEndian.PutUint32(headerBuf[4:8], common.MagicVersion)

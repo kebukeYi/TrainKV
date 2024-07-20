@@ -109,3 +109,11 @@ func (lsm *LSM) flushTask() {
 		common.Err(err)
 	}
 }
+
+func (lsm *LSM) StartCompacter() {
+
+}
+
+func (lsm *LSM) Close() error {
+	return nil
+}

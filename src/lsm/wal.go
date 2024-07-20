@@ -21,7 +21,7 @@ type WalHeader struct {
 	keyLen    uint32
 	valLen    uint32
 	Meta      byte
-	ExpiredAt int64
+	ExpiredAt uint64
 }
 
 func (h WalHeader) encode() []byte {
@@ -30,7 +30,7 @@ func (h WalHeader) encode() []byte {
 	index += binary.PutVarint(buf[index:], int64(h.keyLen))
 	index += binary.PutVarint(buf[index:], int64(h.valLen))
 	buf[index] = h.Meta
-	index += binary.PutVarint(buf[index+1:], h.ExpiredAt)
+	index += binary.PutUvarint(buf[index+1:], h.ExpiredAt)
 	return buf
 }
 
@@ -46,7 +46,7 @@ func (h *WalHeader) decode(buf []byte) {
 
 	h.Meta = buf[index]
 
-	expiredAt, n := binary.Varint(buf[index+1:])
+	expiredAt, n := binary.Uvarint(buf[index+1:])
 	h.ExpiredAt = expiredAt
 }
 
@@ -154,18 +154,18 @@ func EstimateWalEncodeSize(e *model.Entry) int {
 	return len(e.Key) + len(e.Value) + WalHeaderSize + 8 // crc 8B
 }
 
-func (wf *WAL) Fid() uint64 {
-	return wf.opt.FID
+func (w *WAL) Fid() uint64 {
+	return w.opt.FID
 }
 
-func (wf *WAL) Close() error {
-	fileName := wf.file.Fd.Name()
-	if err := wf.file.Close(); err != nil {
+func (w *WAL) Close() error {
+	fileName := w.file.Fd.Name()
+	if err := w.file.Close(); err != nil {
 		return err
 	}
 	return os.Remove(fileName)
 }
 
-func (wf *WAL) Name() string {
-	return wf.file.Fd.Name()
+func (w *WAL) Name() string {
+	return w.file.Fd.Name()
 }

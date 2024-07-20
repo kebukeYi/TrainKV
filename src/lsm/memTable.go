@@ -25,7 +25,7 @@ func (lsm *LSM) NewMemoryTable() *memoryTable {
 	fileOpt := &interfaces.FileOptions{
 		Dir:      lsm.option.WorkDir,
 		Flag:     os.O_CREATE | os.O_RDWR,
-		MaxSz:    int(lsm.option.MemTableSize), //TODO wal 要设置多大比较合理？ 姑且跟sst一样大
+		MaxSz:    int(lsm.option.MemTableSize), // wal 要设置多大比较合理？ 姑且跟sst一样大
 		FID:      newFid,
 		FileName: mtFilePath(lsm.option.WorkDir, newFid),
 	}

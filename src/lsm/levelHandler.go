@@ -36,6 +36,7 @@ func (leh *levelHandler) addSize(t *table) {
 	leh.totalSize += t.Size()
 	leh.totalStaleSize += int64(t.getStaleDataSize())
 }
+
 func (leh *levelHandler) getTotalSize() int64 {
 	leh.mux.Lock()
 	defer leh.mux.Unlock()
@@ -46,6 +47,7 @@ func (leh *levelHandler) subtractSize(t *table) {
 	leh.totalSize -= t.Size()
 	leh.totalStaleSize -= int64(t.getStaleDataSize())
 }
+
 func (leh *levelHandler) numTables() int {
 	leh.mux.RLock()
 	defer leh.mux.RUnlock()
@@ -67,14 +69,33 @@ func (leh *levelHandler) searchL0SST(key []byte) (*model.Entry, error) {
 	var err error
 	var entry *model.Entry
 	//  todo 在第0层 为什么没有从 尾部开始查询?
-	for _, table := range leh.tables {
-		if entry, err = table.Search(key, &version); err == nil {
-			return entry, nil
+	// https://github.com/kebukeYi/badger/blob/main/level_handler.go#L241
+	out := make([]*table, 0)
+	defTables := func(tables []*table) error {
+		for _, t := range tables {
+			if err2 := t.DecrRef(); err2 != nil {
+				common.Err(err)
+				return err2
+			}
 		}
-		common.Err(err)
+		return nil
 	}
-	return nil, common.ErrNotFound
+	for i := len(leh.tables) - 1; i >= 0; i-- {
+		t := leh.tables[i]
+		t.IncrRef()
+		out = append(out, t)
+	}
+	for _, table := range out {
+		if entry, err = table.Search(key, &version); err == nil {
+			break
+		} else {
+			common.Err(err)
+		}
+	}
+	err = defTables(out)
+	return entry, common.ErrNotFound
 }
+
 func (leh *levelHandler) searchLnSST(key []byte) (*model.Entry, error) {
 	getTable := leh.getTable(key)
 	if getTable == nil {

@@ -238,8 +238,8 @@ func (tier *tableIterator) Next() {
 		tier.Next()
 		return
 	}
-	// todo 这是何意?
-	tier.it = tier.biter.Item()
+	// todo 这是何意? badger 源码中没有
+	// tier.it = tier.biter.Item()
 }
 
 func (tier *tableIterator) Valid() bool {

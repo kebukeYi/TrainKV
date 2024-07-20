@@ -232,7 +232,7 @@ func (ssb *sstBuilder) done() buildData {
 	checksum := ssb.calculateChecksum(blockIndex)
 	bd.index = blockIndex
 	bd.checksum = checksum
-	//todo 生成 sst build data 的 4+4 是什么?
+	//生成 sst build data 的 4+4 是什么?
 	bd.size = int(dataSize) + len(blockIndex) + len(checksum) + 4 /* len(blockIndex) */ + 4 /* len(checksum) */
 	return bd
 }
@@ -352,6 +352,7 @@ func (i *blockIterator) setBlock(b *block) {
 func (itr *blockIterator) seekToFirst() {
 	itr.setIndex(0)
 }
+
 func (itr *blockIterator) seekToLast() {
 	itr.setIndex(len(itr.entryOffsets) - 1)
 }

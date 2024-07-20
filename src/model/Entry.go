@@ -1,15 +1,21 @@
 package model
 
-import "time"
+import (
+	"encoding/binary"
+	"time"
+)
 
+// Entry _ 最外层写入的结构体
 type Entry struct {
 	Key       []byte
 	Value     []byte
-	Meta      byte
-	ExpiresAt int64
-	Version   uint64
-	HeaderLen int
-	Offset    uint32
+	ExpiresAt uint64
+
+	Meta         byte
+	Version      uint64
+	HeaderLen    int
+	Offset       uint32
+	ValThreshold int64
 }
 
 func NewEntry(key, val []byte) *Entry {
@@ -20,16 +26,15 @@ func NewEntry(key, val []byte) *Entry {
 }
 
 func (e *Entry) WithTTL(dur time.Duration) *Entry {
-	e.ExpiresAt = time.Now().Add(dur).Unix()
+	e.ExpiresAt = uint64(time.Now().Add(dur).Unix())
 	return e
 }
 
 func (e Entry) EncodeSize() uint32 {
-	keyLen := len(e.Key)
 	valLen := len(e.Value)
 	varIntLen := sizeVarInt(uint64(e.Meta))
-	ExpiresAtLen := sizeVarInt(uint64(e.ExpiresAt))
-	return uint32(keyLen + valLen + varIntLen + ExpiresAtLen)
+	ExpiresAtLen := sizeVarInt(e.ExpiresAt)
+	return uint32(valLen + varIntLen + ExpiresAtLen)
 }
 
 func (e *Entry) IsDeleteOrExpired() bool {
@@ -41,7 +46,7 @@ func (e *Entry) IsDeleteOrExpired() bool {
 		return false
 	}
 
-	return e.ExpiresAt <= time.Now().Unix()
+	return e.ExpiresAt <= uint64(time.Now().Unix())
 }
 
 func (e *Entry) EstimateSize(valThreshold int) int {
@@ -63,4 +68,34 @@ func sizeVarInt(a uint64) (n int) {
 		}
 	}
 	return n
+}
+
+type EntryHeader struct {
+	KLen      uint32
+	VLen      uint32
+	ExpiresAt uint64
+	Meta      byte
+}
+
+func (h EntryHeader) Encode(out []byte) int {
+	out[0] = h.Meta
+	index := 1
+	index += binary.PutUvarint(out[index:], uint64(h.KLen))
+	index += binary.PutUvarint(out[index:], uint64(h.VLen))
+	index += binary.PutUvarint(out[index:], h.ExpiresAt)
+	return index
+}
+func (h *EntryHeader) Decode(buf []byte) int {
+	h.Meta = buf[0]
+	index := 1
+	klen, count := binary.Uvarint(buf[index:])
+	h.KLen = uint32(klen)
+	index += count
+
+	vlen, count := binary.Uvarint(buf[index:])
+	h.VLen = uint32(vlen)
+	index += count
+
+	h.ExpiresAt, count = binary.Uvarint(buf[index:])
+	return index + count
 }

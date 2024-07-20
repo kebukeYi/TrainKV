@@ -48,3 +48,7 @@ func KeyWithTs(key []byte, ts uint64) []byte {
 	binary.BigEndian.PutUint64(out[len(key):], uint64(time.Now().UnixNano()/1e9))
 	return out
 }
+
+func SafeCopy(des, src []byte) []byte {
+	return append(des[:0], src...)
+}

@@ -3,9 +3,9 @@ package lsm
 import (
 	"fmt"
 	"math/rand"
-	"os"
 	"testing"
 	"time"
+	"trainKv/interfaces"
 	"trainKv/model"
 )
 
@@ -19,22 +19,19 @@ func RandString(len int) string {
 	}
 	return string(bytes)
 }
+
+// /usr/local/temp/train/wal
+// /usr/local/temp/train/tables
 func TestWAL_Write(t *testing.T) {
-	file, err2 := os.CreateTemp("F:\\TrainKV\\wal", "")
-	if err2 != nil {
-		fmt.Println("create temp file failed")
-		return
-	}
-	w := &WAL{
-		file:    file,
-		writeAt: 0,
-	}
+	w := OpenWalFile(&interfaces.FileOptions{
+		FileName: "/user/local/temp/trainkv/wal/1.wal",
+	})
 	for i := 0; i < 10; i++ {
 		var entry = &model.Entry{
 			Key:       []byte(RandString(10)),
 			Value:     []byte(RandString(10)),
 			Meta:      1,
-			ExpiresAt: time.Now().Unix(),
+			ExpiresAt: uint64(time.Now().Unix()),
 		}
 		err := w.Write(entry)
 		if err != nil {
@@ -42,7 +39,7 @@ func TestWAL_Write(t *testing.T) {
 		}
 	}
 
-	fmt.Printf("writeAt: %d\n", w.writeAt)
+	fmt.Printf("writeAt: %d\n", w.readAt)
 
 	var readAt uint64 = 0
 	for {
