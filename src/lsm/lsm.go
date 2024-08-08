@@ -1,7 +1,6 @@
 package lsm
 
 import (
-	"time"
 	"trainKv/common"
 	"trainKv/model"
 	"trainKv/utils"
@@ -29,11 +28,12 @@ type Options struct {
 }
 
 type LSM struct {
-	memoryTable   *memoryTable
-	imemoryTables []*memoryTable
-	levelManger   *levelsManger
-	option        *Options
-	maxMemFID     uint32
+	memoryTable    *memoryTable
+	immemoryTables []*memoryTable
+	levelManger    *levelsManger
+	option         *Options
+	maxMemFID      uint32
+	closer         *utils.Closer
 }
 
 func NewLSM(opt *Options) *LSM {
@@ -41,8 +41,8 @@ func NewLSM(opt *Options) *LSM {
 		option: opt,
 	}
 	lsm.levelManger = lsm.InitLevelManger(opt)
-	lsm.memoryTable, lsm.imemoryTables = lsm.recovery()
-	//go lsm.flushTask()
+	lsm.memoryTable, lsm.immemoryTables = lsm.recovery()
+	lsm.closer = utils.NewCloser()
 	return lsm
 }
 
@@ -72,8 +72,8 @@ func (lsm *LSM) Get(key []byte) (*model.Entry, error) {
 		return entry, nil
 	}
 
-	for i := len(lsm.imemoryTables) - 1; i >= 0; i-- {
-		if entry, err = lsm.imemoryTables[i].Get(key); entry != nil && entry.Value != nil {
+	for i := len(lsm.immemoryTables) - 1; i >= 0; i-- {
+		if entry, err = lsm.immemoryTables[i].Get(key); entry != nil && entry.Value != nil {
 			return entry, err
 		}
 	}
@@ -94,14 +94,13 @@ func (lsm *LSM) GetSkipListFromMemTable() *utils.SkipList {
 }
 
 func (lsm *LSM) Rotate() {
-	lsm.imemoryTables = append(lsm.imemoryTables, lsm.memoryTable)
+	lsm.immemoryTables = append(lsm.immemoryTables, lsm.memoryTable)
 	lsm.memoryTable = lsm.NewMemoryTable()
 }
 
 func (lsm *LSM) flushTask() {
-	time.Sleep(time.Second * 10)
 	// 检查是否存在immutable需要刷盘;
-	for _, immutable := range lsm.imemoryTables {
+	for _, immutable := range lsm.immemoryTables {
 		if err := lsm.levelManger.flush(immutable); err != nil {
 			common.Err(err)
 		}
@@ -111,9 +110,27 @@ func (lsm *LSM) flushTask() {
 }
 
 func (lsm *LSM) StartCompacter() {
-
+	n := lsm.option.NumCompactors
+	lsm.closer.Add(n)
+	for i := 0; i < n; i++ {
+		go lsm.levelManger.runCompact(i)
+	}
 }
 
 func (lsm *LSM) Close() error {
+	lsm.closer.Close()
+	if lsm.memoryTable != nil {
+		if err := lsm.memoryTable.close(); err != nil {
+			return err
+		}
+	}
+	for i := range lsm.immemoryTables {
+		if err := lsm.immemoryTables[i].close(); err != nil {
+			return err
+		}
+	}
+	if err := lsm.levelManger.close(); err != nil {
+		return err
+	}
 	return nil
 }

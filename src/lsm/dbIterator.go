@@ -1,18 +1,17 @@
-package db
+package lsm
 
 import (
 	"trainKv/interfaces"
-	"trainKv/lsm"
 )
 
 type DBIterator struct {
 	iter interfaces.Iterator
-	vlog *lsm.ValueLog
+	vlog *ValueLog
 }
 
 func (db *TrainKVDB) NewDBIterator(opt *interfaces.Options) *DBIterator {
 	iters := make([]interfaces.Iterator, 0)
-	iters = append(iters, lsm.LSM.NewLsmIterator(opt)...)
+	iters = append(iters, db.lsm.NewLsmIterator()...)
 	res := &DBIterator{
 		iter: nil,
 		vlog: db.vlog,

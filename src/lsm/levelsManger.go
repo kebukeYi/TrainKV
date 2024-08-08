@@ -139,3 +139,7 @@ func (lm *levelsManger) close() error {
 	}
 	return nil
 }
+
+func (lm *levelsManger) runCompact(i int) {
+
+}

@@ -3,7 +3,10 @@ package model
 import (
 	"encoding/binary"
 	"time"
+	"trainKv/utils"
 )
+
+type LogEntry func(e *Entry, vp *ValuePtr) error
 
 // Entry _ 最外层写入的结构体
 type Entry struct {
@@ -98,4 +101,29 @@ func (h *EntryHeader) Decode(buf []byte) int {
 
 	h.ExpiresAt, count = binary.Uvarint(buf[index:])
 	return index + count
+}
+
+func (h *EntryHeader) DecodeFrom(reader *utils.HashReader) (int, error) {
+	var err error
+	h.Meta, err = reader.ReadByte()
+	if err != nil {
+		return 0, err
+	}
+	klen, err := binary.ReadUvarint(reader)
+	if err != nil {
+		return 0, err
+	}
+	h.KLen = uint32(klen)
+
+	vlen, err := binary.ReadUvarint(reader)
+	if err != nil {
+		return 0, err
+	}
+	h.VLen = uint32(vlen)
+
+	h.ExpiresAt, err = binary.ReadUvarint(reader)
+	if err != nil {
+		return 0, err
+	}
+	return reader.ByteRead, nil
 }

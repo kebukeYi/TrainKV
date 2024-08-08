@@ -112,17 +112,17 @@ func IsDeletedOrExpired(meta byte, expiresAt uint64) bool {
 	return expiresAt <= uint64(time.Now().Unix())
 }
 
-func IsDiscardEntry(e, vs *Entry) bool {
+func IsDiscardEntry(vs *Entry) bool {
 	if IsDeletedOrExpired(vs.Meta, vs.ExpiresAt) {
 		return true
 	}
-	if vs.Value == nil {
+	if vs.Value == nil || len(vs.Value) == 0 {
 		return true
 	}
 	// 是否 kv 分离数据
 	if (vs.Meta & common.BitValuePointer) == 0 {
 		// Key also stores the value in LSM. Discard.
-		// 说明 value 已经变成了 可存储在 lsm 中了, 那就需要将 vlog 中的数据进行删除
+		// 说明 value 已经变成了 可存储在 lsm 中了, 那就需要将 vlog 中的数据进行删除;
 		return true
 	}
 	// 没有过期 || 还是 kv 分离类型数据

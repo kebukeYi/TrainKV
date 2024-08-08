@@ -3,7 +3,9 @@ package utils
 import (
 	"fmt"
 	"github.com/pkg/errors"
+	"hash"
 	"hash/crc32"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -45,6 +47,10 @@ func FID(name string) uint64 {
 	}
 	return uint64(id)
 }
+func VlogFilePath(dirPath string, fid uint32) string {
+	return fmt.Sprintf("%s%s%05d.vlog", dirPath, string(os.PathSeparator), fid)
+}
+
 func FileNameSSTable(dir string, id uint64) string {
 	return filepath.Join(dir, fmt.Sprintf("%05d.sst", id))
 }
@@ -63,4 +69,53 @@ func VerifyChecksum(data []byte, expected []byte) error {
 // CalculateChecksum _
 func CalculateChecksum(data []byte) uint64 {
 	return uint64(crc32.Checksum(data, common.CastagnoliCrcTable))
+}
+
+func SyncDir(dir string) error {
+	df, err := os.Open(dir)
+	if err != nil {
+		return errors.Wrapf(err, "while opening %s", dir)
+	}
+	if err := df.Sync(); err != nil {
+		return errors.Wrapf(err, "while syncing %s", dir)
+	}
+	if err := df.Close(); err != nil {
+		return errors.Wrapf(err, "while closing %s", dir)
+	}
+	return nil
+}
+
+type HashReader struct {
+	R        io.Reader
+	H        hash.Hash32
+	ByteRead int
+}
+
+func NewHashReader(read io.Reader) *HashReader {
+	return &HashReader{
+		R:        read,
+		H:        crc32.New(common.CastagnoliCrcTable),
+		ByteRead: 0,
+	}
+}
+
+func (r *HashReader) Read(out []byte) (int, error) {
+	n, err := r.R.Read(out)
+	if err != nil {
+		return n, err
+	}
+	r.ByteRead += n
+	return r.H.Write(out[:n])
+}
+
+func (r HashReader) ReadByte() (byte, error) {
+	buf := make([]byte, 1)
+	_, err := r.R.Read(buf)
+	if err != nil {
+		return 0, err
+	}
+	return buf[0], err
+}
+func (r *HashReader) Sum32() uint32 {
+	return r.H.Sum32()
 }

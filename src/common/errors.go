@@ -15,20 +15,40 @@ var (
 	gopath = path.Join(os.Getenv("GOPATH"), "src") + "/"
 )
 
-var ErrEmptyKey = errors.New("Key cannot be empty")
-var ErrNotFound = errors.New("not found")
-var ErrNotFoundTable = errors.New("not found table of key")
-var ErrKeyNotFound = errors.New("not found key ")
-var ErrWalInvalidCrc = errors.New("walFile: invalid crc")
-var ErrBadReadMagic = errors.New("read magic failed")
-var ErrBadMagic = errors.New("bad magic")
-var ErrBadCRC = errors.New("bad crc from read manifestFile")
-var ErrBadReadCRC = errors.New("read crc failed from manifestFile")
-var ErrBadChecksum = errors.New("bad Checksum from manifestFile")
-var ErrBadRemoveSST = errors.New("While removing table")
+var (
+	ErrDeleteVlogFile = errors.New("Delete vlog file")
+	ErrEmptyKey       = errors.New("Key cannot be empty")
+	ErrNotFound       = errors.New("not found")
+	ErrOutOffset      = errors.New("not found")
+	ErrNotFoundTable  = errors.New("not found table of key")
+	ErrKeyNotFound    = errors.New("not found key ")
+	ErrWalInvalidCrc  = errors.New("walFile: invalid crc")
+	ErrBadReadMagic   = errors.New("read magic failed")
+	ErrBadMagic       = errors.New("bad magic")
+	ErrBadCRC         = errors.New("bad crc from read manifestFile")
+	ErrBadReadCRC     = errors.New("read crc failed from manifestFile")
+	ErrBadChecksum    = errors.New("bad Checksum from manifestFile")
+	ErrBadRemoveSST   = errors.New("While removing table")
+	//ErrChecksumMismatch is returned at checksum mismatch.
+	ErrChecksumMismatch = errors.New("checksum mismatch")
 
-// ErrChecksumMismatch is returned at checksum mismatch.
-var ErrChecksumMismatch = errors.New("checksum mismatch")
+	ErrTruncate = errors.New("Do truncate")
+	ErrStop     = errors.New("Stop")
+
+	ErrBlockedWrites = errors.New("Writes are blocked, possibly due to DropAll or Close")
+	ErrTxnTooBig     = errors.New("Txn is too big to fit into one request")
+	ErrBatchTooLarge = errors.New("Batch is too big to fit into one request")
+	ErrNoRoom        = errors.New("No room for write")
+
+	// ErrInvalidRequest is returned if the user request is invalid.
+	ErrInvalidRequest = errors.New("Invalid request")
+	// ErrNoRewrite is returned if a call for value log GC doesn't result in a log file rewrite.
+	ErrNoRewrite = errors.New("Value log GC attempt didn't result in any cleanup")
+
+	// ErrRejected is returned if a value log GC is called either while another GC is running, or
+	// after DB::Close has been called.
+	ErrRejected = errors.New("Value log GC request rejected")
+)
 
 func location(deep int, fullPath bool) string {
 	_, file, line, ok := runtime.Caller(deep)
