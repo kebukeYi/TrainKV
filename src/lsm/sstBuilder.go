@@ -8,7 +8,6 @@ import (
 	"os"
 	"sort"
 	"trainKv/common"
-	"trainKv/interfaces"
 	"trainKv/model"
 	"trainKv/pb"
 	"trainKv/utils"
@@ -197,7 +196,7 @@ func (ssb *sstBuilder) keyDiff(key []byte) []byte {
 func (ssb *sstBuilder) flush(lm *levelsManger, tableName string) (t *table, err error) {
 	bd := ssb.done()
 	t = &table{lm: lm, fid: utils.FID(tableName)}
-	t.sst = OpenSStable(&interfaces.FileOptions{
+	t.sst = OpenSStable(&model.FileOptions{
 		FileName: tableName,
 		Dir:      lm.opt.WorkDir,
 		Flag:     os.O_CREATE | os.O_RDWR,
@@ -333,7 +332,7 @@ type blockIterator struct {
 	tableID     uint64
 	blockID     int
 	prevOverlap uint16
-	it          interfaces.Item
+	it          model.Item
 }
 
 func (i *blockIterator) setBlock(b *block) {
@@ -408,7 +407,7 @@ func (itr blockIterator) setIndex(idx int) {
 	eny.Value = itr.val
 	eny.ExpiresAt = val.ExpiresAt
 	eny.Meta = val.Meta
-	itr.it = interfaces.Item{Item: eny}
+	itr.it = model.Item{Item: eny}
 }
 
 func (itr *blockIterator) Next() {
@@ -423,7 +422,7 @@ func (itr *blockIterator) Rewind() {
 	itr.setIndex(0)
 }
 
-func (itr *blockIterator) Item() interfaces.Item {
+func (itr *blockIterator) Item() model.Item {
 	return itr.it
 }
 

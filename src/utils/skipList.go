@@ -8,7 +8,6 @@ import (
 	"math/rand"
 	"strings"
 	"sync/atomic"
-	"trainKv/interfaces"
 	"trainKv/model"
 )
 
@@ -353,7 +352,7 @@ func (skipList *SkipList) Draw(align bool) {
 	}
 }
 
-func (skipList *SkipList) NewSkipListIterator() interfaces.Iterator {
+func (skipList *SkipList) NewSkipListIterator() model.Iterator {
 	skipList.IncrRef()
 	return &SkipListIterator{
 		list: skipList,
@@ -391,8 +390,8 @@ func (s *SkipListIterator) Valid() bool {
 func (s *SkipListIterator) Rewind() {
 	s.SeekToFirst()
 }
-func (s *SkipListIterator) Item() interfaces.Item {
-	return interfaces.Item{Item: &model.Entry{
+func (s *SkipListIterator) Item() model.Item {
+	return model.Item{Item: &model.Entry{
 		Key:       s.Key(),
 		Value:     s.Value().Value,
 		Meta:      s.Value().Meta,

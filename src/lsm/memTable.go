@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync/atomic"
 	errors "trainKv/common"
-	"trainKv/interfaces"
 	"trainKv/model"
 	. "trainKv/utils"
 )
@@ -22,7 +21,7 @@ type memoryTable struct {
 
 func (lsm *LSM) NewMemoryTable() *memoryTable {
 	newFid := atomic.AddUint64(&(lsm.levelManger.maxFID), 1)
-	fileOpt := &interfaces.FileOptions{
+	fileOpt := &model.FileOptions{
 		Dir:      lsm.option.WorkDir,
 		Flag:     os.O_CREATE | os.O_RDWR,
 		MaxSz:    int(lsm.option.MemTableSize), // wal 要设置多大比较合理？ 姑且跟sst一样大
@@ -113,7 +112,7 @@ func (lsm *LSM) recovery() (*memoryTable, []*memoryTable) {
 }
 
 func (lsm *LSM) openMemTable(walFid uint64) (*memoryTable, error) {
-	fileOpt := &interfaces.FileOptions{
+	fileOpt := &model.FileOptions{
 		Dir:      lsm.option.WorkDir,
 		Flag:     os.O_CREATE | os.O_RDWR,
 		MaxSz:    int(lsm.option.MemTableSize),

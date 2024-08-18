@@ -11,7 +11,6 @@ import (
 	"syscall"
 	"time"
 	"trainKv/common"
-	"trainKv/interfaces"
 	"trainKv/mmap"
 	"trainKv/model"
 	"trainKv/pb"
@@ -31,7 +30,7 @@ type SSTable struct {
 	creationTime   time.Time
 }
 
-func OpenSStable(opt *interfaces.FileOptions) *SSTable {
+func OpenSStable(opt *model.FileOptions) *SSTable {
 	mmapFile, err := mmap.OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
 	if err != nil {
 		return nil

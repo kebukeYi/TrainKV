@@ -4,7 +4,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"trainKv/common"
-	"trainKv/interfaces"
 	"trainKv/model"
 	"trainKv/utils"
 )
@@ -39,7 +38,7 @@ func (lsm *LSM) InitLevelManger(opt *Options) *levelsManger {
 
 func (lm *levelsManger) loadManifestFile() (err error) {
 	// 打开的同时, 并做好了内存数据结构;
-	lm.manifestFile, err = OpenManifestFile(&interfaces.FileOptions{Dir: lm.opt.WorkDir})
+	lm.manifestFile, err = OpenManifestFile(&model.FileOptions{Dir: lm.opt.WorkDir})
 	return err
 }
 
@@ -81,8 +80,11 @@ func (lm *levelsManger) build() error {
 	return nil
 }
 
-func (lm *levelsManger) iterators() []interfaces.Iterator {
-	iters := make([]interfaces.Iterator, 0)
+func (lm *levelsManger) lastLevel() *levelHandler {
+	return lm.levelHandlers[len(lm.levelHandlers)-1]
+}
+func (lm *levelsManger) iterators() []model.Iterator {
+	iters := make([]model.Iterator, 0)
 	for _, handler := range lm.levelHandlers {
 		iters = append(iters, handler.iterators()...)
 	}
@@ -124,7 +126,6 @@ func (lm *levelsManger) flush(imm *memoryTable) (err error) {
 	lm.levelHandlers[0].add(t)
 	return nil
 }
-
 func (lm *levelsManger) close() error {
 	if err := lm.cache.Close(); err != nil {
 		return err
@@ -138,8 +139,4 @@ func (lm *levelsManger) close() error {
 		}
 	}
 	return nil
-}
-
-func (lm *levelsManger) runCompact(i int) {
-
 }

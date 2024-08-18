@@ -1,22 +1,23 @@
 package lsm
 
 import (
+	"bytes"
+	"fmt"
 	"sort"
 	"trainKv/common"
-	"trainKv/interfaces"
 	"trainKv/model"
 )
 
 type lsmIterator struct {
-	iters []interfaces.Iterator
-	item  interfaces.Item
+	iters []model.Iterator
+	item  model.Item
 }
 
-func (lsm *LSM) NewLsmIterator() []interfaces.Iterator {
+func (lsm *LSM) NewLsmIterator() []model.Iterator {
 	iter := &lsmIterator{}
-	iter.iters = make([]interfaces.Iterator, 0)
+	iter.iters = make([]model.Iterator, 0)
 	iter.iters = append(iter.iters, lsm.memoryTable.skipList.NewSkipListIterator())
-	for _, imemoryTable := range lsm.imemoryTables {
+	for _, imemoryTable := range lsm.immemoryTables {
 		iter.iters = append(iter.iters, imemoryTable.skipList.NewSkipListIterator())
 	}
 	iter.iters = append(iter.iters, lsm.levelManger.iterators()...)
@@ -38,7 +39,7 @@ func (lsmIter *lsmIterator) Rewind() {
 func (lsmIter *lsmIterator) Seek(key []byte) {
 
 }
-func (lsmIter *lsmIterator) Item() interfaces.Item {
+func (lsmIter *lsmIterator) Item() model.Item {
 	return lsmIter.iters[0].Item()
 }
 func (lsmIter *lsmIterator) Close() error {
@@ -47,16 +48,16 @@ func (lsmIter *lsmIterator) Close() error {
 
 type ConcatIterator struct {
 	tables []*table
-	iters  []interfaces.Iterator
+	iters  []model.Iterator
 	idx    int
-	curIer interfaces.Iterator
-	opt    *interfaces.Options
+	curIer model.Iterator
+	opt    *model.Options
 }
 
-func NewConcatIterator(tables []*table, opt *interfaces.Options) *ConcatIterator {
+func NewConcatIterator(tables []*table, opt *model.Options) *ConcatIterator {
 	return &ConcatIterator{
 		tables: tables,
-		iters:  make([]interfaces.Iterator, len(tables)),
+		iters:  make([]model.Iterator, len(tables)),
 		idx:    -1,
 		curIer: nil,
 		opt:    opt,
@@ -92,7 +93,7 @@ func (conIter *ConcatIterator) Valid() bool {
 	return conIter.curIer != nil && conIter.curIer.Valid()
 }
 
-func (conIter *ConcatIterator) Item() interfaces.Item {
+func (conIter *ConcatIterator) Item() model.Item {
 	return conIter.curIer.Item()
 }
 
@@ -175,8 +176,162 @@ type node struct {
 	valid bool
 
 	entry *model.Entry
-	iter  interfaces.Iterator
+	iter  model.Iterator
 
 	merge  *MergeIterator
 	concat *ConcatIterator
+}
+
+func (n *node) setIterator(iter model.Iterator) {
+	n.iter = iter
+	n.merge, _ = iter.(*MergeIterator)
+	n.concat, _ = iter.(*ConcatIterator)
+}
+
+func (n *node) setEntry() {
+	switch {
+	case n.merge != nil:
+		if n.merge.small.valid {
+			n.entry = n.merge.small.entry
+		}
+	case n.concat != nil:
+		if n.concat.Valid() {
+			n.entry = n.concat.Item().Item
+		}
+	default:
+		if n.iter.Valid() {
+			n.entry = n.iter.Item().Item
+		}
+	}
+}
+
+func (n *node) next() {
+	switch {
+	case n.merge != nil:
+		n.merge.Next()
+	case n.concat != nil:
+		n.concat.Next()
+	default:
+		n.iter.Next()
+	}
+	n.setEntry()
+}
+
+func (n *node) Rewind() {
+	n.iter.Rewind()
+	n.setEntry()
+}
+
+func (n *node) seek(key []byte) {
+	n.iter.Seek(key)
+	n.setEntry()
+}
+
+func NewMergeIterator(iters []model.Iterator, reverse bool) model.Iterator {
+	switch len(iters) {
+	case 0:
+		return nil
+	case 1:
+		return iters[0]
+	case 2:
+		m := &MergeIterator{
+			reverse: reverse,
+		}
+		m.left.setIterator(iters[0])
+		m.right.setIterator(iters[1])
+		m.small = &m.left
+		return m
+	}
+	mid := len(iters) / 2
+	return NewMergeIterator([]model.Iterator{
+		NewMergeIterator(iters[:mid], reverse),
+		NewMergeIterator(iters[mid:], reverse)}, reverse)
+}
+
+func (m *MergeIterator) fix() {
+	if !m.otherNode().valid {
+		return
+	}
+	if !m.small.valid {
+		m.swapSmall()
+		return
+	}
+	cmp := model.CompareKey(m.small.entry.Key, m.otherNode().entry.Key)
+	switch {
+	case cmp == 0:
+		m.otherNode().next()
+	case cmp > 0:
+		if m.reverse {
+		} else {
+			m.swapSmall()
+		}
+	case cmp < 0:
+		if m.reverse {
+			m.swapSmall()
+		}
+	}
+}
+
+func (m MergeIterator) swapSmall() {
+	if m.small == &m.left {
+		m.small = &m.right
+	} else {
+		m.small = &m.left
+	}
+}
+
+func (m MergeIterator) otherNode() *node {
+	if &m.left == m.small {
+		return &m.right
+	} else {
+		return &m.left
+	}
+}
+
+func (m *MergeIterator) Next() {
+	for m.small.valid {
+		if !bytes.Equal(m.small.entry.Key, m.curKey) {
+			break
+		}
+		m.small.next()
+		m.fix()
+	}
+	m.setCurrentKey()
+}
+
+func (m *MergeIterator) Seek(key []byte) {
+	m.left.seek(key)
+	m.right.seek(key)
+	m.fix()
+	m.setCurrentKey()
+}
+
+func (m *MergeIterator) Item() model.Item {
+	return m.small.iter.Item()
+}
+func (m *MergeIterator) Rewind() {
+	m.left.Rewind()
+	m.right.Rewind()
+	m.fix()
+	m.setCurrentKey()
+}
+func (m MergeIterator) setCurrentKey() {
+	common.CondPanic(m.small.entry == nil && m.small.valid == true,
+		fmt.Errorf("mi.small.entry is nil"))
+	if m.small.valid {
+		m.curKey = append(m.curKey[:0], m.small.entry.Key...)
+	}
+}
+func (m *MergeIterator) Valid() bool {
+	return m.small.valid
+}
+
+func (m *MergeIterator) Close() error {
+	if err := m.left.iter.Close(); err != nil {
+		return common.WarpErr("MergeIterator.Close", err)
+	}
+	if err := m.right.iter.Close(); err != nil {
+		return common.WarpErr("MergeIterator.Close", err)
+	}
+	return nil
 }

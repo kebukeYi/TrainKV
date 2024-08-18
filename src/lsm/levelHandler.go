@@ -5,7 +5,6 @@ import (
 	"sort"
 	"sync"
 	"trainKv/common"
-	"trainKv/interfaces"
 	"trainKv/model"
 )
 
@@ -218,7 +217,7 @@ func (leh *levelHandler) deleteTable(toDel []*table) error {
 	return decrRefs(toDel)
 }
 
-func (leh *levelHandler) iterators() []interfaces.Iterator {
+func (leh *levelHandler) iterators() []model.Iterator {
 	return nil
 }
 

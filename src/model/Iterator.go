@@ -1,6 +1,4 @@
-package interfaces
-
-import "trainKv/model"
+package model
 
 type Iterator interface {
 	Next()
@@ -12,7 +10,7 @@ type Iterator interface {
 }
 
 type Item struct {
-	Item *model.Entry
+	Item *Entry
 }
 
 type Options struct {

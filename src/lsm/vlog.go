@@ -20,7 +20,6 @@ import (
 	"time"
 	"trainKv/common"
 	"trainKv/file"
-	"trainKv/interfaces"
 	"trainKv/model"
 	"trainKv/utils"
 )
@@ -67,7 +66,7 @@ func (vlog *ValueLog) open(replayHead *model.ValuePtr, replayFn model.LogEntry) 
 	for _, fid := range fids {
 		vLogFile, ok := vlog.filesMap[fid]
 		common.CondPanic(!ok, fmt.Errorf("vlog.filesMap[fid] fid not found"))
-		if err := vLogFile.Open(&interfaces.FileOptions{
+		if err := vLogFile.Open(&model.FileOptions{
 			FID:      uint64(fid),
 			FileName: vlog.fpath(fid),
 			Dir:      vlog.dirPath,
@@ -369,7 +368,7 @@ func (vlog *ValueLog) handleDiscardStats() {
 func (vlog *ValueLog) createVlogFile(fid uint32) (*file.VLogFile, error) {
 	fpath := vlog.fpath(fid)
 	vlogFile := &file.VLogFile{FID: fid, Lock: sync.RWMutex{}}
-	if err := vlogFile.Open(&interfaces.FileOptions{
+	if err := vlogFile.Open(&model.FileOptions{
 		FID:      uint64(fid),
 		FileName: fpath,
 		Dir:      vlog.dirPath,
@@ -473,7 +472,7 @@ func (vlog *ValueLog) iterator(vlogFile *file.VLogFile, offset uint32, fn model.
 }
 
 func (vlog *ValueLog) Entry(read io.Reader, offset uint32) (*model.Entry, error) {
-	hashReader := utils.NewHashReader(read)
+	hashReader := model.NewHashReader(read)
 	var head model.EntryHeader
 	hlen, err := head.DecodeFrom(hashReader)
 	if err != nil {

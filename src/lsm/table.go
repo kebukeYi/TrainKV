@@ -11,7 +11,6 @@ import (
 	"sync/atomic"
 	"time"
 	"trainKv/common"
-	"trainKv/interfaces"
 	"trainKv/model"
 	"trainKv/pb"
 	"trainKv/utils"
@@ -37,7 +36,7 @@ func openTable(lm *levelsManger, tableName string, builder *sstBuilder) *table {
 		}
 	} else {
 		t = &table{lm: lm, fid: fid}
-		t.sst = OpenSStable(&interfaces.FileOptions{
+		t.sst = OpenSStable(&model.FileOptions{
 			FileName: tableName,
 			Dir:      lm.opt.WorkDir,
 			Flag:     os.O_CREATE | os.O_RDWR,
@@ -49,7 +48,7 @@ func openTable(lm *levelsManger, tableName string, builder *sstBuilder) *table {
 		common.Err(err)
 		return nil
 	}
-	itr := t.NewTableIterator(&interfaces.Options{})
+	itr := t.NewTableIterator(&model.Options{})
 	defer itr.Close()
 	itr.Rewind()
 	common.CondPanic(!itr.Valid(), errors.Errorf("failed to read index, form maxKey"))
@@ -67,7 +66,7 @@ func (t table) Search(key []byte, maxVs *uint64) (entry *model.Entry, err error)
 	if t.sst.HasBloomFilter() && !bloomFilter.MayContainKey(key) {
 		return nil, common.ErrNotFound
 	}
-	iterator := t.NewTableIterator(&interfaces.Options{})
+	iterator := t.NewTableIterator(&model.Options{})
 	defer iterator.Close()
 	iterator.Seek(key)
 	if !iterator.Valid() {
@@ -186,20 +185,20 @@ func (t *table) Delete() error {
 
 // table 层面的容器迭代器
 type tableIterator struct {
-	it       interfaces.Item
-	opt      *interfaces.Options
+	it       model.Item
+	opt      *model.Options
 	t        *table
 	blockPos int
 	biter    *blockIterator
 	err      error
 }
 
-func (t *table) NewTableIterator(opt *interfaces.Options) *tableIterator {
+func (t *table) NewTableIterator(opt *model.Options) *tableIterator {
 	t.IncrRef()
 	return &tableIterator{opt: opt, t: t, biter: &blockIterator{}}
 }
 
-func (tier *tableIterator) Item() interfaces.Item {
+func (tier *tableIterator) Item() model.Item {
 	return tier.it
 }
 

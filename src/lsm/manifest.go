@@ -10,12 +10,12 @@ import (
 	"path/filepath"
 	"sync"
 	"trainKv/common"
-	"trainKv/interfaces"
+	"trainKv/model"
 	"trainKv/pb"
 )
 
 type ManifestFile struct {
-	opt                      *interfaces.FileOptions
+	opt                      *model.FileOptions
 	f                        *os.File
 	mux                      sync.Mutex
 	deletionRewriteThreshold int
@@ -44,7 +44,7 @@ type TableMeta struct {
 	Checksum []byte
 }
 
-func OpenManifestFile(opt *interfaces.FileOptions) (*ManifestFile, error) {
+func OpenManifestFile(opt *model.FileOptions) (*ManifestFile, error) {
 	path := filepath.Join(opt.Dir, common.ManifestFilename)
 	mf := &ManifestFile{
 		opt:                      opt,
@@ -201,7 +201,7 @@ func (mf *ManifestFile) rewrite() error {
 }
 
 func (mf *ManifestFile) AddTableMeta(levelNum int, t *TableMeta) (err error) {
-	createChange := newCreateChange(t.ID, levelNum, t.Checksum)
+	createChange := mf.manifest.newCreateChange(t.ID, levelNum, t.Checksum)
 	err = mf.addChanges([]*pb.ManifestChange{createChange})
 	return err
 }
@@ -301,12 +301,12 @@ func doRewrite(path string, manifest *Manifest) (*os.File, int, error) {
 func (m *Manifest) asChanges() []*pb.ManifestChange {
 	manifestChanges := make([]*pb.ManifestChange, 0, len(m.Tables))
 	for id, tm := range m.Tables {
-		manifestChanges = append(manifestChanges, newCreateChange(id, int(tm.LevelID), tm.CheckSum))
+		manifestChanges = append(manifestChanges, m.newCreateChange(id, int(tm.LevelID), tm.CheckSum))
 	}
 	return manifestChanges
 }
 
-func newCreateChange(id uint64, level int, checkSum []byte) *pb.ManifestChange {
+func (m *Manifest) newCreateChange(id uint64, level int, checkSum []byte) *pb.ManifestChange {
 	return &pb.ManifestChange{
 		Id:       id,
 		Type:     pb.ManifestChange_Create,

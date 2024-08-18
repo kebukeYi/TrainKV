@@ -113,7 +113,7 @@ func (lsm *LSM) StartCompacter() {
 	n := lsm.option.NumCompactors
 	lsm.closer.Add(n)
 	for i := 0; i < n; i++ {
-		go lsm.levelManger.runCompact(i)
+		go lsm.levelManger.runCompacter(i)
 	}
 }
 

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 	"trainKv/common"
-	interfaces "trainKv/interfaces"
+	interfaces "trainKv/model"
 )
 
 func TestOpenManifestFile(t *testing.T) {

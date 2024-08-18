@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	errors "trainKv/common"
-	"trainKv/interfaces"
 	"trainKv/mmap"
 	"trainKv/model"
 )
@@ -52,12 +51,12 @@ func (h *WalHeader) decode(buf []byte) {
 
 type WAL struct {
 	file   *mmap.MmapFile
-	opt    interfaces.FileOptions
+	opt    model.FileOptions
 	size   uint32
 	readAt uint64
 }
 
-func OpenWalFile(opt *interfaces.FileOptions) *WAL {
+func OpenWalFile(opt *model.FileOptions) *WAL {
 	//file, err := os.OpenFile(opt.FileName, os.O_CREATE|os.O_RDWR, 0666)
 	file, err := mmap.OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
 	if err != nil {

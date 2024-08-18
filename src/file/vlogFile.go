@@ -12,7 +12,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"trainKv/common"
-	"trainKv/interfaces"
 	"trainKv/mmap"
 	"trainKv/model"
 )
@@ -24,7 +23,7 @@ type VLogFile struct {
 	Lock sync.RWMutex
 }
 
-func (vlog *VLogFile) Open(opt *interfaces.FileOptions) error {
+func (vlog *VLogFile) Open(opt *model.FileOptions) error {
 	var err error
 	vlog.FID = uint32(opt.FID)
 	vlog.Lock = sync.RWMutex{}

@@ -5,7 +5,6 @@ import (
 	"math/rand"
 	"testing"
 	"time"
-	"trainKv/interfaces"
 	"trainKv/model"
 )
 
@@ -23,7 +22,7 @@ func RandString(len int) string {
 // /usr/local/temp/train/wal
 // /usr/local/temp/train/tables
 func TestWAL_Write(t *testing.T) {
-	w := OpenWalFile(&interfaces.FileOptions{
+	w := OpenWalFile(&model.FileOptions{
 		FileName: "/user/local/temp/trainkv/wal/1.wal",
 	})
 	for i := 0; i < 10; i++ {

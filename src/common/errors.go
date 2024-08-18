@@ -32,8 +32,9 @@ var (
 	//ErrChecksumMismatch is returned at checksum mismatch.
 	ErrChecksumMismatch = errors.New("checksum mismatch")
 
-	ErrTruncate = errors.New("Do truncate")
-	ErrStop     = errors.New("Stop")
+	ErrTruncate   = errors.New("Do truncate")
+	ErrStop       = errors.New("Stop")
+	ErrfillTables = errors.New("Unable to fill tables")
 
 	ErrBlockedWrites = errors.New("Writes are blocked, possibly due to DropAll or Close")
 	ErrTxnTooBig     = errors.New("Txn is too big to fit into one request")

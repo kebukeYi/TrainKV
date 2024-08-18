@@ -1,18 +1,16 @@
 package utils
 
 import (
+	"encoding/binary"
 	"fmt"
 	"github.com/pkg/errors"
-	"hash"
 	"hash/crc32"
-	"io"
 	"os"
 	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"trainKv/common"
-	"trainKv/model"
 )
 
 // LoadIDMap Get the id of all sst files in the current folder
@@ -58,7 +56,7 @@ func FileNameSSTable(dir string, id uint64) string {
 // VerifyChecksum crc32
 func VerifyChecksum(data []byte, expected []byte) error {
 	actual := uint64(crc32.Checksum(data, common.CastagnoliCrcTable))
-	expectedU64 := model.BytesToU64(expected)
+	expectedU64 := binary.BigEndian.Uint64(expected)
 	if actual != expectedU64 {
 		return errors.Wrapf(common.ErrChecksumMismatch, "actual: %d, expected: %d", actual, expectedU64)
 	}
@@ -83,39 +81,4 @@ func SyncDir(dir string) error {
 		return errors.Wrapf(err, "while closing %s", dir)
 	}
 	return nil
-}
-
-type HashReader struct {
-	R        io.Reader
-	H        hash.Hash32
-	ByteRead int
-}
-
-func NewHashReader(read io.Reader) *HashReader {
-	return &HashReader{
-		R:        read,
-		H:        crc32.New(common.CastagnoliCrcTable),
-		ByteRead: 0,
-	}
-}
-
-func (r *HashReader) Read(out []byte) (int, error) {
-	n, err := r.R.Read(out)
-	if err != nil {
-		return n, err
-	}
-	r.ByteRead += n
-	return r.H.Write(out[:n])
-}
-
-func (r HashReader) ReadByte() (byte, error) {
-	buf := make([]byte, 1)
-	_, err := r.R.Read(buf)
-	if err != nil {
-		return 0, err
-	}
-	return buf[0], err
-}
-func (r *HashReader) Sum32() uint32 {
-	return r.H.Sum32()
 }

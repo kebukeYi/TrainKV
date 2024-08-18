@@ -37,9 +37,9 @@ func TestLSM_Get(t *testing.T) {
 	//assert.Equal(t, &model.Entry{Key: keyWithTs, Value: value}, entry)
 
 	// Test key found in imemoryTables
-	lsm.imemoryTables = append(lsm.imemoryTables, lsm.NewMemoryTable())
+	lsm.immemoryTables = append(lsm.immemoryTables, lsm.NewMemoryTable())
 	keyWithTs = model.KeyWithTs(key, uint64(time.Now().Unix()/1e9))
-	lsm.imemoryTables[0].Put(&model.Entry{Key: keyWithTs, Value: value})
+	lsm.immemoryTables[0].Put(&model.Entry{Key: keyWithTs, Value: value})
 	entry, err = lsm.Get(keyWithTs)
 	errors.Panic(err)
 	fmt.Printf("entry: %v\n", entry)
