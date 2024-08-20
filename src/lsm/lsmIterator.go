@@ -13,14 +13,14 @@ type lsmIterator struct {
 	item  model.Item
 }
 
-func (lsm *LSM) NewLsmIterator() []model.Iterator {
+func (lsm *LSM) NewLsmIterator(opt *model.Options) []model.Iterator {
 	iter := &lsmIterator{}
 	iter.iters = make([]model.Iterator, 0)
 	iter.iters = append(iter.iters, lsm.memoryTable.skipList.NewSkipListIterator())
 	for _, imemoryTable := range lsm.immemoryTables {
 		iter.iters = append(iter.iters, imemoryTable.skipList.NewSkipListIterator())
 	}
-	iter.iters = append(iter.iters, lsm.levelManger.iterators()...)
+	iter.iters = append(iter.iters, lsm.levelManger.iterators(opt)...)
 	return iter.iters
 }
 

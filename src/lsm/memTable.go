@@ -21,7 +21,7 @@ type memoryTable struct {
 
 func (lsm *LSM) NewMemoryTable() *memoryTable {
 	newFid := atomic.AddUint64(&(lsm.levelManger.maxFID), 1)
-	fileOpt := &model.FileOptions{
+	walFileOpt := &model.FileOptions{
 		Dir:      lsm.option.WorkDir,
 		Flag:     os.O_CREATE | os.O_RDWR,
 		MaxSz:    int(lsm.option.MemTableSize), // wal 要设置多大比较合理？ 姑且跟sst一样大
@@ -31,7 +31,7 @@ func (lsm *LSM) NewMemoryTable() *memoryTable {
 	return &memoryTable{
 		lsm:      lsm,
 		skipList: NewSkipList(lsm.option.MemTableSize),
-		wal:      OpenWalFile(fileOpt),
+		wal:      OpenWalFile(walFileOpt),
 	}
 }
 
@@ -135,7 +135,7 @@ func (m *memoryTable) recovery2SkipList() error {
 	if m.wal == nil || m.skipList == nil {
 		return nil
 	}
-	var readAt uint64 = 0
+	var readAt uint32 = 0
 	for {
 		var e *model.Entry
 		e, readAt = m.wal.Read(readAt)

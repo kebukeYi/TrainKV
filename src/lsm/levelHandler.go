@@ -132,7 +132,8 @@ func (leh *levelHandler) isLastLevel() bool {
 func (leh *levelHandler) Sort() {
 	leh.mux.Lock()
 	defer leh.mux.Unlock()
-	if leh.numTables() == 0 {
+	//if leh.numTables() == 0 { // 1. 逻辑错误(应该判断是否0层) 2. 理论错误(产生死锁)
+	if leh.levelID == 0 {
 		sort.Slice(leh.tables, func(i, j int) bool {
 			return leh.tables[i].fid < leh.tables[j].fid
 		})
@@ -217,8 +218,16 @@ func (leh *levelHandler) deleteTable(toDel []*table) error {
 	return decrRefs(toDel)
 }
 
-func (leh *levelHandler) iterators() []model.Iterator {
-	return nil
+func (leh *levelHandler) iterators(opt *model.Options) []model.Iterator {
+	leh.mux.Lock()
+	defer leh.mux.Unlock()
+	if leh.levelID == 0 {
+		return iteratorsReversed(leh.tables, opt)
+	}
+	if len(leh.tables) == 0 {
+		return nil
+	}
+	return []model.Iterator{NewConcatIterator(leh.tables, opt)}
 }
 
 func (leh *levelHandler) close() error {

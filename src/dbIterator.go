@@ -1,7 +1,8 @@
-package lsm
+package src
 
 import (
 	"fmt"
+	"trainKv/lsm"
 	"trainKv/model"
 )
 
@@ -12,9 +13,10 @@ type DBIterator struct {
 
 func (db *TrainKVDB) NewDBIterator(opt *model.Options) *DBIterator {
 	iters := make([]model.Iterator, 0)
-	iters = append(iters, db.lsm.NewLsmIterator()...)
+	iters = append(iters, db.Lsm.NewLsmIterator(opt)...)
 	res := &DBIterator{
-		iter: nil,
+		//iter: nil,
+		iter: lsm.NewMergeIterator(iters, opt.IsAsc),
 		vlog: db.vlog,
 	}
 	return res
@@ -44,7 +46,7 @@ func (dbIter *DBIterator) Item() model.Item {
 	if entry != nil && model.IsValPtr(entry) {
 		var vp *model.ValuePtr
 		vp.Decode(entry.Value)
-		read, callback, err := dbIter.vlog.read(vp)
+		read, callback, err := dbIter.vlog.Read(vp)
 		defer model.RunCallback(callback)
 		if err != nil {
 			fmt.Printf("dbIter read Item()value error: %v", err)

@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"fmt"
 	"github.com/pkg/errors"
 	"log"
 	"sync/atomic"
@@ -24,14 +25,16 @@ type Arena struct {
 
 func NewArena(n int64) *Arena {
 	return &Arena{
-		data:  make([]byte, n),
-		sizes: 1,
+		data:       make([]byte, n),
+		sizes:      1,
+		shouldGrow: true,
 	}
 }
 
 func (a *Arena) allocate(sz uint32) uint32 {
 	offset := atomic.AddUint32(&a.sizes, sz)
 	if !a.shouldGrow {
+		fmt.Printf("Arena size: %d, len(d.data): %d ,grow: %v; \n", a.sizes, len(a.data), a.shouldGrow)
 		AssertTrue(int(offset) <= len(a.data))
 		return offset - sz
 	}
@@ -44,7 +47,7 @@ func (a *Arena) allocate(sz uint32) uint32 {
 			growBy = sz
 		}
 		newData := make([]byte, len(a.data)+int(growBy))
-		copy(newData, a.data)
+		AssertTrue(len(a.data) == copy(newData, a.data))
 		a.data = newData
 	}
 	return offset - sz
@@ -57,9 +60,9 @@ func (a *Arena) size() int64 {
 func (a *Arena) AllocateNode(height int) uint32 {
 	unUsedSize := (maxHeight - height) * offsetSize
 	u := uint32(MaxNodeSize - unUsedSize + nodeAlign)
-	offset := a.allocate(u)
-	offset = (offset + uint32(nodeAlign)) & ^uint32(nodeAlign)
-	return offset
+	n := a.allocate(u)
+	m := (n + uint32(nodeAlign)) & ^uint32(nodeAlign)
+	return m
 }
 
 func (a *Arena) getNode(offset uint32) *skipNode {

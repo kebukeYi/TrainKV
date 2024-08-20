@@ -12,12 +12,11 @@ import (
 	"sync"
 	"sync/atomic"
 	"trainKv/common"
-	"trainKv/mmap"
 	"trainKv/model"
 )
 
 type VLogFile struct {
-	f    *mmap.MmapFile
+	f    *MmapFile
 	FID  uint32
 	size uint32
 	Lock sync.RWMutex
@@ -27,7 +26,7 @@ func (vlog *VLogFile) Open(opt *model.FileOptions) error {
 	var err error
 	vlog.FID = uint32(opt.FID)
 	vlog.Lock = sync.RWMutex{}
-	vlog.f, err = mmap.OpenMmapFile(opt.Path, os.O_CREATE|os.O_RDWR, opt.MaxSz)
+	vlog.f, err = OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
 	common.Panic(err)
 	info, err := vlog.f.Fd.Stat()
 	if err != nil {
@@ -35,7 +34,7 @@ func (vlog *VLogFile) Open(opt *model.FileOptions) error {
 	}
 	vlog.size = uint32(info.Size())
 	common.CondPanic(vlog.size > math.MaxUint32, fmt.Errorf("file size: %d greater than %d",
-		uint32(vlog.size), uint32(math.MaxUint32)))
+		vlog.size, uint32(math.MaxUint32)))
 	return nil
 }
 

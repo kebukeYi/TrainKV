@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 	"trainKv/common"
-	"trainKv/mmap"
+	"trainKv/file"
 	"trainKv/model"
 	"trainKv/pb"
 	"trainKv/utils"
@@ -20,7 +20,7 @@ import (
 type SSTable struct {
 	mux            *sync.RWMutex
 	fid            uint64
-	file           *mmap.MmapFile
+	file           *file.MmapFile
 	maxKey         []byte
 	minKey         []byte
 	tableIndex     *pb.TableIndex
@@ -31,7 +31,7 @@ type SSTable struct {
 }
 
 func OpenSStable(opt *model.FileOptions) *SSTable {
-	mmapFile, err := mmap.OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
+	mmapFile, err := file.OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
 	if err != nil {
 		return nil
 	}
@@ -44,9 +44,11 @@ func (sst *SSTable) Init() error {
 	if ko, err = sst.initTable(); err != nil {
 		return err
 	}
+	// 从文件中获取创建时间
 	stat, _ := sst.file.Fd.Stat()
 	statType := stat.Sys().(*syscall.Stat_t)
 	sst.creationTime = time.Unix(statType.Ctim.Sec, statType.Ctim.Nsec)
+	// init min key of first block to table.
 	keyBytes := ko.GetKey()
 	minKey := make([]byte, len(keyBytes))
 	copy(minKey, keyBytes)
@@ -57,12 +59,14 @@ func (sst *SSTable) Init() error {
 
 func (sst *SSTable) initTable() (firstBlock *pb.BlockOffset, err error) {
 	readPos := len(sst.file.Buf)
+
 	readPos -= 4
 	checkSumLenArr := sst.readCheckError(readPos, 4)
 	checksumLen := int(model.BytesToU32(checkSumLenArr))
 	if checksumLen < 0 {
 		return nil, errors.New("checksum length less than zero. Data corrupted")
 	}
+
 	// Read checksum.
 	readPos -= checksumLen
 	expectedChk := sst.readCheckError(readPos, checksumLen)
@@ -77,7 +81,8 @@ func (sst *SSTable) initTable() (firstBlock *pb.BlockOffset, err error) {
 	indexData := sst.readCheckError(readPos, sst.idxLen)
 
 	if err := utils.VerifyChecksum(indexData, expectedChk); err != nil {
-		return nil, errors.Wrapf(err, "failed to verify checksum for table: %s", sst.file.Fd.Name())
+		return nil, errors.Wrapf(err,
+			"failed to verify checksum for table: %s", sst.file.Fd.Name())
 	}
 	indexTable := &pb.TableIndex{}
 	if err := proto.UnmarshalMerge(indexData, indexTable); err != nil {

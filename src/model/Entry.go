@@ -36,7 +36,7 @@ func (e *Entry) WithTTL(dur time.Duration) *Entry {
 	return e
 }
 
-func (e Entry) EncodeSize() uint32 {
+func (e *Entry) EncodeSize() uint32 {
 	valLen := len(e.Value)
 	varIntLen := sizeVarInt(uint64(e.Meta))
 	ExpiresAtLen := sizeVarInt(e.ExpiresAt)

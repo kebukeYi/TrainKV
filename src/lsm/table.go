@@ -41,6 +41,7 @@ func openTable(lm *levelsManger, tableName string, builder *sstBuilder) *table {
 			Dir:      lm.opt.WorkDir,
 			Flag:     os.O_CREATE | os.O_RDWR,
 			MaxSz:    int(lm.opt.SSTableMaxSz),
+			FID:      fid,
 		})
 	}
 	t.IncrRef()
@@ -48,17 +49,18 @@ func openTable(lm *levelsManger, tableName string, builder *sstBuilder) *table {
 		common.Err(err)
 		return nil
 	}
-	itr := t.NewTableIterator(&model.Options{})
+	// 获取sst的最大key 需要使用迭代器
+	itr := t.NewTableIterator(&model.Options{IsAsc: false})
 	defer itr.Close()
 	itr.Rewind()
 	common.CondPanic(!itr.Valid(), errors.Errorf("failed to read index, form maxKey"))
 
 	maxKey := itr.Item().Item.Key
 	t.sst.SetMaxKey(maxKey)
-	return nil
+	return t
 }
 
-func (t table) Search(key []byte, maxVs *uint64) (entry *model.Entry, err error) {
+func (t *table) Search(key []byte, maxVs *uint64) (entry *model.Entry, err error) {
 	t.IncrRef()
 	defer t.DecrRef()
 	indexData := t.sst.Indexs()
@@ -66,7 +68,7 @@ func (t table) Search(key []byte, maxVs *uint64) (entry *model.Entry, err error)
 	if t.sst.HasBloomFilter() && !bloomFilter.MayContainKey(key) {
 		return nil, common.ErrNotFound
 	}
-	iterator := t.NewTableIterator(&model.Options{})
+	iterator := t.NewTableIterator(&model.Options{IsAsc: true})
 	defer iterator.Close()
 	iterator.Seek(key)
 	if !iterator.Valid() {
@@ -92,8 +94,8 @@ func (t *table) getBlock(idx int) (*block, error) {
 		b, _ = blk.(*block)
 		return b, nil
 	}
-	var ko *pb.BlockOffset
-	getBlockOffset := t.getBlockOffset(idx, ko)
+	var ko pb.BlockOffset
+	getBlockOffset := t.getBlockOffset(idx, &ko)
 	common.CondPanic(!getBlockOffset, fmt.Errorf("block t.offset id=%d", idx))
 	b = &block{
 		offset: int(ko.Offset),
@@ -104,27 +106,28 @@ func (t *table) getBlock(idx int) (*block, error) {
 			"failed to read from sstable: %d at offset: %d, len: %d",
 			t.sst.FID(), b.offset, ko.GetSize_())
 	}
-	readPos := len(b.data) - 4
+	readPos := len(b.data) - 4 // 1. First read checksum length.
 	b.chkLen = int(binary.BigEndian.Uint32(b.data[readPos : readPos+4]))
 	if b.chkLen > len(b.data) {
 		return nil, errors.New("invalid checksum length. Either the data is " +
 			"corrupted or the table options are incorrectly set")
 	}
 	readPos -= b.chkLen
-	b.checkSum = b.data[readPos : readPos+b.chkLen]
-	b.data = b.data[:readPos]
+	b.checkSum = b.data[readPos : readPos+b.chkLen] // 2. read checkSum bytes
+	b.data = b.data[:readPos]                       // 3. read data
 	if err = b.verifyCheckSum(); err != nil {
 		return nil, err
 	}
 
 	// restart point len
 	readPos -= 4
-	numEntries := int(binary.BigEndian.Uint32(b.data[readPos : readPos+4]))
+	numEntries := int(binary.BigEndian.Uint32(b.data[readPos : readPos+4])) // 4. read numEntries
 	entriesIndexStart := readPos - (numEntries * 4)
 	entriesIndexEnd := entriesIndexStart + (numEntries * 4)
-	b.entryOffsets = model.BytesToU32Slice(b.data[entriesIndexStart:entriesIndexEnd])
+
+	b.entryOffsets = model.BytesToU32Slice(b.data[entriesIndexStart:entriesIndexEnd]) // 5. read entry[]
 	b.entriesIndexOff = entriesIndexStart
-	t.lm.cache.Set(string(blockCacheKey), b)
+	t.lm.cache.Set(string(blockCacheKey), b) // 6. cache block
 	return b, nil
 }
 
@@ -133,8 +136,12 @@ func (t *table) getBlockOffset(idx int, blo *pb.BlockOffset) bool {
 	if idx < 0 || idx >= len(indexData.GetOffsets()) {
 		return false
 	}
-	*blo = *indexData.GetOffsets()[idx]
-	return false
+	if idx == len(indexData.GetOffsets()) {
+		return true
+	}
+	blockOffset := indexData.GetOffsets()[idx]
+	*blo = *blockOffset
+	return true
 }
 
 func (t *table) read(off, sz int) ([]byte, error) {
@@ -216,6 +223,7 @@ func (tier *tableIterator) Next() {
 		tier.err = io.EOF
 		return
 	}
+
 	if len(tier.biter.data) == 0 {
 		Block, err := tier.t.getBlock(tier.blockPos)
 		if err != nil {
@@ -231,14 +239,14 @@ func (tier *tableIterator) Next() {
 	}
 
 	tier.biter.Next()
-	if !tier.biter.Valid() {
+	if !tier.biter.Valid() { // 当前block已经遍历完了, 换下一个block
 		tier.blockPos++
 		tier.biter.data = nil
 		tier.Next()
 		return
 	}
 	// todo 这是何意? badger 源码中没有
-	// tier.it = tier.biter.Item()
+	tier.it = tier.biter.Item()
 }
 
 func (tier *tableIterator) Valid() bool {
@@ -247,10 +255,10 @@ func (tier *tableIterator) Valid() bool {
 
 // Seek 在 sst 中扫描 index 索引数据来寻找 合适的 block
 func (tier *tableIterator) Seek(key []byte) {
-	var blo *pb.BlockOffset
+	var blo pb.BlockOffset
 	blockOffsetLen := len(tier.t.sst.Indexs().GetOffsets())
 	idx := sort.Search(blockOffsetLen, func(index int) bool {
-		getBlockOffset := tier.t.getBlockOffset(index, blo)
+		getBlockOffset := tier.t.getBlockOffset(index, &blo)
 		common.CondPanic(!getBlockOffset,
 			fmt.Errorf("tableIterator.sort.Search idx < 0 || idx > len(index.GetOffsets()"))
 		if index == blockOffsetLen {
@@ -258,6 +266,7 @@ func (tier *tableIterator) Seek(key []byte) {
 		}
 		return model.CompareKey(blo.GetKey(), key) > 0
 	})
+	// todo table 寻找key
 	if idx == 0 { // 应该说明 没有这个 key 啊,找不到此key啊;
 		// 这个 sst 中没有这个 key
 		// tier.SeekHelper(0, key)
@@ -328,7 +337,7 @@ func (tier *tableIterator) SeekToLast() {
 	tier.biter.blockID = tier.blockPos
 	tier.biter.tableID = tier.t.fid
 	tier.biter.setBlock(Block)
-	tier.biter.seekToFirst()
+	tier.biter.seekToLast()
 	tier.it = tier.biter.Item()
 	tier.err = tier.biter.Error()
 }

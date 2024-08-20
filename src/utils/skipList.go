@@ -31,8 +31,8 @@ func newSkipNode(arena *Arena, key []byte, value model.ValueExt, height int) *sk
 	nodeOffset := arena.AllocateNode(height)
 	keyOffset := arena.PutKey(key)
 	valOffset := arena.PutVal(value)
-	node := arena.getNode(nodeOffset)
 
+	node := arena.getNode(nodeOffset)
 	node.height = uint16(height)
 	node.keyOffset = keyOffset
 	node.keySize = uint32(len(key))
@@ -40,11 +40,11 @@ func newSkipNode(arena *Arena, key []byte, value model.ValueExt, height int) *sk
 	return node
 }
 func encodeVal(valOffset, valSize uint32) uint64 {
-	return uint64(valOffset)<<32 | uint64(valSize)
+	return uint64(valSize)<<32 | uint64(valOffset)
 }
 func decodeVal(val uint64) (valOffset uint32, valSize uint32) {
-	valOffset = uint32(val >> 32)
-	valSize = uint32(val)
+	valOffset = uint32(val)
+	valSize = uint32(val >> 32)
 	return
 }
 func (n *skipNode) getValOffset() (uint32, uint32) {

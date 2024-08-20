@@ -12,8 +12,8 @@ type ValueExt struct {
 }
 
 func (val *ValueExt) EncodeValSize() uint32 {
-	size := len(val.Value) + 1
-	enc := sizeVarint(uint64(val.ExpiresAt))
+	size := len(val.Value) + 1 // 1B meta
+	enc := sizeVarint(val.ExpiresAt)
 	return uint32(size + enc)
 }
 

@@ -1,4 +1,7 @@
-package mmap
+//go:build linux
+// +build linux
+
+package file
 
 import (
 	"fmt"
@@ -7,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"trainKv/common"
+	"trainKv/mmap"
 )
 
 type MmapFile struct {
@@ -29,6 +33,7 @@ func OpenMmapFile(fileName string, flag int, maxSz int) (*MmapFile, error) {
 	if err == nil && fileInfo != nil && fileInfo.Size() > 0 {
 		maxSz = int(fileInfo.Size())
 	}
+
 	if maxSz > 0 && fileInfo.Size() == 0 {
 		// If file is empty, truncate it to sz.
 		if err := fd.Truncate(int64(maxSz)); err != nil {
@@ -36,38 +41,33 @@ func OpenMmapFile(fileName string, flag int, maxSz int) (*MmapFile, error) {
 		}
 		fileSize = maxSz
 	}
-	buf, err := Mmap(fd, writable, int64(maxSz))
+	buf, err := mmap.Mmap(fd, writable, int64(maxSz))
 	if err != nil {
 		return nil, errors.Wrapf(err, "while mmapping %s with size: %d", fd.Name(), fileSize)
 	}
+
 	if fileSize == 0 {
 		dir, _ := filepath.Split(fileName)
 		go SyncDir(dir)
 	}
 	return &MmapFile{
-		Buf: buf,
-		Fd:  fd,
+		Buf:    buf,
+		Fd:     fd,
+		BufLen: int64(fileSize),
 	}, err
-}
-
-func (m *MmapFile) Write(b []byte) (int, error) {
-	length := int64(len(b))
-	if length <= 0 {
-		return 0, nil
-	}
-	m.Buf = append(m.Buf, b...)
-	return len(b), nil
 }
 
 // Read copy data from mapped region(buf) into slice b at offset.
 func (m *MmapFile) Read(b []byte, offset int64) (int, error) {
-	if offset < 0 || offset >= m.BufLen {
+	//if offset < 0 || offset >= m.BufLen {
+	if offset < 0 || offset >= int64(len(m.Buf)) {
 		return 0, io.EOF
 	}
-	if offset+int64(len(b)) >= m.BufLen {
+	if offset+int64(len(b)) > int64(len(m.Buf)) {
 		return 0, io.EOF
 	}
-	return copy(b, m.Buf[offset:]), nil
+	end := offset + int64(len(b))
+	return copy(b, m.Buf[offset:end]), nil
 }
 
 // Sync synchronize the mapped buffer to the file's contents on disk.
@@ -75,7 +75,7 @@ func (m *MmapFile) Sync() error {
 	if m == nil {
 		return nil
 	}
-	return Msync(m.Buf)
+	return mmap.Msync(m.Buf)
 }
 
 func (m *MmapFile) Bytes(off, sz int) ([]byte, error) {
@@ -115,7 +115,7 @@ func (m *MmapFile) Delete() error {
 		return nil
 	}
 
-	if err := Unmap(m.Buf); err != nil {
+	if err := mmap.Unmap(m.Buf); err != nil {
 		return fmt.Errorf("while munmap file: %s, error: %v\n", m.Fd.Name(), err)
 	}
 	m.Buf = nil
@@ -133,9 +133,11 @@ func (m *MmapFile) Close() error {
 		return nil
 	}
 	if err := m.Sync(); err != nil {
+		//fmt.Printf("while sync file: %s, error: %v\n", m.Fd.Name(), err)
+		//return nil
 		return fmt.Errorf("while sync file: %s, error: %v\n", m.Fd.Name(), err)
 	}
-	if err := Unmap(m.Buf); err != nil {
+	if err := mmap.Unmap(m.Buf); err != nil {
 		return fmt.Errorf("while munmap file: %s, error: %v\n", m.Fd.Name(), err)
 	}
 	return m.Fd.Close()
@@ -164,6 +166,6 @@ func (m *MmapFile) Truncature(maxSz int64) error {
 	}
 
 	var err error
-	m.Buf, err = Mremap(m.Buf, int(maxSz)) // Mmap up to max size.
+	m.Buf, err = mmap.Mremap(m.Buf, int(maxSz)) // Mmap up to max size.
 	return err
 }

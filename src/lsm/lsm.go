@@ -50,7 +50,7 @@ func (lsm *LSM) Put(entry *model.Entry) (err error) {
 	if entry == nil || len(entry.Key) == 0 {
 		return common.ErrEmptyKey
 	}
-	if int64(lsm.memoryTable.wal.size)+int64(EstimateWalEncodeSize(entry)) >
+	if int64(lsm.memoryTable.wal.writeAt)+int64(EstimateWalEncodeSize(entry)) >
 		lsm.option.MemTableSize {
 		lsm.Rotate()
 	}
@@ -59,7 +59,21 @@ func (lsm *LSM) Put(entry *model.Entry) (err error) {
 	if err != nil {
 		return err
 	}
-	return nil
+
+	// 检查是否存在immutable需要刷盘，
+	for _, immutable := range lsm.immemoryTables {
+		if err = lsm.levelManger.flush(immutable); err != nil {
+			return err
+		}
+		// TODO 这里问题很大，应该是用引用计数的方式回收
+		err = immutable.close()
+		common.Panic(err)
+	}
+	if len(lsm.immemoryTables) != 0 {
+		// TODO 将lsm的immutables队列置空，这里可以优化一下节省内存空间，还可以限制一下immut table的大小为固定值
+		lsm.immemoryTables = make([]*memoryTable, 0)
+	}
+	return err
 }
 
 func (lsm *LSM) Get(key []byte) (*model.Entry, error) {
@@ -97,18 +111,6 @@ func (lsm *LSM) Rotate() {
 	lsm.immemoryTables = append(lsm.immemoryTables, lsm.memoryTable)
 	lsm.memoryTable = lsm.NewMemoryTable()
 }
-
-func (lsm *LSM) flushTask() {
-	// 检查是否存在immutable需要刷盘;
-	for _, immutable := range lsm.immemoryTables {
-		if err := lsm.levelManger.flush(immutable); err != nil {
-			common.Err(err)
-		}
-		err := immutable.close()
-		common.Err(err)
-	}
-}
-
 func (lsm *LSM) StartCompacter() {
 	n := lsm.option.NumCompactors
 	lsm.closer.Add(n)

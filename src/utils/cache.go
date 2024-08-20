@@ -156,7 +156,9 @@ func (c *Cache) remEntry(place *list.Element, entry *cacheEntry) {
 }
 
 func (c *Cache) Close() error {
-	close(c.EvictionChannel)
+	if c.EvictionChannel != nil {
+		close(c.EvictionChannel)
+	}
 	c.freqs = nil
 	c.values = nil
 	return nil

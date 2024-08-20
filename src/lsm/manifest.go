@@ -12,6 +12,7 @@ import (
 	"trainKv/common"
 	"trainKv/model"
 	"trainKv/pb"
+	"trainKv/utils"
 )
 
 type ManifestFile struct {
@@ -19,7 +20,7 @@ type ManifestFile struct {
 	f                        *os.File
 	mux                      sync.Mutex
 	deletionRewriteThreshold int
-	manifest                 *Manifest
+	manifest                 *Manifest // 内存元信息
 }
 
 type Manifest struct {
@@ -46,6 +47,8 @@ type TableMeta struct {
 
 func OpenManifestFile(opt *model.FileOptions) (*ManifestFile, error) {
 	path := filepath.Join(opt.Dir, common.ManifestFilename)
+	opt.FileName = path
+	opt.Path = path
 	mf := &ManifestFile{
 		opt:                      opt,
 		mux:                      sync.Mutex{},
@@ -110,7 +113,7 @@ func ReplyManifestFile(file *os.File) (m *Manifest, truncOffset int64, err error
 			}
 			return &Manifest{}, 0, common.ErrBadReadCRC
 		}
-		dataLength := binary.BigEndian.Uint32(crcBuf[:4])
+		dataLength := binary.BigEndian.Uint32(crcBuf[0:4])
 		dataBuf := make([]byte, dataLength)
 		readDataNum, err := io.ReadFull(file, dataBuf)
 		if err != nil {
@@ -124,6 +127,7 @@ func ReplyManifestFile(file *os.File) (m *Manifest, truncOffset int64, err error
 			binary.BigEndian.Uint32(crcBuf[4:8]) {
 			return &Manifest{}, 0, common.ErrBadChecksum
 		}
+
 		var changeSet pb.ManifestChangeSet
 		if err := changeSet.Unmarshal(dataBuf); err != nil {
 			return &Manifest{}, 0, err
@@ -244,9 +248,9 @@ func (mf *ManifestFile) addChanges(changes []*pb.ManifestChange) error {
 	return nil
 }
 
-func doRewrite(path string, manifest *Manifest) (*os.File, int, error) {
-	reWriteFileName := filepath.Join(path, common.ManifestRewriteFilename)
-	file, err := os.OpenFile(reWriteFileName, os.O_RDWR, 0666)
+func doRewrite(dir string, manifest *Manifest) (*os.File, int, error) {
+	reWriteFileName := filepath.Join(dir, common.ManifestRewriteFilename)
+	file, err := os.OpenFile(reWriteFileName, os.O_RDWR, common.DefaultFileMode)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -258,6 +262,7 @@ func doRewrite(path string, manifest *Manifest) (*os.File, int, error) {
 	creations := len(manifest.Tables)
 	asChanges := manifest.asChanges()
 	changeSet := pb.ManifestChangeSet{Changes: asChanges}
+
 	changeBuf, err := changeSet.Marshal()
 	if err != nil {
 		file.Close()
@@ -266,7 +271,7 @@ func doRewrite(path string, manifest *Manifest) (*os.File, int, error) {
 	crcBuf := make([]byte, common.ManifestFileCrcLen)
 	binary.BigEndian.PutUint32(crcBuf[0:4], uint32(len(changeBuf)))
 	binary.BigEndian.PutUint32(crcBuf[4:8], crc32.Checksum(changeBuf, common.CastagnoliCrcTable))
-	headerBuf = append(headerBuf, crcBuf...)
+	headerBuf = append(headerBuf, crcBuf[:]...)
 	headerBuf = append(headerBuf, changeBuf...)
 	if _, err := file.Write(headerBuf); err != nil {
 		file.Close()
@@ -276,11 +281,13 @@ func doRewrite(path string, manifest *Manifest) (*os.File, int, error) {
 		file.Close()
 		return nil, 0, err
 	}
+
+	// In Windows the files should be closed before doing a Rename.
 	if err = file.Close(); err != nil {
 		return nil, 0, err
 	}
 
-	manifestPathName := filepath.Join(path, common.ManifestFilename)
+	manifestPathName := filepath.Join(dir, common.ManifestFilename)
 	if err = os.Rename(reWriteFileName, manifestPathName); err != nil {
 		return nil, 0, err
 	}
@@ -292,7 +299,8 @@ func doRewrite(path string, manifest *Manifest) (*os.File, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	if err := file.Sync(); err != nil {
+
+	if err := utils.SyncDir(dir); err != nil {
 		file.Close()
 		return nil, 0, err
 	}

@@ -2,11 +2,13 @@ package lsm
 
 import (
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"os"
+	"sync"
 	errors "trainKv/common"
-	"trainKv/mmap"
+	"trainKv/file"
 	"trainKv/model"
 )
 
@@ -17,75 +19,82 @@ const (
 )
 
 type WalHeader struct {
-	keyLen    uint32
-	valLen    uint32
-	Meta      byte
-	ExpiredAt uint64
+	keyLen    uint32 // 4B
+	valLen    uint32 // 4B
+	Meta      byte   // 1B
+	ExpiredAt uint64 // 8B
 }
 
-func (h WalHeader) encode() []byte {
+func (h WalHeader) encode(buf []byte) int {
 	index := 0
-	buf := make([]byte, WalHeaderSize)
-	index += binary.PutVarint(buf[index:], int64(h.keyLen))
-	index += binary.PutVarint(buf[index:], int64(h.valLen))
-	buf[index] = h.Meta
+	index += binary.PutUvarint(buf[index:], uint64(h.keyLen))
+	index += binary.PutUvarint(buf[index:], uint64(h.valLen))
+	index += binary.PutUvarint(buf[index:], uint64(h.Meta))
 	index += binary.PutUvarint(buf[index+1:], h.ExpiredAt)
-	return buf
+	return index
 }
 
 func (h *WalHeader) decode(buf []byte) {
 	var index = 0
-	kSize, n := binary.Varint(buf[index:])
+	kSize, n := binary.Uvarint(buf[index:])
 	h.keyLen = uint32(kSize)
 	index += n
 
-	vSize, n := binary.Varint(buf[index:])
+	vSize, n := binary.Uvarint(buf[index:])
 	h.valLen = uint32(vSize)
 	index += n
 
-	h.Meta = buf[index]
+	meta, n := binary.Uvarint(buf[index:])
+	h.Meta = byte(meta)
+	index += n
 
-	expiredAt, n := binary.Uvarint(buf[index+1:])
+	expiredAt, n := binary.Uvarint(buf[index:])
 	h.ExpiredAt = expiredAt
 }
 
 type WAL struct {
-	file   *mmap.MmapFile
-	opt    model.FileOptions
-	size   uint32
-	readAt uint64
+	mux     *sync.Mutex
+	file    *file.MmapFile
+	opt     *model.FileOptions
+	size    uint32
+	writeAt uint32
+	readAt  uint32
 }
 
 func OpenWalFile(opt *model.FileOptions) *WAL {
 	//file, err := os.OpenFile(opt.FileName, os.O_CREATE|os.O_RDWR, 0666)
-	file, err := mmap.OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
+	mmapFile, err := file.OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
 	if err != nil {
 		return nil
 	}
-	fileInfo, err := file.Fd.Stat()
+	fileInfo, err := mmapFile.Fd.Stat()
 	wal := &WAL{
-		file: file,
-		size: uint32(fileInfo.Size()),
+		file:    mmapFile,
+		size:    uint32(fileInfo.Size()),
+		writeAt: 0,
+		mux:     &sync.Mutex{},
+		opt:     opt,
 	}
 	if err != nil {
+		fmt.Printf("open wal file error: %v ;\n", err)
 		return nil
 	}
 	return wal
 }
 
 func (w *WAL) Write(e *model.Entry) error {
+	w.mux.Lock()
+	defer w.mux.Unlock()
 	walEncode, size := w.WalEncode(e)
-	n, err := w.file.Write(walEncode)
+	err := w.file.AppendBuffer(w.writeAt, walEncode)
 	if err != nil {
 		return err
 	}
-	if n != size {
-		return nil
-	}
+	w.writeAt += uint32(size)
 	return nil
 }
 
-func (w *WAL) Read(offset uint64) (*model.Entry, uint64) {
+func (w *WAL) Read(offset uint32) (*model.Entry, uint32) {
 	entry, err := w.WalDecode(offset)
 	if err != nil {
 		if err == io.EOF {
@@ -97,6 +106,7 @@ func (w *WAL) Read(offset uint64) (*model.Entry, uint64) {
 	return entry, w.readAt
 }
 
+// WalEncode | header(klen,vlen,meta,expir) | key | value | crc32 |
 func (w *WAL) WalEncode(e *model.Entry) ([]byte, int) {
 	header := WalHeader{
 		keyLen:    uint32(len(e.Key)),
@@ -104,19 +114,20 @@ func (w *WAL) WalEncode(e *model.Entry) ([]byte, int) {
 		ExpiredAt: e.ExpiresAt,
 		Meta:      e.Meta,
 	}
-	headerBuf := header.encode()
+	var headerEnc [WalHeaderSize]byte
+	sz := header.encode(headerEnc[:])
 	buf := make([]byte, 0)
-	buf = append(buf, headerBuf...)
+	buf = append(buf, headerEnc[:sz]...)
 	buf = append(buf, e.Key...)
 	buf = append(buf, e.Value...)
 	checksumIEEE := crc32.ChecksumIEEE(buf)
 	crcBuf := make([]byte, crcSize)
-	binary.LittleEndian.PutUint32(crcBuf[:], checksumIEEE)
+	binary.BigEndian.PutUint32(crcBuf[:], checksumIEEE)
 	buf = append(buf, crcBuf...)
 	return buf, len(buf)
 }
 
-func (w *WAL) WalDecode(offset uint64) (*model.Entry, error) {
+func (w *WAL) WalDecode(offset uint32) (*model.Entry, error) {
 	entry := &model.Entry{}
 	headerBuf := make([]byte, WalHeaderSize)
 	readN, err := w.file.Read(headerBuf, int64(offset))
@@ -126,7 +137,7 @@ func (w *WAL) WalDecode(offset uint64) (*model.Entry, error) {
 
 	var header WalHeader
 	header.decode(headerBuf)
-	offset = offset + uint64(readN)
+	offset = offset + uint32(readN)
 
 	dataBuf := make([]byte, header.keyLen+header.valLen)
 	readN, err = w.file.Read(dataBuf, int64(offset))
@@ -136,21 +147,22 @@ func (w *WAL) WalDecode(offset uint64) (*model.Entry, error) {
 	entry.ExpiresAt = header.ExpiredAt
 
 	currChecksumIEEE := crc32.ChecksumIEEE(append(headerBuf, dataBuf...))
-	offset = offset + uint64(readN)
+	offset = offset + uint32(readN)
 
 	crcBuf := make([]byte, crcSize)
 	readN, err = w.file.Read(crcBuf, int64(offset))
-	readChecksumIEEE := binary.LittleEndian.Uint32(crcBuf[:])
+	readChecksumIEEE := binary.BigEndian.Uint32(crcBuf[:])
 	if readChecksumIEEE != currChecksumIEEE {
 		return nil, errors.ErrWalInvalidCrc
 	}
-	offset = offset + uint64(readN)
+	offset = offset + uint32(readN)
 	w.readAt = offset
 	return entry, nil
 }
 
+// WalEncode | header(klen,vlen,meta,expir) | key | value | crc32 |
 func EstimateWalEncodeSize(e *model.Entry) int {
-	return len(e.Key) + len(e.Value) + WalHeaderSize + 8 // crc 8B
+	return WalHeaderSize + len(e.Key) + len(e.Value) + crcSize // crc 4B
 }
 
 func (w *WAL) Fid() uint64 {

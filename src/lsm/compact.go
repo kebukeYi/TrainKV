@@ -54,8 +54,8 @@ func (cd *compactDef) lockLevel() {
 }
 
 func (cd *compactDef) unlockLevel() {
-	cd.nextLevel.mux.RUnlock()
 	cd.thisLevel.mux.RUnlock()
+	cd.nextLevel.mux.RUnlock()
 }
 
 // 1. 启动压缩
@@ -194,6 +194,7 @@ func (lm *levelsManger) pickCompactLevels() (prios []compactionPriority) {
 		}
 		prios = append(prios, prio)
 	}
+	// level0
 	addPriority(0, float64(lm.levelHandlers[0].numTables()/lm.opt.NumLevelZeroTables))
 
 	for i := 1; i < len(lm.levelHandlers); i++ {
@@ -448,7 +449,7 @@ func (lm *levelsManger) findMaxLevelTables(tables []*table, cd *compactDef) bool
 		if now.Sub(*t.GetCreatedAt()) < time.Hour {
 			continue
 		}
-		if t.getStaleDataSize() < 10<<20 {
+		if t.getStaleDataSize() < common.MaxValueLogSize {
 			continue
 		}
 		cd.thisSize = t.Size()
@@ -538,7 +539,7 @@ func (lm *levelsManger) runCompactDef(id int, level int, cd compactDef) error {
 func (lm *levelsManger) compactBuildTables(level int, cd compactDef) ([]*table, func() error, error) {
 	thisTables := cd.thisTables
 	nextTables := cd.nextTables
-	options := model.Options{IsAsc: true}
+	options := &model.Options{IsAsc: true}
 
 	newIterator := func() []model.Iterator {
 		var iters []model.Iterator
@@ -546,9 +547,9 @@ func (lm *levelsManger) compactBuildTables(level int, cd compactDef) ([]*table, 
 		case level == 0:
 			iters = append(iters, iteratorsReversed(thisTables, options)...)
 		case len(thisTables) > 0:
-			iters = append(iters, thisTables[0].NewTableIterator(&options))
+			iters = append(iters, thisTables[0].NewTableIterator(options))
 		}
-		return append(iters, NewConcatIterator(nextTables, &options))
+		return append(iters, NewConcatIterator(nextTables, options))
 	}
 	res := make(chan *table, 3)
 	inflightBuilders := utils.NewThrottle(8 + len(cd.splits))
@@ -677,10 +678,10 @@ func (lm levelsManger) updateDiscardStats(discardStats map[uint32]int64) {
 	}
 }
 
-func iteratorsReversed(tables []*table, options model.Options) []model.Iterator {
+func iteratorsReversed(tables []*table, options *model.Options) []model.Iterator {
 	out := make([]model.Iterator, 0)
-	for i := len(tables) - 1; i > 0; i-- {
-		out = append(out, tables[i].NewTableIterator(&options))
+	for i := len(tables) - 1; i >= 0; i-- {
+		out = append(out, tables[i].NewTableIterator(options))
 	}
 	return out
 }

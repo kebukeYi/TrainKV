@@ -83,10 +83,10 @@ func (lm *levelsManger) build() error {
 func (lm *levelsManger) lastLevel() *levelHandler {
 	return lm.levelHandlers[len(lm.levelHandlers)-1]
 }
-func (lm *levelsManger) iterators() []model.Iterator {
+func (lm *levelsManger) iterators(opt *model.Options) []model.Iterator {
 	iters := make([]model.Iterator, 0)
 	for _, handler := range lm.levelHandlers {
-		iters = append(iters, handler.iterators()...)
+		iters = append(iters, handler.iterators(opt)...)
 	}
 	return iters
 }

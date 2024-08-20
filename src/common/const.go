@@ -2,7 +2,6 @@ package common
 
 import (
 	"hash/crc32"
-	"math"
 	"os"
 )
 
@@ -24,14 +23,9 @@ const (
 	DefaultFileFlag                   = os.O_RDWR | os.O_CREATE | os.O_APPEND
 	DefaultFileMode                   = 0666
 	MaxValueLogSize                   = 10 << 20
-	// This is O_DSYNC (datasync) on platforms that support it -- see file_unix.go
-	datasyncFileFlag = 0x0
-	// 基于可变长编码,其最可能的编码
-	MaxHeaderSize            = 21
-	VlogHeaderSize           = 0
-	MaxVlogFileSize   uint32 = math.MaxUint32
-	Mi                int64  = 1 << 20
-	KVWriteChCapacity        = 1000
+	MaxHeaderSize                     = 21 // 基于可变长编码,vlogFile其最可能的编码
+	VlogHeaderSize                    = 0
+	KVWriteChCapacity                 = 1000
 )
 
 // meta
@@ -41,7 +35,7 @@ const (
 )
 
 var (
-	MagicText    = [4]byte{'H', 'A', 'R', 'D'}
+	MagicText    = [4]byte{'H', 'A', 'R', 'D'} // Manifest 文件的头8B中的前4B魔数 Magic
 	MagicVersion = uint32(1)
 	// CastagnoliCrcTable is a CRC32 polynomial table
 	CastagnoliCrcTable = crc32.MakeTable(crc32.Castagnoli)

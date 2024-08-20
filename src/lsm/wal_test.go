@@ -40,7 +40,7 @@ func TestWAL_Write(t *testing.T) {
 
 	fmt.Printf("writeAt: %d\n", w.readAt)
 
-	var readAt uint64 = 0
+	var readAt uint32 = 0
 	for {
 		var entry *model.Entry
 		entry, readAt = w.Read(readAt)
