@@ -83,7 +83,7 @@ func (vlog *VLogFile) Size() int64 {
 	return int64(atomic.LoadUint32(&vlog.size))
 }
 
-func (vlog *VLogFile) AddSize(offset uint32) {
+func (vlog *VLogFile) SetSize(offset uint32) {
 	atomic.StoreUint32(&vlog.size, offset)
 }
 

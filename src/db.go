@@ -18,7 +18,6 @@ type DBOptions struct {
 	MaxBatchCount       int64
 	MaxBatchSize        int64
 	ValueLogFileSize    int
-	MaxValueLogFileSize uint32
 	VerifyValueChecksum bool
 	ValueLogMaxEntries  uint32
 	LogRotatesToFlush   int32
@@ -38,8 +37,6 @@ type TrainKVDB struct {
 
 func Open(opt *DBOptions) (*TrainKVDB, error) {
 	db := &TrainKVDB{Opt: opt}
-	db.Opt.MaxValueLogFileSize = common.MaxValueLogSize
-	db.Opt.ValueThreshold = common.DefaultValueThreshold
 	db.initVlog()
 	db.Lsm = lsm.NewLSM(&lsm.Options{
 		WorkDir:             opt.WorkDir,
@@ -77,9 +74,9 @@ func (db *TrainKVDB) Get(key []byte) (*model.Entry, error) {
 		return nil, common.ErrKeyNotFound
 	}
 	if entry != nil && model.IsValPtr(entry) {
-		var vp *model.ValuePtr
+		var vp model.ValuePtr
 		vp.Decode(entry.Value)
-		read, callBack, err := db.vlog.Read(vp)
+		read, callBack, err := db.vlog.Read(&vp)
 		defer model.RunCallback(callBack)
 		if err != nil {
 			return nil, err

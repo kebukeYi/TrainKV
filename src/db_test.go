@@ -10,19 +10,13 @@ import (
 )
 
 var dbOption = &DBOptions{
-	//ValueThreshold:      common.DefaultValueThreshold,
-	ValueThreshold:      0,
-	WorkDir:             "/usr/local/go_temp_files/test/trainKV/dbtest",
-	MemTableSize:        1 << 10,
-	SSTableSize:         1 << 10,
-	MaxBatchCount:       10,
-	MaxBatchSize:        1 << 20,
-	ValueLogFileSize:    1 << 20,
-	MaxValueLogFileSize: common.MaxValueLogSize,
-	VerifyValueChecksum: false,
-	ValueLogMaxEntries:  100,
-	LogRotatesToFlush:   1000,
-	MaxTableSize:        1000,
+	WorkDir:          "/usr/local/go_temp_files/test/trainKV/dbtest",
+	MemTableSize:     1 << 10,
+	SSTableSize:      1 << 10,
+	ValueLogFileSize: 1 << 20,
+	ValueThreshold:   0,
+	MaxBatchCount:    10,
+	MaxBatchSize:     1 << 20,
 }
 
 func clearDir() {

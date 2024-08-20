@@ -208,6 +208,7 @@ func (vlog *ValueLog) getVlogFileLocked(vp *model.ValuePtr) (*file.VLogFile, err
 			return nil, errors.Errorf("Invalid value pointer offset: %d greater than current offset: %d", vp.Offset, vlog.writableFileOffset)
 		}
 	}
+	vLogFile.Lock.RLock()
 	return vLogFile, nil
 }
 
@@ -234,10 +235,38 @@ func (vlog *ValueLog) Write(reqs []*Request) error {
 	vlog.Mux.Unlock()
 	var buf bytes.Buffer
 	flushToFile := func() error {
+		if buf.Len() == 0 {
+			return nil
+		}
+		data := buf.Bytes()
+		offset := vlog.getWriteOffset()
+		if err := curVlogFile.Write(offset, data); err != nil {
+			return errors.Wrapf(err, "Unable to write to value log file: %q", curVlogFile.FileName())
+		}
+		buf.Reset()
+		atomic.AddUint32(&vlog.writableFileOffset, uint32(len(data)))
+		curVlogFile.SetSize(vlog.writableFileOffset)
 		return nil
 	}
 
 	toWrite := func() error {
+		if err2 := flushToFile(); err2 != nil {
+			return err2
+		}
+		if vlog.getWriteOffset() > uint32(vlog.Opt.ValueLogFileSize) ||
+			vlog.entriesWrittenNum > vlog.Opt.ValueLogMaxEntries {
+			if err := curVlogFile.DoneWriting(vlog.getWriteOffset()); err != nil {
+				return err
+			}
+			newFid := atomic.AddUint32(&vlog.maxFid, 1)
+			common.CondPanic(newFid <= 0, fmt.Errorf("newid has overflown uint32: %v", newFid))
+			createVlogFile, err := vlog.createVlogFile(newFid)
+			if err != nil {
+				return err
+			}
+			curVlogFile = createVlogFile
+			atomic.AddInt32(&vlog.Db.logRotates, 1)
+		}
 		return nil
 	}
 
