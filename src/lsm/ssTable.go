@@ -114,8 +114,8 @@ func (sst *SSTable) MinKey() []byte {
 }
 
 // FID 获取fid
-func (ss *SSTable) FID() uint64 {
-	return ss.fid
+func (sst *SSTable) FID() uint64 {
+	return sst.fid
 }
 
 func (sst *SSTable) read(off, size int) ([]byte, error) {
@@ -135,25 +135,25 @@ func (sst *SSTable) readCheckError(off, sz int) []byte {
 	return buf
 }
 
-func (ss *SSTable) Bytes(off, sz int) ([]byte, error) {
-	return ss.file.Bytes(off, sz)
+func (sst *SSTable) Bytes(off, sz int) ([]byte, error) {
+	return sst.file.Bytes(off, sz)
 }
 
 // Size 返回底层文件的尺寸
-func (ss *SSTable) Size() int64 {
-	fileStats, err := ss.file.Fd.Stat()
+func (sst *SSTable) Size() int64 {
+	fileStats, err := sst.file.Fd.Stat()
 	common.Panic(err)
 	return fileStats.Size()
 }
 
 // GetCreatedAt _
-func (ss *SSTable) GetCreatedAt() *time.Time {
-	return &ss.creationTime
+func (sst *SSTable) GetCreatedAt() *time.Time {
+	return &sst.creationTime
 }
 
 // SetCreatedAt _
-func (ss *SSTable) SetCreatedAt(t *time.Time) {
-	ss.creationTime = *t
+func (sst *SSTable) SetCreatedAt(t *time.Time) {
+	sst.creationTime = *t
 }
 
 // HasBloomFilter _
@@ -162,13 +162,13 @@ func (sst *SSTable) HasBloomFilter() bool {
 }
 
 // Detele _
-func (ss *SSTable) Detele() error {
-	return ss.file.Delete()
+func (sst *SSTable) Detele() error {
+	return sst.file.Delete()
 }
 
 // Truncature _
-func (ss *SSTable) Truncature(size int64) error {
-	return ss.file.Truncature(size)
+func (sst *SSTable) Truncature(size int64) error {
+	return sst.file.Truncature(size)
 }
 
 func (sst *SSTable) Close() error {

@@ -70,6 +70,7 @@ func (n *skipNode) getVal(arena *Arena) model.ValueExt {
 
 type SkipList struct {
 	arena      *Arena
+	num        int32
 	headOffset uint32
 	height     int32
 	ref        int32
@@ -164,7 +165,8 @@ func (skipList *SkipList) findNear(key []byte, less bool, allowEqual bool) (*ski
 		}
 		// nextNode!=nil
 		getKey := nextNode.getKey(skipList.arena)
-		cmp := model.CompareKey(key, getKey)
+		//cmp := model.CompareKey(key, getKey)
+		cmp := model.CompareKeyNoTs(key, getKey)
 		if cmp > 0 {
 			x = nextNode
 			continue
@@ -212,6 +214,7 @@ func (skipList *SkipList) findSpliceForLevel(key []byte, before uint32, level in
 		if nextNode == nil {
 			return before, nextOffset
 		}
+		// todo 跳表对比key时, 祛除掉 ts版本号
 		cmp := model.CompareKey(key, nextNode.getKey(skipList.arena))
 		if cmp == 0 {
 			return nextOffset, nextOffset
@@ -256,6 +259,7 @@ func (skipList *SkipList) Put(e *model.Entry) {
 			encValue := encodeVal(vo, v.EncodeValSize())
 			prevNode := skipList.arena.getNode(prev[i])
 			prevNode.setVal(encValue)
+			atomic.AddInt32(&skipList.num, 1)
 			return
 		}
 	}
@@ -282,6 +286,7 @@ func (skipList *SkipList) Put(e *model.Entry) {
 			x.next[i] = next[i]
 			pnode := skipList.arena.getNode(prev[i])
 			if pnode.casNextOffset(i, next[i], skipList.arena.getNodeOffset(x)) {
+				atomic.AddInt32(&skipList.num, 1)
 				// Managed to insert x between prev[i] and next[i]. Go to the next level.
 				break
 			}
@@ -295,6 +300,7 @@ func (skipList *SkipList) Put(e *model.Entry) {
 				encValue := encodeVal(vo, v.EncodeValSize())
 				prevNode := skipList.arena.getNode(prev[i])
 				prevNode.setVal(encValue)
+				atomic.AddInt32(&skipList.num, 1)
 				return
 			}
 		}
@@ -352,17 +358,22 @@ func (skipList *SkipList) Draw(align bool) {
 	}
 }
 
-func (skipList *SkipList) NewSkipListIterator() model.Iterator {
+func (skipList *SkipList) NewSkipListIterator(name string) model.Iterator {
 	skipList.IncrRef()
 	return &SkipListIterator{
 		list: skipList,
-		curr: nil,
+		name: name,
 	}
 }
 
 type SkipListIterator struct {
+	name string
 	list *SkipList
 	curr *skipNode
+}
+
+func (s *SkipListIterator) Name() string {
+	return s.name
 }
 
 func (s *SkipListIterator) Key() []byte {

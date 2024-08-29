@@ -16,34 +16,12 @@ type lsmIterator struct {
 func (lsm *LSM) NewLsmIterator(opt *model.Options) []model.Iterator {
 	iter := &lsmIterator{}
 	iter.iters = make([]model.Iterator, 0)
-	iter.iters = append(iter.iters, lsm.memoryTable.skipList.NewSkipListIterator())
+	iter.iters = append(iter.iters, lsm.memoryTable.skipList.NewSkipListIterator(lsm.memoryTable.name))
 	for _, imemoryTable := range lsm.immemoryTables {
-		iter.iters = append(iter.iters, imemoryTable.skipList.NewSkipListIterator())
+		iter.iters = append(iter.iters, imemoryTable.skipList.NewSkipListIterator(imemoryTable.name))
 	}
 	iter.iters = append(iter.iters, lsm.levelManger.iterators(opt)...)
 	return iter.iters
-}
-
-func (lsmIter *lsmIterator) Next() {
-	lsmIter.iters[0].Next()
-}
-
-func (lsmIter *lsmIterator) Valid() bool {
-	return lsmIter.iters[0].Valid()
-}
-
-func (lsmIter *lsmIterator) Rewind() {
-	lsmIter.iters[0].Rewind()
-}
-
-func (lsmIter *lsmIterator) Seek(key []byte) {
-
-}
-func (lsmIter *lsmIterator) Item() model.Item {
-	return lsmIter.iters[0].Item()
-}
-func (lsmIter *lsmIterator) Close() error {
-	return nil
 }
 
 type ConcatIterator struct {
@@ -63,7 +41,9 @@ func NewConcatIterator(tables []*table, opt *model.Options) *ConcatIterator {
 		opt:    opt,
 	}
 }
-
+func (s *ConcatIterator) Name() string {
+	return s.curIer.Name()
+}
 func (conIter *ConcatIterator) setIdx(inx int) {
 	if inx < 0 || inx >= len(conIter.tables) {
 		conIter.curIer = nil
@@ -81,10 +61,10 @@ func (conIter *ConcatIterator) Rewind() {
 		return
 	}
 	if conIter.opt.IsAsc {
-		// 升序: 从末尾开始遍历
-		conIter.setIdx(len(conIter.iters) - 1)
-	} else {
+		// 升序: 开始遍历
 		conIter.setIdx(0)
+	} else {
+		conIter.setIdx(len(conIter.iters) - 1)
 	}
 	conIter.curIer.Rewind()
 }
@@ -191,15 +171,18 @@ func (n *node) setIterator(iter model.Iterator) {
 func (n *node) setEntry() {
 	switch {
 	case n.merge != nil:
-		if n.merge.small.valid {
+		n.valid = n.merge.small.valid
+		if n.valid {
 			n.entry = n.merge.small.entry
 		}
 	case n.concat != nil:
-		if n.concat.Valid() {
+		n.valid = n.concat.Valid()
+		if n.valid {
 			n.entry = n.concat.Item().Item
 		}
 	default:
-		if n.iter.Valid() {
+		n.valid = n.iter.Valid()
+		if n.valid {
 			n.entry = n.iter.Item().Item
 		}
 	}
@@ -248,6 +231,9 @@ func NewMergeIterator(iters []model.Iterator, reverse bool) model.Iterator {
 		NewMergeIterator(iters[mid:], reverse)}, reverse)
 }
 
+func (iter *MergeIterator) Name() string {
+	return iter.small.iter.Name()
+}
 func (m *MergeIterator) fix() {
 	if !m.otherNode().valid {
 		return
@@ -256,23 +242,33 @@ func (m *MergeIterator) fix() {
 		m.swapSmall()
 		return
 	}
-	cmp := model.CompareKey(m.small.entry.Key, m.otherNode().entry.Key)
+	cmp := model.CompareKeyNoTs(m.small.entry.Key, m.otherNode().entry.Key)
 	switch {
 	case cmp == 0:
-		m.otherNode().next()
+		// 原生key 相同下, 再比较时间戳版本,决定留哪个,祛除哪个;
+		if model.ParseTsVersion(m.small.entry.Key) > model.ParseTsVersion(m.otherNode().entry.Key) {
+			//fmt.Printf("    fix()cmp==0: mi.small.entry.Key:%s  meta:%d > mi.bigger().entry.Key:%s meta:%d ;\n", utils.ParseKey(mi.small.entry.Key), mi.small.entry.Meta, utils.ParseKey(mi.bigger().entry.Key), mi.bigger().entry.Meta)
+			m.otherNode().next()
+		} else {
+			//fmt.Printf("    fix()cmp==0: mi.small.entry.Key:%s  meta:%d <= mi.bigger().entry.Key:%s meta:%d ;\n", utils.ParseKey(mi.small.entry.Key), mi.small.entry.Meta, utils.ParseKey(mi.bigger().entry.Key), mi.bigger().entry.Meta)
+			m.small.next()
+			m.swapSmall()
+		}
+		return
+	case cmp < 0:
+		if m.reverse {
+			m.swapSmall()
+		} else {
+		}
 	case cmp > 0:
 		if m.reverse {
 		} else {
 			m.swapSmall()
 		}
-	case cmp < 0:
-		if m.reverse {
-			m.swapSmall()
-		}
 	}
 }
 
-func (m MergeIterator) swapSmall() {
+func (m *MergeIterator) swapSmall() {
 	if m.small == &m.left {
 		m.small = &m.right
 	} else {
@@ -280,7 +276,7 @@ func (m MergeIterator) swapSmall() {
 	}
 }
 
-func (m MergeIterator) otherNode() *node {
+func (m *MergeIterator) otherNode() *node {
 	if &m.left == m.small {
 		return &m.right
 	} else {
@@ -290,7 +286,7 @@ func (m MergeIterator) otherNode() *node {
 
 func (m *MergeIterator) Next() {
 	for m.small.valid {
-		if !bytes.Equal(m.small.entry.Key, m.curKey) {
+		if !bytes.Equal(model.ParseKey(m.small.entry.Key), model.ParseKey(m.curKey)) {
 			break
 		}
 		m.small.next()
@@ -315,7 +311,7 @@ func (m *MergeIterator) Rewind() {
 	m.fix()
 	m.setCurrentKey()
 }
-func (m MergeIterator) setCurrentKey() {
+func (m *MergeIterator) setCurrentKey() {
 	common.CondPanic(m.small.entry == nil && m.small.valid == true,
 		fmt.Errorf("mi.small.entry is nil"))
 	if m.small.valid {

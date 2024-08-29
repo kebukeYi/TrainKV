@@ -85,6 +85,30 @@ func (m *MmapFile) Bytes(off, sz int) ([]byte, error) {
 	return m.Buf[off : off+sz], nil
 }
 
+type mmapReader struct {
+	Data   []byte
+	offset int
+}
+
+func (m *MmapFile) NewReader(offset int) io.Reader {
+	return &mmapReader{
+		Data:   m.Buf,
+		offset: offset,
+	}
+}
+func (m *mmapReader) Read(buf []byte) (int, error) {
+	fmt.Printf("mmapReader Read %d\n", len(buf))
+	if m.offset > len(m.Data) {
+		return 0, io.EOF
+	}
+	n := copy(buf, m.Data[m.offset:])
+	m.offset += n
+	if n < len(buf) {
+		return 0, io.ErrShortBuffer
+	}
+	return n, nil
+}
+
 const oneGB = 1 << 30
 
 func (m *MmapFile) AppendBuffer(offset uint32, buf []byte) error {
@@ -132,6 +156,7 @@ func (m *MmapFile) Close() error {
 	if m.Fd == nil {
 		return nil
 	}
+	fmt.Printf("closing mmap file %s\n", m.Fd.Name())
 	if err := m.Sync(); err != nil {
 		//fmt.Printf("while sync file: %s, error: %v\n", m.Fd.Name(), err)
 		//return nil

@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"fmt"
 	"trainKv/common"
 	"trainKv/model"
 	"trainKv/utils"
@@ -11,7 +12,7 @@ type Options struct {
 	MemTableSize int64  // 内存表最大限制
 	SSTableMaxSz int64  // SSSTable 最大限制
 	// BlockSize is the size of each block inside SSTable in bytes.
-	BlockSize int // 数据持久化时的大小
+	BlockSize uint32 // 数据持久化时的大小
 	// BloomFalsePositive is the false positive probability of bloom filter.
 	BloomFalsePositive float64 // 布隆过滤器的容错率
 
@@ -50,11 +51,16 @@ func (lsm *LSM) Put(entry *model.Entry) (err error) {
 	if entry == nil || len(entry.Key) == 0 {
 		return common.ErrEmptyKey
 	}
-	if int64(lsm.memoryTable.wal.writeAt)+int64(EstimateWalEncodeSize(entry)) >
+	if int64(lsm.memoryTable.wal.Size())+int64(EstimateWalEncodeSize(entry)) >
 		lsm.option.MemTableSize {
+		fmt.Printf("memtable is full, rotate memtable when entry key:%s | value: %s\n",
+			entry.Key, entry.Value)
 		lsm.Rotate()
 	}
 
+	// 1. 跳表中进行对比时, key 去除掉 Ts 版本号
+	// 2. 添加进跳表中的 key 是携带有 Ts版本号
+	// 3. wal的 key 是携带有 Ts版本号
 	err = lsm.memoryTable.Put(entry)
 	if err != nil {
 		return err
@@ -65,8 +71,10 @@ func (lsm *LSM) Put(entry *model.Entry) (err error) {
 		if err = lsm.levelManger.flush(immutable); err != nil {
 			return err
 		}
+		fmt.Printf("flush immutable table currKey:%s | Meta: %v\n",
+			immutable.currKey, immutable.currKeyMeta)
 		// TODO 这里问题很大，应该是用引用计数的方式回收
-		err = immutable.close()
+		err = immutable.close(true)
 		common.Panic(err)
 	}
 	if len(lsm.immemoryTables) != 0 {
@@ -80,18 +88,21 @@ func (lsm *LSM) Get(key []byte) (*model.Entry, error) {
 	if len(key) == 0 {
 		return nil, common.ErrEmptyKey
 	}
+	// 1. 跳表中进行对比时, key 去除掉 Ts 版本号
 	entry, err := lsm.memoryTable.Get(key)
-	common.PrintErr(err, "lsm.memoryTable.Get()")
-	if entry != nil {
+	if entry != nil && entry.Value != nil {
+		//fmt.Printf("memtable[%d] orginKey:%s | Meta: %v | v:%s;\n", 0, model.ParseKey(key), entry.Meta, entry.Value)
 		return entry, nil
 	}
 
 	for i := len(lsm.immemoryTables) - 1; i >= 0; i-- {
 		if entry, err = lsm.immemoryTables[i].Get(key); entry != nil && entry.Value != nil {
+			//fmt.Printf("immutables[%d] orginKey:%s | Meta: %v | v:%s;\n", 0,
+			//	model.ParseKey(key), entry.Meta, entry.Value)
 			return entry, err
 		}
 	}
-
+	// 从level manger查询
 	return lsm.levelManger.Get(key)
 }
 
@@ -118,16 +129,15 @@ func (lsm *LSM) StartCompacter() {
 		go lsm.levelManger.runCompacter(i)
 	}
 }
-
 func (lsm *LSM) Close() error {
 	lsm.closer.Close()
 	if lsm.memoryTable != nil {
-		if err := lsm.memoryTable.close(); err != nil {
+		if err := lsm.memoryTable.close(false); err != nil {
 			return err
 		}
 	}
 	for i := range lsm.immemoryTables {
-		if err := lsm.immemoryTables[i].close(); err != nil {
+		if err := lsm.immemoryTables[i].close(false); err != nil {
 			return err
 		}
 	}

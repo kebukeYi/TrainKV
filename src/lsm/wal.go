@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
@@ -27,29 +28,37 @@ type WalHeader struct {
 
 func (h WalHeader) encode(buf []byte) int {
 	index := 0
-	index += binary.PutUvarint(buf[index:], uint64(h.keyLen))
+	index = binary.PutUvarint(buf[index:], uint64(h.keyLen))
 	index += binary.PutUvarint(buf[index:], uint64(h.valLen))
 	index += binary.PutUvarint(buf[index:], uint64(h.Meta))
-	index += binary.PutUvarint(buf[index+1:], h.ExpiredAt)
+	index += binary.PutUvarint(buf[index:], h.ExpiredAt)
 	return index
 }
 
-func (h *WalHeader) decode(buf []byte) {
-	var index = 0
-	kSize, n := binary.Uvarint(buf[index:])
-	h.keyLen = uint32(kSize)
-	index += n
+func (h *WalHeader) decode(reader *model.HashReader) (int, error) {
+	var err error
+	klen, err := binary.ReadUvarint(reader)
+	if err != nil {
+		return 0, err
+	}
+	h.keyLen = uint32(klen)
 
-	vSize, n := binary.Uvarint(buf[index:])
-	h.valLen = uint32(vSize)
-	index += n
+	vlen, err := binary.ReadUvarint(reader)
+	if err != nil {
+		return 0, err
+	}
+	h.valLen = uint32(vlen)
 
-	meta, n := binary.Uvarint(buf[index:])
+	meta, err := binary.ReadUvarint(reader)
+	if err != nil {
+		return 0, err
+	}
 	h.Meta = byte(meta)
-	index += n
-
-	expiredAt, n := binary.Uvarint(buf[index:])
-	h.ExpiredAt = expiredAt
+	h.ExpiredAt, err = binary.ReadUvarint(reader)
+	if err != nil {
+		return 0, err
+	}
+	return reader.ByteRead, nil
 }
 
 type WAL struct {
@@ -62,7 +71,8 @@ type WAL struct {
 }
 
 func OpenWalFile(opt *model.FileOptions) *WAL {
-	//file, err := os.OpenFile(opt.FileName, os.O_CREATE|os.O_RDWR, 0666)
+	fmt.Printf("wal open file %s with flag: %v\n", opt.FileName, opt.Flag)
+
 	mmapFile, err := file.OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
 	if err != nil {
 		return nil
@@ -94,8 +104,8 @@ func (w *WAL) Write(e *model.Entry) error {
 	return nil
 }
 
-func (w *WAL) Read(offset uint32) (*model.Entry, uint32) {
-	entry, err := w.WalDecode(offset)
+func (w *WAL) Read(reader io.Reader) (*model.Entry, uint32) {
+	entry, err := w.WalDecode(reader)
 	if err != nil {
 		if err == io.EOF {
 			return nil, 0
@@ -114,49 +124,60 @@ func (w *WAL) WalEncode(e *model.Entry) ([]byte, int) {
 		ExpiredAt: e.ExpiresAt,
 		Meta:      e.Meta,
 	}
+	buf := &bytes.Buffer{}
 	var headerEnc [WalHeaderSize]byte
 	sz := header.encode(headerEnc[:])
-	buf := make([]byte, 0)
-	buf = append(buf, headerEnc[:sz]...)
-	buf = append(buf, e.Key...)
-	buf = append(buf, e.Value...)
-	checksumIEEE := crc32.ChecksumIEEE(buf)
+
+	hash := crc32.New(errors.CastagnoliCrcTable)
+	writer := io.MultiWriter(buf, hash)
+
+	writer.Write(headerEnc[:sz])
+	writer.Write(e.Key)
+	writer.Write(e.Value)
+
 	crcBuf := make([]byte, crcSize)
-	binary.BigEndian.PutUint32(crcBuf[:], checksumIEEE)
-	buf = append(buf, crcBuf...)
-	return buf, len(buf)
+	binary.BigEndian.PutUint32(crcBuf[:], hash.Sum32())
+	writer.Write(crcBuf[:])
+	return buf.Bytes(), len(headerEnc[:sz]) + len(e.Key) + len(e.Value) + len(crcBuf)
 }
 
-func (w *WAL) WalDecode(offset uint32) (*model.Entry, error) {
-	entry := &model.Entry{}
-	headerBuf := make([]byte, WalHeaderSize)
-	readN, err := w.file.Read(headerBuf, int64(offset))
+func (w *WAL) WalDecode(reader io.Reader) (*model.Entry, error) {
+	var err error
+	hashReader := model.NewHashReader(reader)
+	var header WalHeader
+	headLen, err := header.decode(hashReader)
+	if header.keyLen == 0 {
+		return nil, io.EOF
+	}
 	if err != nil {
 		return nil, err
 	}
-
-	var header WalHeader
-	header.decode(headerBuf)
-	offset = offset + uint32(readN)
+	entry := &model.Entry{}
 
 	dataBuf := make([]byte, header.keyLen+header.valLen)
-	readN, err = w.file.Read(dataBuf, int64(offset))
+	dataLen, err := io.ReadFull(hashReader, dataBuf[:])
+	if err != nil {
+		if err == io.EOF {
+			err = errors.ErrTruncate
+		}
+		return nil, err
+	}
 	entry.Key = dataBuf[:header.keyLen]
 	entry.Value = dataBuf[header.keyLen:]
 	entry.Meta = header.Meta
 	entry.ExpiresAt = header.ExpiredAt
-
-	currChecksumIEEE := crc32.ChecksumIEEE(append(headerBuf, dataBuf...))
-	offset = offset + uint32(readN)
+	sum32 := hashReader.Sum32()
 
 	crcBuf := make([]byte, crcSize)
-	readN, err = w.file.Read(crcBuf, int64(offset))
+	crcLen, err := io.ReadFull(reader, crcBuf[:])
+	if err != nil {
+		return nil, err
+	}
 	readChecksumIEEE := binary.BigEndian.Uint32(crcBuf[:])
-	if readChecksumIEEE != currChecksumIEEE {
+	if readChecksumIEEE != sum32 {
 		return nil, errors.ErrWalInvalidCrc
 	}
-	offset = offset + uint32(readN)
-	w.readAt = offset
+	w.readAt += uint32(headLen + dataLen + crcLen)
 	return entry, nil
 }
 
@@ -165,16 +186,31 @@ func EstimateWalEncodeSize(e *model.Entry) int {
 	return WalHeaderSize + len(e.Key) + len(e.Value) + crcSize // crc 4B
 }
 
+func (w *WAL) Size() uint32 {
+	return w.writeAt
+}
+
+func (w *WAL) SetSize(offset uint32) {
+	w.writeAt = offset
+}
 func (w *WAL) Fid() uint64 {
 	return w.opt.FID
 }
 
-func (w *WAL) Close() error {
+func (w *WAL) CloseAndRemove() error {
 	fileName := w.file.Fd.Name()
 	if err := w.file.Close(); err != nil {
 		return err
 	}
+	fmt.Printf("wal remove file %s \n", fileName)
 	return os.Remove(fileName)
+}
+
+func (w *WAL) Close() error {
+	if err := w.file.Close(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (w *WAL) Name() string {

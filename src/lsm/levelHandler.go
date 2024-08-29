@@ -65,34 +65,14 @@ func (leh *levelHandler) Get(key []byte) (*model.Entry, error) {
 
 func (leh *levelHandler) searchL0SST(key []byte) (*model.Entry, error) {
 	var version uint64
-	var err error
-	var entry *model.Entry
-	//  todo 在第0层 为什么没有从 尾部开始查询?
-	// https://github.com/kebukeYi/badger/blob/main/level_handler.go#L241
-	out := make([]*table, 0)
-	defTables := func(tables []*table) error {
-		for _, t := range tables {
-			if err2 := t.DecrRef(); err2 != nil {
-				common.Err(err)
-				return err2
-			}
-		}
-		return nil
-	}
 	for i := len(leh.tables) - 1; i >= 0; i-- {
-		t := leh.tables[i]
-		t.IncrRef()
-		out = append(out, t)
-	}
-	for _, table := range out {
-		if entry, err = table.Search(key, &version); err == nil {
-			break
-		} else {
-			common.Err(err)
+		table := leh.tables[i]
+		if entry, err := table.Search(key, &version); err == nil {
+			//fmt.Printf("level[%d] orginKey:%s | Meta: %v table:%s;\n", 0, model.ParseKey(key), entry.Meta, table.Name)
+			return entry, nil
 		}
 	}
-	err = defTables(out)
-	return entry, common.ErrNotFound
+	return nil, common.ErrKeyNotFound
 }
 
 func (leh *levelHandler) searchLnSST(key []byte) (*model.Entry, error) {
@@ -103,6 +83,7 @@ func (leh *levelHandler) searchLnSST(key []byte) (*model.Entry, error) {
 	var version uint64
 	var err error
 	if entry, err := getTable.Search(key, &version); err == nil {
+		//fmt.Printf("level[%d] orginKey:%s | Meta: %v table:%s;\n", leh.levelID, model.ParseKey(key), entry.Meta, getTable.Name)
 		return entry, nil
 	}
 	common.Err(err)

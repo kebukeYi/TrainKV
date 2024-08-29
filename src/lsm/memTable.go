@@ -13,10 +13,16 @@ import (
 	. "trainKv/utils"
 )
 
+const MemTableName string = ".memtable"
+
 type memoryTable struct {
-	lsm      *LSM
-	skipList *SkipList
-	wal      *WAL
+	lsm         *LSM
+	skipList    *SkipList
+	wal         *WAL
+	maxVersion  uint64
+	name        string
+	currKey     []byte
+	currKeyMeta byte
 }
 
 func (lsm *LSM) NewMemoryTable() *memoryTable {
@@ -32,6 +38,7 @@ func (lsm *LSM) NewMemoryTable() *memoryTable {
 		lsm:      lsm,
 		skipList: NewSkipList(lsm.option.MemTableSize),
 		wal:      OpenWalFile(walFileOpt),
+		name:     strconv.FormatUint(newFid, 10) + MemTableName,
 	}
 }
 
@@ -58,6 +65,9 @@ func (m *memoryTable) Put(e *model.Entry) error {
 		return err
 	}
 	m.skipList.Put(e)
+	m.currKey = e.Key
+	m.currKey = e.Key
+	m.currKeyMeta = e.Meta
 	return nil
 }
 
@@ -65,9 +75,15 @@ func (m *memoryTable) Size() int64 {
 	return m.skipList.GetMemSize()
 }
 
-func (m memoryTable) close() error {
-	if err := m.wal.Close(); err != nil {
-		return err
+func (m *memoryTable) close(needRemoveWal bool) error {
+	if needRemoveWal || m.wal.Size() == 0 {
+		if err := m.wal.CloseAndRemove(); err != nil {
+			return err
+		}
+	} else {
+		if err := m.wal.Close(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -81,7 +97,8 @@ func (lsm *LSM) recovery() (*memoryTable, []*memoryTable) {
 	var fids []uint64
 	mixFid := lsm.levelManger.maxFID
 	for _, file := range files {
-		if !strings.HasPrefix(file.Name(), walFileExt) {
+		//if !strings.HasPrefix(file.Name(), walFileExt) {
+		if !strings.HasSuffix(file.Name(), walFileExt) {
 			continue
 		}
 		fileNameSize := len(file.Name())
@@ -125,6 +142,7 @@ func (lsm *LSM) openMemTable(walFid uint64) (*memoryTable, error) {
 		lsm:      lsm,
 		skipList: s,
 		wal:      walFile,
+		name:     strconv.FormatUint(walFid, 10) + MemTableName,
 	}
 	err := mem.recovery2SkipList()
 	errors.CondPanic(err != nil, err)
@@ -136,9 +154,11 @@ func (m *memoryTable) recovery2SkipList() error {
 		return nil
 	}
 	var readAt uint32 = 0
+	//reader := bufio.NewReader(m.wal.file.NewReader(int(0))) // error
+	//reader := model.NewHashReader(m.wal.file.Fd) // ok
 	for {
 		var e *model.Entry
-		e, readAt = m.wal.Read(readAt)
+		e, readAt = m.wal.Read(m.wal.file.Fd)
 		if readAt > 0 && e != nil {
 			m.skipList.Put(e)
 			continue

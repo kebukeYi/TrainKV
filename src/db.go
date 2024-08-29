@@ -1,6 +1,7 @@
 package src
 
 import (
+	"fmt"
 	"github.com/pkg/errors"
 	"math"
 	"sync"
@@ -20,6 +21,8 @@ type DBOptions struct {
 	ValueLogFileSize    int
 	VerifyValueChecksum bool
 	ValueLogMaxEntries  uint32
+	BloomFalsePositive  float64
+	SSTBlockSize        uint32
 	LogRotatesToFlush   int32
 	MaxTableSize        int64
 }
@@ -42,8 +45,8 @@ func Open(opt *DBOptions) (*TrainKVDB, error) {
 		WorkDir:             opt.WorkDir,
 		MemTableSize:        opt.MemTableSize,
 		SSTableMaxSz:        opt.SSTableSize,
-		BlockSize:           8 * 1024,
-		BloomFalsePositive:  0,
+		BlockSize:           opt.SSTBlockSize,
+		BloomFalsePositive:  opt.BloomFalsePositive,
 		NumCompactors:       2,
 		BaseLevelSize:       10 << 20,
 		LevelSizeMultiplier: 10,
@@ -51,11 +54,15 @@ func Open(opt *DBOptions) (*TrainKVDB, error) {
 		BaseTableSize:       5 << 20,
 		NumLevelZeroTables:  15,
 		MaxLevelNum:         common.MaxLevelNum,
-		DiscardStatsCh:      nil,
+		DiscardStatsCh:      &(db.vlog.VLogFileDisCardStaInfo.FlushCh),
 	})
-	go db.Lsm.StartCompacter()
+	//
+	if err := db.vlog.Open(db.getVlogReplayHead(), db.vlogReplayFunction()); err != nil {
+		common.Panic(err)
+	}
+	//go db.Lsm.StartCompacter()
 	db.writeCh = make(chan *Request)
-	go db.handleWriteCh()
+	//go db.handleWriteCh()
 	return db, nil
 }
 func (db *TrainKVDB) Get(key []byte) (*model.Entry, error) {
@@ -96,6 +103,7 @@ func (db *TrainKVDB) Set(entry *model.Entry) error {
 		err error
 	)
 	entry.Key = model.KeyWithTs(entry.Key, math.MaxUint32)
+	entry.Version = model.NewCurVersion()
 	if !db.ShouldWriteValueToLSM(entry) {
 		if vp, err = db.vlog.NewValuePtr(entry); err != nil {
 			return err
@@ -106,11 +114,12 @@ func (db *TrainKVDB) Set(entry *model.Entry) error {
 	return db.Lsm.Put(entry)
 }
 
-func (db *TrainKVDB) Del(key []byte) error {
+func (db *TrainKVDB) Del(key []byte, id uint64) error {
 	return db.Set(&model.Entry{
 		Key:       key,
 		Value:     nil,
-		ExpiresAt: 0,
+		Meta:      common.BitDelete,
+		ExpiresAt: id,
 	})
 }
 
@@ -231,7 +240,6 @@ func (db *TrainKVDB) ShouldWriteValueToLSM(entry *model.Entry) bool {
 }
 
 func (db *TrainKVDB) initVlog() {
-	head := db.getVlogReplayHead()
 	vlog := &ValueLog{
 		DirPath:    db.Opt.WorkDir,
 		Mux:        sync.RWMutex{},
@@ -245,14 +253,14 @@ func (db *TrainKVDB) initVlog() {
 	vlog.Db = db
 	vlog.Opt = db.Opt
 	vlog.GarbageCh = make(chan struct{}, 1)
-	if err := vlog.Open(head, db.vlogReplayFunction()); err != nil {
-		common.Panic(err)
-	}
 	db.vlog = vlog
 }
 func (db *TrainKVDB) getVlogReplayHead() *model.ValuePtr {
-	var head *model.ValuePtr
-	return head
+	return &model.ValuePtr{
+		Fid:    0,
+		Offset: 0,
+		Len:    0,
+	}
 }
 
 func (db *TrainKVDB) vlogReplayFunction() func(entry *model.Entry, vpr *model.ValuePtr) error {
@@ -268,8 +276,59 @@ func (db *TrainKVDB) vlogReplayFunction() func(entry *model.Entry, vpr *model.Va
 			common.Err(err)
 		}
 	}
+	isInLSM := func(e *model.Entry, e_vlog *model.ValuePtr) bool {
+		vs, err := db.Lsm.Get(e.Key)
+		if err != nil {
+			fmt.Printf("Error while replaying key:%s  err:%v \n", e.Key, err)
+			return false
+		}
+		if vs == nil {
+			return false
+		}
+		if model.IsValPtr(vs) {
+			var newVp model.ValuePtr
+			newVp.Decode(vs.Value)
+			if newVp.Fid > e_vlog.Fid {
+				return true
+			}
+			if newVp.Offset > e_vlog.Offset {
+				return true
+			}
+			// 如果从lsm和vlog的同一个位置读取带entry则重新写回，也有可能读取到旧的
+			if newVp.Fid == e_vlog.Fid && newVp.Offset == e_vlog.Offset {
+				fmt.Printf("vlogReply: vlogKey:%s, sameOffset:Fid:%d, offet:%d next! \n",
+					e.Key, newVp.Fid, newVp.Offset)
+				return true
+			}
+			return false
+		} else {
+			lsmVersion := model.ParseTsVersion(vs.Key)
+			vlogVersion := model.ParseTsVersion(e.Key)
+			if lsmVersion >= vlogVersion {
+				fmt.Printf("vlogReply: vlogKey:%s v(%d) is in LSM Key:%s v(%d),next! \n",
+					e.Key, vlogVersion, vs.Key, lsmVersion)
+				return true
+			}
+			return false
+		}
+	}
 
 	return func(e *model.Entry, vpr *model.ValuePtr) error {
+		if isInLSM(e, vpr) {
+			//fmt.Printf("vlogReply: key: %s is in DB, next! \n", e.Key)
+			return nil
+		}
+		nk := make([]byte, len(e.Key))
+		copy(nk, e.Key)
+		var nv []byte
+		meta := e.Meta
+		if db.ShouldWriteValueToLSM(e) {
+			nv = make([]byte, len(e.Value))
+			copy(nv, e.Value)
+		} else {
+			nv = vpr.Encode()
+			meta = meta | common.BitValuePointer
+		}
 		db.updateVlogReplayHead([]*model.ValuePtr{vpr})
 		v := model.ValueExt{
 			Meta:      e.Meta | common.BitValuePointer,

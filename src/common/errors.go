@@ -25,8 +25,8 @@ var (
 	ErrWalInvalidCrc  = errors.New("walFile: invalid crc")
 	ErrBadReadMagic   = errors.New("read magic failed")
 	ErrBadMagic       = errors.New("bad magic")
-	ErrBadCRC         = errors.New("bad crc from read manifestFile")
-	ErrBadReadCRC     = errors.New("read crc failed from manifestFile")
+	ErrBadCRC         = errors.New("bad crc")
+	ErrBadReadCRC     = errors.New("read crc")
 	ErrBadChecksum    = errors.New("bad Checksum from manifestFile")
 	ErrBadRemoveSST   = errors.New("While removing table")
 	//ErrChecksumMismatch is returned at checksum mismatch.

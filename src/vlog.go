@@ -59,7 +59,7 @@ func (vlog *ValueLog) Open(replayHead *model.ValuePtr, replayFn model.LogEntry) 
 		return err
 	}
 	if len(vlog.filesMap) == 0 {
-		_, err := vlog.createVlogFile(0)
+		_, err := vlog.createVlogFile(1)
 		return common.WarpErr("Error while creating log file in valueLog.open", err)
 	}
 	fids := vlog.sortedFiles()
@@ -484,15 +484,27 @@ func (vlog *ValueLog) iterator(vlogFile *file.VLogFile, offset uint32, fn model.
 	var recordEntryOffset uint32 = offset
 	for {
 		entry, err := vlog.Entry(reader, recordEntryOffset)
+		switch {
+		case err == io.EOF:
+			return recordEntryOffset, nil
+		case err == io.ErrUnexpectedEOF || err == common.ErrTruncate:
+			return recordEntryOffset, nil
+		case err != nil:
+			return 0, err
+			//case err == nil:
+			//	continue
+		}
 		if err != nil {
+			fmt.Printf("unable to decode entry, err:%v \n", err)
 			return recordEntryOffset, err
 		}
-		var vp *model.ValuePtr
+		//var vp *model.ValuePtr
+		var vp model.ValuePtr
 		vp.Len = uint32((entry.HeaderLen) + len(entry.Key) + len(entry.Value) + crc32.Size)
 		vp.Offset = entry.Offset
 		vp.Fid = vlogFile.FID
 		recordEntryOffset += vp.Len
-		if err := fn(entry, vp); err != nil {
+		if err := fn(entry, &vp); err != nil {
 			if err == common.ErrStop {
 				break
 			}
@@ -516,7 +528,7 @@ func (vlog *ValueLog) Entry(read io.Reader, offset uint32) (*model.Entry, error)
 	e.Offset = offset
 	e.HeaderLen = hlen
 	buf := make([]byte, head.KLen+head.VLen)
-	if _, err = io.ReadFull(hashReader, buf); err != nil {
+	if _, err = io.ReadFull(hashReader, buf[:]); err != nil {
 		if err == io.EOF {
 			err = io.ErrUnexpectedEOF
 		}
@@ -524,15 +536,16 @@ func (vlog *ValueLog) Entry(read io.Reader, offset uint32) (*model.Entry, error)
 	}
 	e.Key = buf[:head.KLen]
 	e.Value = buf[head.KLen:]
+	sum32 := hashReader.Sum32()
 	var crcBuf [crc32.Size]byte
-	if _, err := io.ReadFull(hashReader, crcBuf[:]); err != nil {
+	if _, err := io.ReadFull(read, crcBuf[:]); err != nil {
 		if err == io.EOF {
 			err = io.ErrUnexpectedEOF
 		}
 		return nil, err
 	}
 	toU32 := model.BytesToU32(crcBuf[:])
-	if hashReader.Sum32() != toU32 {
+	if sum32 != toU32 {
 		return nil, common.ErrBadCRC
 	}
 	e.Meta = head.Meta
@@ -592,7 +605,7 @@ func (vlog *ValueLog) pickVlogFile(replayHead *model.ValuePtr) []*file.VLogFile 
 func (vlog *ValueLog) replayLog(logFile *file.VLogFile, offset uint32, replayFn model.LogEntry) error {
 	endOffset, err := vlog.iterator(logFile, offset, replayFn)
 	if err != nil {
-		return common.WarpErr(fmt.Sprintf("Unable to replay logfile:[%s]", logFile.FileName()), err)
+		return common.WarpErr(fmt.Sprintf("Unable to replay logfile:[%s] err:%v \n", logFile.FileName(), err), err)
 
 	}
 	if int64(endOffset) == logFile.Size() {

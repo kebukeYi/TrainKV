@@ -59,12 +59,13 @@ func OpenManifestFile(opt *model.FileOptions) (*ManifestFile, error) {
 	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fp, err := os.OpenFile(path, common.DefaultFileFlag, common.DefaultFileMode)
+			mf.manifest = NewManifest()
+			fp, _, err := doRewrite(mf.opt.Dir, mf.manifest)
 			if err != nil {
 				return nil, err
 			}
 			mf.f = fp
-			mf.manifest = NewManifest()
+			file = fp
 			return mf, nil
 		}
 		return nil, err
@@ -99,8 +100,8 @@ func ReplyManifestFile(file *os.File) (m *Manifest, truncOffset int64, err error
 	}
 	version := binary.BigEndian.Uint32(manifestFileHeaderBuf[4:8])
 	if version != common.MagicVersion {
-		return &Manifest{}, 0, fmt.Errorf("manifest has unsupported version: %d (we support %d)",
-			version, common.MagicVersion)
+		return &Manifest{}, 0,
+			fmt.Errorf("manifest has unsupported version: %d (we support %d)", version, common.MagicVersion)
 	}
 	manifest := NewManifest()
 	var offset = readHeaderNum
@@ -250,7 +251,7 @@ func (mf *ManifestFile) addChanges(changes []*pb.ManifestChange) error {
 
 func doRewrite(dir string, manifest *Manifest) (*os.File, int, error) {
 	reWriteFileName := filepath.Join(dir, common.ManifestRewriteFilename)
-	file, err := os.OpenFile(reWriteFileName, os.O_RDWR, common.DefaultFileMode)
+	file, err := os.OpenFile(reWriteFileName, common.DefaultFileFlag, common.DefaultFileMode)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -304,7 +305,7 @@ func doRewrite(dir string, manifest *Manifest) (*os.File, int, error) {
 		file.Close()
 		return nil, 0, err
 	}
-	return file, creations, nil
+	return openFile, creations, nil
 }
 func (m *Manifest) asChanges() []*pb.ManifestChange {
 	manifestChanges := make([]*pb.ManifestChange, 0, len(m.Tables))

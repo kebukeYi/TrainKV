@@ -480,7 +480,7 @@ func (lm *levelsManger) findMaxLevelTables(tables []*table, cd *compactDef) bool
 	}
 	return lm.compactIngStatus.compareAndAdd(thisAndNextLevelRLocked{}, *cd)
 }
-func (lm levelsManger) sortByStaleDataSize(tables []*table, cd *compactDef) {
+func (lm *levelsManger) sortByStaleDataSize(tables []*table, cd *compactDef) {
 	if len(tables) == 0 || cd.nextLevel == nil {
 		return
 	}
@@ -672,7 +672,7 @@ func (lm *levelsManger) subCompact(iterator model.Iterator, kr keyRange, cd comp
 	}
 }
 
-func (lm levelsManger) updateDiscardStats(discardStats map[uint32]int64) {
+func (lm *levelsManger) updateDiscardStats(discardStats map[uint32]int64) {
 	select {
 	case *lm.lsm.option.DiscardStatsCh <- discardStats:
 	}
@@ -693,7 +693,7 @@ func tablesToString(tables []*table) []string {
 	res = append(res, " . ")
 	return res
 }
-func (lm levelsManger) addSplits(cd *compactDef) {
+func (lm *levelsManger) addSplits(cd *compactDef) {
 	cd.splits = cd.splits[:0]
 	width := int(math.Ceil(float64(len(cd.nextTables)) / 5.0))
 	if width < 3 {
@@ -826,14 +826,14 @@ func (cs *compactIngStatus) compareAndAdd(_ thisAndNextLevelRLocked, cd compactD
 }
 
 func IsDeletedOrExpired(e *model.Entry) bool {
-	if e.Value == nil {
+	if e.Value == nil || len(e.Value) == 0 || e.Meta&common.BitDelete > 0 {
 		return true
 	}
 	if e.ExpiresAt == 0 {
 		return false
 	}
-
-	return e.ExpiresAt <= uint64(time.Now().Unix())
+	return false
+	//return e.ExpiresAt <= uint64(time.Now().Unix())
 }
 
 // levelCompactStatus 每一层的压缩状态信息

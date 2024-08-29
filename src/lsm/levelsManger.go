@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"trainKv/common"
@@ -96,6 +97,7 @@ func (lm *levelsManger) Get(key []byte) (*model.Entry, error) {
 		entry *model.Entry
 		err   error
 	)
+	// L0层查询
 	if entry, err = lm.levelHandlers[0].Get(key); entry != nil {
 		return entry, err
 	}
@@ -110,8 +112,9 @@ func (lm *levelsManger) Get(key []byte) (*model.Entry, error) {
 func (lm *levelsManger) flush(imm *memoryTable) (err error) {
 	fid := imm.wal.Fid()
 	sstName := utils.FileNameSSTable(lm.opt.WorkDir, fid)
+
 	builder := newSSTBuilder(lm.opt)
-	skipListIterator := imm.skipList.NewSkipListIterator()
+	skipListIterator := imm.skipList.NewSkipListIterator(strconv.FormatUint(fid, 10) + MemTableName)
 	for skipListIterator.Rewind(); skipListIterator.Valid(); skipListIterator.Next() {
 		entry := skipListIterator.Item().Item
 		builder.add(entry, false)

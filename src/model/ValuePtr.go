@@ -44,7 +44,6 @@ func (p *ValuePtr) Decode(b []byte) {
 	if uintptr(len(b)) < vptrSize {
 		panic("input slice is too short")
 	}
-
 	// Directly copy the bytes using unsafe.Pointer.
 	// This operation assumes that the underlying type of ValuePtr is compatible with the byte slice.
 	// The cast is safe as long as the size and alignment requirements are met.

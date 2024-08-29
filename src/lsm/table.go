@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strconv"
 	"sync/atomic"
 	"time"
 	"trainKv/common"
@@ -16,11 +17,14 @@ import (
 	"trainKv/utils"
 )
 
+const SSTableName string = ".sst"
+
 type table struct {
-	sst *SSTable
-	lm  *levelsManger
-	fid uint64
-	ref int32
+	sst  *SSTable
+	lm   *levelsManger
+	fid  uint64
+	ref  int32
+	Name string
 }
 
 func openTable(lm *levelsManger, tableName string, builder *sstBuilder) *table {
@@ -35,7 +39,7 @@ func openTable(lm *levelsManger, tableName string, builder *sstBuilder) *table {
 			return nil
 		}
 	} else {
-		t = &table{lm: lm, fid: fid}
+		t = &table{lm: lm, fid: fid, Name: strconv.FormatUint(fid, 10) + SSTableName}
 		t.sst = OpenSStable(&model.FileOptions{
 			FileName: tableName,
 			Dir:      lm.opt.WorkDir,
@@ -65,7 +69,7 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *model.Entry, err error
 	defer t.DecrRef()
 	indexData := t.sst.Indexs()
 	bloomFilter := utils.Filter(indexData.BloomFilter)
-	if t.sst.HasBloomFilter() && !bloomFilter.MayContainKey(key) {
+	if t.sst.HasBloomFilter() && !bloomFilter.MayContainKey(model.ParseKey(key)) {
 		return nil, common.ErrNotFound
 	}
 	iterator := t.NewTableIterator(&model.Options{IsAsc: true})
@@ -74,8 +78,10 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *model.Entry, err error
 	if !iterator.Valid() {
 		return nil, common.ErrKeyNotFound
 	}
+	// todo 2. 判断key是否在sst中,也是祛除掉了 Key 的Ts版本号
 	if model.SameKey(key, iterator.Item().Item.Key) {
-		if version := model.ParseTs(iterator.Item().Item.Key); *maxVs < version {
+		//if version := model.ParseTsVersion(iterator.Item().Item.Key); *maxVs < version {
+		if version := model.ParseTsVersion(iterator.Item().Item.Key); version > 0 {
 			*maxVs = version
 			return iterator.Item().Item, nil
 		}
@@ -192,6 +198,7 @@ func (t *table) Delete() error {
 
 // table 层面的容器迭代器
 type tableIterator struct {
+	name     string
 	it       model.Item
 	opt      *model.Options
 	t        *table
@@ -202,7 +209,10 @@ type tableIterator struct {
 
 func (t *table) NewTableIterator(opt *model.Options) *tableIterator {
 	t.IncrRef()
-	return &tableIterator{opt: opt, t: t, biter: &blockIterator{}}
+	return &tableIterator{opt: opt, t: t, biter: &blockIterator{}, name: t.Name}
+}
+func (tier *tableIterator) Name() string {
+	return tier.name
 }
 
 func (tier *tableIterator) Item() model.Item {
@@ -234,6 +244,7 @@ func (tier *tableIterator) Next() {
 		tier.biter.blockID = tier.blockPos
 		tier.biter.setBlock(Block)
 		tier.biter.seekToFirst()
+		tier.it = tier.biter.Item()
 		tier.err = tier.biter.Error()
 		return
 	}
@@ -245,7 +256,7 @@ func (tier *tableIterator) Next() {
 		tier.Next()
 		return
 	}
-	// todo 这是何意? badger 源码中没有
+	// todo 这是何意? badger 源码中没有;
 	tier.it = tier.biter.Item()
 }
 
@@ -264,21 +275,22 @@ func (tier *tableIterator) Seek(key []byte) {
 		if index == blockOffsetLen {
 			return true
 		}
-		return model.CompareKey(blo.GetKey(), key) > 0
+		//return model.CompareKey(blo.GetKey(), key) > 0
+		return model.CompareBaseKeyNoTs(blo.GetKey(), key) > 0
 	})
 	// todo table 寻找key
 	if idx == 0 { // 应该说明 没有这个 key 啊,找不到此key啊;
 		// 这个 sst 中没有这个 key
-		// tier.SeekHelper(0, key)
+		tier.SeekHelper(0, key)
 		return
 	}
 	// 1. 没有找到,返回n
 	// 2. 找到了,找到了也返回n
 	// 只能碰碰运气
-	if idx == blockOffsetLen {
-		tier.SeekHelper(idx, key)
-		return
-	}
+	//if idx == blockOffsetLen {
+	//	tier.SeekHelper(idx, key)
+	//	return
+	//}
 	// idx in (0,n) 区间, 那就取前一个 block 进行查询;
 	tier.SeekHelper(idx-1, key)
 }

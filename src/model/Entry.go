@@ -51,8 +51,8 @@ func (e *Entry) IsDeleteOrExpired() bool {
 	if e.ExpiresAt == 0 {
 		return false
 	}
-
-	return e.ExpiresAt <= uint64(time.Now().Unix())
+	return false
+	//return e.ExpiresAt <= uint64(time.Now().Unix())
 }
 
 func (e *Entry) EstimateSize(valThreshold int) int {
@@ -154,9 +154,10 @@ func (r *HashReader) Read(out []byte) (int, error) {
 	return r.H.Write(out[:n])
 }
 
-func (r HashReader) ReadByte() (byte, error) {
+func (r *HashReader) ReadByte() (byte, error) {
 	buf := make([]byte, 1)
-	_, err := r.R.Read(buf)
+	//_, err := r.R.Read(buf)
+	_, err := r.Read(buf)
 	if err != nil {
 		return 0, err
 	}

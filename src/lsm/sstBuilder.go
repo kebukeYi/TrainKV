@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strconv"
 	"trainKv/common"
 	"trainKv/model"
 	"trainKv/pb"
@@ -64,7 +65,8 @@ func (h *entryHeader) encode() []byte {
 }
 
 func (h *entryHeader) decode(buf []byte) {
-	arrPtr := (*[headerSize]byte)(unsafe.Pointer(&h))
+	//arrPtr := (*[headerSize]byte)(unsafe.Pointer(&h))
+	arrPtr := (*[headerSize]byte)(unsafe.Pointer(h))
 	copy(arrPtr[:], buf[:headerSize])
 }
 
@@ -77,7 +79,8 @@ func newSSTBuilderWithSSTableSize(opt *Options, size int64) *sstBuilder {
 
 func newSSTBuilder(opt *Options) *sstBuilder {
 	return &sstBuilder{
-		opt: opt,
+		opt:     opt,
+		sstSize: opt.SSTableMaxSz,
 	}
 }
 
@@ -108,17 +111,19 @@ func (ssb *sstBuilder) add(e *model.Entry, isStale bool) {
 			data: make([]byte, ssb.opt.BlockSize),
 		}
 	}
-	// 当前 bloom 中 加入此 Key
+	// todo 当前 sst.bloom 中 加入 祛除 Key Ts版本号
 	ssb.keyHashes = append(ssb.keyHashes, utils.Hash(model.ParseKey(key)))
 
-	if version := model.ParseTs(key); version > ssb.maxVersion {
+	if version := model.ParseTsVersion(key); version > ssb.maxVersion {
 		ssb.maxVersion = version
 	}
+
 	// 按照 block 为单位 构建 baseKey, 而不是按照16个kv为一组来构建的;
 	var diffKey []byte
 	if len(ssb.curBlock.baseKey) == 0 {
 		//ssb.curBlock.baseKey = append(ssb.curBlock.baseKey, key...)
-		ssb.curBlock.baseKey = append(ssb.curBlock.baseKey[:0], key...)
+		//ssb.curBlock.baseKey = append(ssb.curBlock.baseKey[:0], key...)
+		ssb.curBlock.baseKey = append(ssb.curBlock.baseKey[:0], key[:len(key)-8]...)
 		diffKey = key
 	} else {
 		diffKey = ssb.keyDiff(key)
@@ -150,6 +155,7 @@ func (ssb *sstBuilder) allocate(need int) []byte {
 		if curb.endOffset+need > sz {
 			sz = curb.endOffset + need
 		}
+		// todo sstBuilder 简单扩容
 		tmp := make([]byte, sz)
 		copy(tmp, curb.data)
 		curb.data = tmp
@@ -198,7 +204,8 @@ func (ssb *sstBuilder) keyDiff(key []byte) []byte {
 // 2. 将当前所有 block 写入文件中
 func (ssb *sstBuilder) flush(lm *levelsManger, tableName string) (t *table, err error) {
 	bd := ssb.done()
-	t = &table{lm: lm, fid: utils.FID(tableName)}
+	fid := utils.FID(tableName)
+	t = &table{lm: lm, fid: fid, Name: strconv.FormatUint(fid, 10) + SSTableName}
 	t.sst = OpenSStable(&model.FileOptions{
 		FileName: tableName,
 		Dir:      lm.opt.WorkDir,
@@ -276,10 +283,11 @@ func (ssb *sstBuilder) finishBlock() {
 	if ssb.curBlock == nil || len(ssb.curBlock.entryOffsets) == 0 {
 		return
 	}
+	// 将当前 block 的元信息 打包进去
 	ssb.append(model.U32SliceToBytes(ssb.curBlock.entryOffsets))
 	ssb.append(model.U32ToBytes(uint32(len(ssb.curBlock.entryOffsets))))
 
-	// 8B
+	// crc 8B
 	checksum := ssb.calculateChecksum(ssb.curBlock.data[:ssb.curBlock.endOffset])
 
 	// Append the block checksum and its length.
@@ -369,7 +377,8 @@ func (itr *blockIterator) Seek(key []byte) {
 		}
 		itr.setIndex(idx)
 		// todo block 寻找 key
-		return model.CompareKey(itr.key, key) >= 0
+		//return model.CompareKey(itr.key, key) >= 0
+		return model.CompareKeyNoTs(itr.key, key) >= 0
 	})
 	itr.setIndex(findEntryIndex)
 }

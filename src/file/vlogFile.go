@@ -134,8 +134,10 @@ func (vlog *VLogFile) EncodeEntry(entry *model.Entry, out *bytes.Buffer) (int, e
 		ExpiresAt: entry.ExpiresAt,
 		Meta:      entry.Meta,
 	}
+
 	hash := crc32.New(common.CastagnoliCrcTable)
-	writer := io.MultiWriter(hash, out)
+	writer := io.MultiWriter(out, hash)
+
 	var headerBuf [common.MaxHeaderSize]byte
 	encodeLen := header.Encode(headerBuf[:])
 	common.Panic2(writer.Write(headerBuf[:encodeLen]))

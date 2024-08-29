@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"trainKv/model"
@@ -24,13 +25,50 @@ func RandString(len int) string {
 	return string(bytes)
 }
 
+func TestWalRecovery(t *testing.T) {
+	skipList := NewSkipList(3000)
+	putStart := 0
+	putEnd := 90
+	fmt.Println("========================put(0-60)==================================")
+	// 写入 0-60
+	for i := putStart; i <= putEnd; i++ {
+		key := fmt.Sprintf("key%d", i)
+		key = string(model.KeyWithTs([]byte(key), 0))
+		val := fmt.Sprintf("val%d", i)
+		e := model.NewEntry([]byte(key), []byte(val))
+		e.ExpiresAt = uint64(i)
+		skipList.Put(e)
+	}
+	fmt.Printf("num: %d\n", atomic.LoadInt32(&skipList.num))
+	fmt.Println("========================get(0-90)==================================")
+	// 读取
+	for i := putStart; i <= putEnd; i++ {
+		key := fmt.Sprintf("key%d", i)
+		key = string(model.KeyWithTs([]byte(key), 0))
+		// 查询
+		valueExt := skipList.Get([]byte(key))
+		if valueExt.ExpiresAt != 0 {
+			fmt.Printf("key: %s, value: %s, exp:%d \n", key, valueExt.Value, valueExt.ExpiresAt)
+		}
+	}
+}
+
 func TestSkipListBasicCRUD(t *testing.T) {
 	list := NewSkipList(1000)
-
 	//Put & Get
+
+	key := fmt.Sprintf("key%d", 60)
+	val := fmt.Sprintf("val%d", 60)
+	e := model.NewEntry([]byte(key), []byte(val)).WithTTL(10000 * time.Second)
+	e.ExpiresAt = uint64(60)
+	e.Key = model.KeyWithTs(e.Key, 0)
+	list.Put(e)
+	vs := list.Get(e.Key)
+	assert.Equal(t, e.Value, vs.Value)
+
 	entry1 := model.NewEntry([]byte(RandString(10)), []byte("Val1"))
 	list.Put(entry1)
-	vs := list.Get(entry1.Key)
+	vs = list.Get(entry1.Key)
 	assert.Equal(t, entry1.Value, vs.Value)
 
 	entry2 := model.NewEntry([]byte(RandString(10)), []byte("Val2"))
@@ -53,12 +91,17 @@ func Benchmark_SkipListBasicCRUD(b *testing.B) {
 	maxTime := 1000
 	for i := 0; i < maxTime; i++ {
 		//number := rand.Intn(10000)
-		key, val = RandString(10), fmt.Sprintf("Val%d", i)
+		key = fmt.Sprintf("key%d", i)
+		val = fmt.Sprintf("Val%d", i)
+		key = string(model.KeyWithTs([]byte(key), 0))
 		entry := model.NewEntry([]byte(key), []byte(val))
 		list.Put(entry)
+		key = string(model.KeyWithTs([]byte(key), 0))
 		searchVal := list.Get([]byte(key)).Value
+		//fmt.Printf("key: %s, value: %s \n", key, searchVal)
 		assert.Equal(b, searchVal, []byte(val))
 	}
+	fmt.Printf("num: %d\n", atomic.LoadInt32(&list.num))
 }
 
 func TestDrawList(t *testing.T) {
@@ -152,7 +195,7 @@ func TestSkipListIterator(t *testing.T) {
 	list.Put(entry2_new)
 	assert.Equal(t, entry2_new.Value, list.Get(entry2_new.Key).Value)
 
-	iter := list.NewSkipListIterator()
+	iter := list.NewSkipListIterator("1")
 	for iter.Rewind(); iter.Valid(); iter.Next() {
 		fmt.Printf("iter key %s, value %s", iter.Item().Item.Key, iter.Item().Item.Value)
 	}
