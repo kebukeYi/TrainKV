@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="RemoteTargetsManager">
+    <option name="projectDefaultTargetUuid" value="69f55c05-e616-432c-a9c7-1470031365ec" />
+    <targets>
+      <target name="root@120.24.6.135:22" type="ssh/sftp" uuid="69f55c05-e616-432c-a9c7-1470031365ec">
+        <config>
+          <option name="projectRootOnTarget" value="/usr/local/golang_projects_targets/trainkvs_target" />
+          <option name="serverName" value="root@120.24.6.135:22 password" />
+        </config>
+        <ContributedStateBase type="GoLanguageRuntime">
+          <config>
+            <option name="goPath" value="/usr/gopath" />
+            <option name="goRoot" value="/usr/goroot/go/bin/go" />
+            <option name="goVersion" value="go1.19.1 linux/amd64" />
+          </config>
+        </ContributedStateBase>
+      </target>
+    </targets>
+  </component>
+</project>
