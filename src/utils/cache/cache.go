@@ -97,7 +97,11 @@ func (c *Cache) get(key interface{}) (interface{}, bool) {
 	element, ok := c.data[keyToHash]
 
 	if !ok {
+		// todo 自动更换热点数据 关键点
+		// 不存在也要记录对应的数据频率, 说明是需要下一步进行缓存的;
+		// 这样积累的访问次数会 逐渐 替换掉上个阶段内 需要淘汰的`伪高频`数据;
 		c.door.Allow(uint32(keyToHash))
+		c.cmkt.increment(keyToHash)
 		return nil, false
 	}
 	item := element.Value.(*storeItem)

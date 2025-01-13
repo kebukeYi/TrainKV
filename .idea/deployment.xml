@@ -6,7 +6,7 @@
       <paths name="huaweiyun">
         <serverdata>
           <mappings>
-            <mapping deploy="/usr/projects/golangprojects/trainkv01" local="$PROJECT_DIR$" web="/" />
+            <mapping local="$PROJECT_DIR$" web="/" />
           </mappings>
         </serverdata>
       </paths>
