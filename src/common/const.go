@@ -12,6 +12,11 @@ const (
 	DefaultValueThreshold = 1024
 )
 
+const (
+	VlogReplayHeadKey       = "VlogReplayHeadKey"
+	VlogFileDiscardStatsKey = "VlogFileDiscard" // For storing lfDiscardStats
+)
+
 // file
 const (
 	ManifestFilename                  = "MANIFEST"

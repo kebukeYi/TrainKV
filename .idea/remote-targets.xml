@@ -1,18 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="RemoteTargetsManager">
-    <option name="projectDefaultTargetUuid" value="69f55c05-e616-432c-a9c7-1470031365ec" />
+    <option name="projectDefaultTargetUuid" value="800d701d-dde2-4a80-8fc9-c2a9603e3d5a" />
     <targets>
-      <target name="root@120.24.6.135:22" type="ssh/sftp" uuid="69f55c05-e616-432c-a9c7-1470031365ec">
+      <target name="root@1.94.19.238:22" type="ssh/sftp" uuid="800d701d-dde2-4a80-8fc9-c2a9603e3d5a">
         <config>
-          <option name="projectRootOnTarget" value="/usr/local/golang_projects_targets/trainkvs_target" />
-          <option name="serverName" value="root@120.24.6.135:22 password" />
+          <option name="projectRootOnTarget" value="/root/TrainKV" />
+          <option name="serverName" value="root@1.94.19.238:22 password" />
         </config>
         <ContributedStateBase type="GoLanguageRuntime">
           <config>
-            <option name="goPath" value="/usr/gopath" />
-            <option name="goRoot" value="/usr/goroot/go/bin/go" />
-            <option name="goVersion" value="go1.19.1 linux/amd64" />
+            <option name="goPath" value="/root/go" />
+            <option name="goRoot" value="/snap/bin/go" />
+            <option name="goVersion" value="go1.23.2 linux/amd64" />
           </config>
         </ContributedStateBase>
       </target>

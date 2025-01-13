@@ -134,7 +134,7 @@ func (ssb *sstBuilder) add(e *model.Entry, isStale bool) {
 		overlap: uint16(len(key) - len(diffKey)),
 		dif:     uint16(len(diffKey)),
 	}
-	// 记录每一个 kv 的位置, 并没有按照16个一组来进行构建, 而是按照单个entry来构建的 restart Point[];
+	// 记录每一个 kv 的位置, 并没有按照16个一组来进行构建, 而是按照所有的单个entry来构建的 restart Point[];
 	ssb.curBlock.entryOffsets = append(ssb.curBlock.entryOffsets, uint32(ssb.curBlock.endOffset))
 	ssb.append(header.encode())
 	ssb.append(diffKey)

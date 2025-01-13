@@ -26,8 +26,6 @@ import (
 
 const discardStatsFlushThreshold = 100
 
-var vlogFileDiscardStatsKey = []byte("train_kv_vlog_discard")
-
 type ValueLog struct {
 	DirPath            string
 	Mux                sync.RWMutex
@@ -52,7 +50,7 @@ type VLogFileDisCardStaInfo struct {
 	Closer            *utils.Closer
 }
 
-func (vlog *ValueLog) Open(replayHead *model.ValuePtr, replayFn model.LogEntry) error {
+func (vlog *ValueLog) Open(replayHead model.ValuePtr, replayFn model.LogEntry) error {
 	vlog.VLogFileDisCardStaInfo.Closer.Add(1)
 	go vlog.handleDiscardStats()
 	if err := vlog.fillVlogFileMap(); err != nil {
@@ -62,8 +60,32 @@ func (vlog *ValueLog) Open(replayHead *model.ValuePtr, replayFn model.LogEntry) 
 		_, err := vlog.createVlogFile(1)
 		return common.WarpErr("Error while creating log file in valueLog.open", err)
 	}
+
+	if err2 := vlog.UpdateVlogReplayHead(replayHead, replayFn); err2 != nil {
+		return err2
+	}
+
+	lastVLogFile, ok := vlog.filesMap[vlog.maxFid]
+	common.CondPanic(!ok, errors.New("vlog.filesMap[vlog.maxFid] not found"))
+	lastOffset, err := lastVLogFile.Seek(0, io.SeekEnd)
+	if err != nil {
+		return errors.Wrapf(err, fmt.Sprintf("file.Seek to end path:[%s]", lastVLogFile.FileName()))
+	}
+	vlog.writableFileOffset = uint32(lastOffset)
+	// todo VlogReplayHead 定时内存更新+持久化
+	vlog.Db.VlogReplayHead = model.ValuePtr{Fid: vlog.maxFid, Offset: uint32(lastOffset)}
+	if err = vlog.sendDiscardStats(); err != nil {
+		fmt.Errorf("Failed to populate discard stats: %s\n", err)
+	}
+	return nil
+}
+
+func (vlog *ValueLog) UpdateVlogReplayHead(replayHead model.ValuePtr, replayFn model.LogEntry) error {
 	fids := vlog.sortedFiles()
 	for _, fid := range fids {
+		if fid < replayHead.Fid {
+			continue
+		}
 		vLogFile, ok := vlog.filesMap[fid]
 		common.CondPanic(!ok, fmt.Errorf("vlog.filesMap[fid] fid not found"))
 		if err := vLogFile.Open(&model.FileOptions{
@@ -75,42 +97,37 @@ func (vlog *ValueLog) Open(replayHead *model.ValuePtr, replayFn model.LogEntry) 
 		}); err != nil {
 			return err
 		}
-		if fid < replayHead.Fid {
-			continue
-		}
+		// 从 head 节点所在的 vlog文件开始重写
 		var startOffset uint32
 		if fid == replayHead.Fid {
 			startOffset = replayHead.Offset + replayHead.Len
 		}
-		fmt.Printf("Replaying file id: %d at offset: %d\n", fid, startOffset)
+		fmt.Printf("Replaying vlogReplayHead in file id: %d at offset: %d\n", fid, startOffset)
 		now := time.Now()
 		if err := vlog.replayLog(vLogFile, startOffset, replayFn); err != nil {
 			if err == common.ErrDeleteVlogFile {
-
+				delete(vlog.filesMap, fid)
+				if err := vLogFile.Close(); err != nil {
+					return errors.Wrapf(err, "failed to close vlog file %s", vLogFile.FileName())
+				}
+				fpath := vlog.fpath(fid)
+				if err := os.Remove(fpath); err != nil {
+					return errors.Wrapf(err, "failed to delete empty value log file: %q", fpath)
+				}
+				continue
 			}
-			continue
+			return err
 		}
 		fmt.Printf("Replay took: %s\n", time.Since(now))
 
+		// This file has been replayed. It can now be mmapped.
+		// For maxFid, the mmap would be done by the specially written code below.
 		if fid < vlog.maxFid {
 			if err := vLogFile.Init(); err != nil {
 				return err
 			}
 		}
 	} // for fids[] replayLog() over
-
-	lastVLogFile, ok := vlog.filesMap[vlog.maxFid]
-	common.CondPanic(!ok, errors.New("vlog.filesMap[vlog.maxFid] not found"))
-	lastOffset, err := lastVLogFile.Seek(0, io.SeekEnd)
-	if err != nil {
-		return errors.Wrapf(err, fmt.Sprintf("file.Seek to end path:[%s]", lastVLogFile.FileName()))
-	}
-	vlog.writableFileOffset = uint32(lastOffset)
-	// todo 定时内存更新+持久化
-	vlog.Db.VlogReplayHead = &model.ValuePtr{Fid: vlog.maxFid, Offset: uint32(lastOffset)}
-	if err = vlog.sendDiscardStats(); err != nil {
-		fmt.Errorf("Failed to populate discard stats: %s\n", err)
-	}
 	return nil
 }
 func (vlog *ValueLog) fillVlogFileMap() error {
@@ -373,7 +390,7 @@ func (vlog *ValueLog) handleDiscardStats() {
 			return err
 		}
 		entries := []*model.Entry{{
-			Key:   model.KeyWithTs(vlogFileDiscardStatsKey, 1),
+			Key:   model.KeyWithTs([]byte(common.VlogFileDiscardStatsKey), 1),
 			Value: encodeMap,
 		}}
 		request, err := vlog.Db.SendToWriteCh(entries)
@@ -707,7 +724,7 @@ func (vlog *ValueLog) gcReWriteLog(logFile *file.VLogFile) error {
 }
 
 func (vlog *ValueLog) sendDiscardStats() error {
-	entry, err := vlog.Db.Get(vlogFileDiscardStatsKey)
+	entry, err := vlog.Db.Get([]byte(common.VlogFileDiscardStatsKey))
 	if err != nil {
 		return err
 	}

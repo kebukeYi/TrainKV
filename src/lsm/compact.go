@@ -60,11 +60,11 @@ func (cd *compactDef) unlockLevel() {
 
 // 1. 启动压缩
 func (lm *levelsManger) runCompacter(compactorId int) {
-	defer lm.lsm.closer.Done()
+	defer lm.lsm.Closer.Done()
 	randomDelay := time.NewTimer(time.Duration(rand.Intn(1000)) * time.Millisecond)
 	select {
 	case <-randomDelay.C:
-	case <-lm.lsm.closer.CloseSignal:
+	case <-lm.lsm.Closer.CloseSignal:
 		randomDelay.Stop()
 		return
 	}
@@ -74,7 +74,7 @@ func (lm *levelsManger) runCompacter(compactorId int) {
 		select {
 		case <-ticker.C:
 			lm.runOnce(compactorId)
-		case <-lm.lsm.closer.CloseSignal:
+		case <-lm.lsm.Closer.CloseSignal:
 			ticker.Stop()
 			return
 		}
@@ -560,7 +560,7 @@ func (lm *levelsManger) compactBuildTables(level int, cd compactDef) ([]*table, 
 		go func(kr keyRange) {
 			defer inflightBuilders.Done(nil)
 			iterators := newIterator()
-			iterator := NewMergeIterator(iterators, false)
+			iterator := NewMergeIterator(iterators, false, lm.lsm)
 			defer iterator.Close()
 			lm.subCompact(iterator, kr, cd, inflightBuilders, res)
 		}(split)
@@ -675,6 +675,27 @@ func (lm *levelsManger) subCompact(iterator model.Iterator, kr keyRange, cd comp
 func (lm *levelsManger) updateDiscardStats(discardStats map[uint32]int64) {
 	select {
 	case *lm.lsm.option.DiscardStatsCh <- discardStats:
+	}
+}
+
+func (lsm *LSM) MonitorVlogExpiredValPtr() {
+	defer lsm.Close()
+	discardStats := make(map[uint32]int64)
+	var expiredValNum int
+	var expiredValSize int64
+	for {
+		select {
+		case <-lsm.Closer.CloseSignal:
+			return
+		case vp := <-lsm.option.ExpiredValPtrChan:
+			discardStats[vp.Fid] += int64(vp.Len)
+			expiredValSize += int64(vp.Len)
+			expiredValNum++
+			if expiredValNum >= lsm.option.ExpiredValNum || expiredValSize >= lsm.option.ExpiredValSize {
+				lsm.levelManger.updateDiscardStats(discardStats)
+				discardStats = make(map[uint32]int64)
+			}
+		}
 	}
 }
 

@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="aliyun-24.11.08" remoteFilesAllowedToDisappearOnAutoupload="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="huaweiyun" remoteFilesAllowedToDisappearOnAutoupload="false" confirmBeforeUploading="false">
+    <option name="confirmBeforeUploading" value="false" />
     <serverData>
-      <paths name="aliyun-24.11.08">
+      <paths name="huaweiyun">
         <serverdata>
           <mappings>
-            <mapping deploy="/usr/local/golang_projects/trainKVs" local="$PROJECT_DIR$" web="/" />
+            <mapping deploy="/usr/projects/golangprojects/trainkv01" local="$PROJECT_DIR$" web="/" />
           </mappings>
         </serverdata>
       </paths>

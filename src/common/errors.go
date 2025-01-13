@@ -21,7 +21,7 @@ var (
 	ErrNotFound       = errors.New("not found")
 	ErrOutOffset      = errors.New("not found")
 	ErrNotFoundTable  = errors.New("not found table of key")
-	ErrKeyNotFound    = errors.New("not found key ")
+	ErrKeyNotFound    = errors.New("err not found key")
 	ErrWalInvalidCrc  = errors.New("walFile: invalid crc")
 	ErrBadReadMagic   = errors.New("read magic failed")
 	ErrBadMagic       = errors.New("bad magic")

@@ -5,6 +5,7 @@ import (
 	"github.com/pkg/errors"
 	"math"
 	"sync"
+	"time"
 	"trainKv/common"
 	"trainKv/lsm"
 	"trainKv/model"
@@ -22,9 +23,12 @@ type DBOptions struct {
 	VerifyValueChecksum bool
 	ValueLogMaxEntries  uint32
 	BloomFalsePositive  float64
+	CacheSize           int // 缓存容量 B
 	SSTBlockSize        uint32
 	LogRotatesToFlush   int32
 	MaxTableSize        int64
+
+	UpdateVlogRePlayHead chan model.ValuePtr
 }
 
 type TrainKVDB struct {
@@ -34,8 +38,9 @@ type TrainKVDB struct {
 	Opt            *DBOptions
 	writeCh        chan *Request
 	blockWrites    int32
-	VlogReplayHead *model.ValuePtr
+	VlogReplayHead model.ValuePtr
 	logRotates     int32
+	Closer         *utils.Closer
 }
 
 func Open(opt *DBOptions) (*TrainKVDB, error) {
@@ -47,6 +52,7 @@ func Open(opt *DBOptions) (*TrainKVDB, error) {
 		SSTableMaxSz:        opt.SSTableSize,
 		BlockSize:           opt.SSTBlockSize,
 		BloomFalsePositive:  opt.BloomFalsePositive,
+		CacheSize:           opt.CacheSize,
 		NumCompactors:       2,
 		BaseLevelSize:       10 << 20,
 		LevelSizeMultiplier: 10,
@@ -56,13 +62,22 @@ func Open(opt *DBOptions) (*TrainKVDB, error) {
 		MaxLevelNum:         common.MaxLevelNum,
 		DiscardStatsCh:      &(db.vlog.VLogFileDisCardStaInfo.FlushCh),
 	})
-	//
+	// 定期从 chan 通道中 获得  vlog 的 replayHead, 从而持久化更新;
+	go db.TickerUpdateVlogReplayHead()
+	// 后台定期遍历存在的vlog文件, 并一边遍历一边向chan通道中发送 entry;
+	// 伴随着 vlog文件的增多 , 从而 周期更新 vlog 的 replayHead 节点;
+	go db.tickerUpdateHead()
+	// vlog open 开始首次遍历vlog文件, 并开始向通道中发送 vlogEntry;
 	if err := db.vlog.Open(db.getVlogReplayHead(), db.vlogReplayFunction()); err != nil {
 		common.Panic(err)
 	}
-	//go db.Lsm.StartCompacter()
+	// 当后台 compact GC启动后, 此通道就 在遍历sst时 接收到 vlog 类型数据的过期数据;
+	go db.Lsm.MonitorVlogExpiredValPtr()
+	// 启动 sstable 的合并压缩过程
+	go db.Lsm.StartCompacter()
 	db.writeCh = make(chan *Request)
-	//go db.handleWriteCh()
+	// 接收 vlog GC 重新写大量entry的请求
+	go db.handleWriteCh()
 	return db, nil
 }
 func (db *TrainKVDB) Get(key []byte) (*model.Entry, error) {
@@ -144,9 +159,9 @@ func (db *TrainKVDB) BatchSet(entries []*model.Entry) error {
 	return request.Wait()
 }
 
-// sendToWriteCh 发送数据到 db.writeCh 通道中; vlog 组件调用;
-// 1. Re重放: go vlog.flushDiscardStats(); 将序列化统计表数据, 传送到 db 的写通道中, 以便重启时可以直接获得;
-// 2. GC重写: db.batchSet(); 批处理(加速vlog重写速度), 将多个 []entry 写到指定通道中;
+// SendToWriteCh 发送数据到 db.writeCh 通道中; vlog 组件调用;
+// 1. Re重放: openVlog() -> go vlog.flushDiscardStats(); 监听并收集vlog文件的GC信息, 必要时将序列化统计表数据, 发送到 db 的写通道中, 以便重启时可以直接获得;
+// 2. GC重写: db.batchSet(); 批处理(加速vlog GC重写速度), 将多个 []entry 写到指定通道中;
 func (db *TrainKVDB) SendToWriteCh(entries []*model.Entry) (*Request, error) {
 	var count, size int64
 	for _, entry := range entries {
@@ -255,13 +270,6 @@ func (db *TrainKVDB) initVlog() {
 	vlog.GarbageCh = make(chan struct{}, 1)
 	db.vlog = vlog
 }
-func (db *TrainKVDB) getVlogReplayHead() *model.ValuePtr {
-	return &model.ValuePtr{
-		Fid:    0,
-		Offset: 0,
-		Len:    0,
-	}
-}
 
 func (db *TrainKVDB) vlogReplayFunction() func(entry *model.Entry, vpr *model.ValuePtr) error {
 	toLSM := func(key []byte, vs model.ValueExt) {
@@ -329,7 +337,6 @@ func (db *TrainKVDB) vlogReplayFunction() func(entry *model.Entry, vpr *model.Va
 			nv = vpr.Encode()
 			meta = meta | common.BitValuePointer
 		}
-		db.updateVlogReplayHead([]*model.ValuePtr{vpr})
 		v := model.ValueExt{
 			Meta:      e.Meta | common.BitValuePointer,
 			Value:     vpr.Encode(),
@@ -337,21 +344,66 @@ func (db *TrainKVDB) vlogReplayFunction() func(entry *model.Entry, vpr *model.Va
 			Version:   e.Version,
 		}
 		toLSM(e.Key, v)
+		// todo update vlog replay head
+		db.Opt.UpdateVlogRePlayHead <- *vpr
 		return nil
 	}
 }
 
-func (db *TrainKVDB) updateVlogReplayHead(vpr []*model.ValuePtr) {
-	var ptr *model.ValuePtr
-	for i := len(vpr) - 1; i >= 0; i-- {
-		p := vpr[i]
-		if !p.IsZero() {
-			ptr = p
-			break
+func (db *TrainKVDB) getVlogReplayHead() model.ValuePtr {
+	entry, err := db.Get([]byte(common.VlogReplayHeadKey))
+	if err != nil {
+		if !errors.Is(common.ErrKeyNotFound, err) {
+			common.Panic(err)
+		} else {
+			// common.ErrKeyNotFound
+			fmt.Sprintf("getVlogReplayHead: %v", err)
+			return model.ValuePtr{Fid: 0, Offset: 0, Len: 0}
 		}
 	}
-	db.VlogReplayHead = ptr
-	//todo 需要周期更新持久化
+	var vp model.ValuePtr
+	if entry != nil || entry.Value != nil {
+		vp.Decode(entry.Value)
+	}
+	return vp
+}
+
+func (db *TrainKVDB) TickerUpdateVlogReplayHead() {
+	var ptr model.ValuePtr
+	ticker := time.NewTicker(5 * time.Second)
+	defer db.Lsm.Closer.Done()
+	defer ticker.Stop()
+	defer db.Close()
+	for {
+		select {
+		case <-db.Lsm.Closer.CloseSignal:
+			return
+		case <-ticker.C:
+			if ptr.Len != 0 {
+				db.VlogReplayHead = ptr
+				vlogReplayHead := model.NewEntry([]byte(common.VlogReplayHeadKey), ptr.Encode())
+				err := db.Set(vlogReplayHead)
+				common.Panic(err)
+			}
+		case ptr = <-db.Opt.UpdateVlogRePlayHead:
+			//db.VlogReplayHead = ptr
+		}
+	}
+}
+
+func (db *TrainKVDB) tickerUpdateHead() {
+	head := db.VlogReplayHead
+	ticker := time.NewTicker(6 * time.Second)
+	defer db.Lsm.Closer.Done()
+	defer ticker.Stop()
+	for {
+		select {
+		case <-db.Lsm.Closer.CloseSignal:
+			return
+		case <-ticker.C:
+			db.vlog.UpdateVlogReplayHead(head, db.vlogReplayFunction())
+		}
+	}
 }
 
 func (db *TrainKVDB) Close() error {

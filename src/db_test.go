@@ -10,16 +10,19 @@ import (
 )
 
 var opt = &DBOptions{
-	WorkDir:            "/usr/local/go_temp_files/test/trainKV/dbtest",
-	MemTableSize:       1 << 10,
-	SSTableSize:        1 << 10,
-	ValueLogFileSize:   1 << 11,
-	ValueThreshold:     1,
-	MaxBatchCount:      10,
-	MaxBatchSize:       1 << 20,
-	ValueLogMaxEntries: 100,
-	BloomFalsePositive: 0.1,
-	SSTBlockSize:       200,
+	//WorkDir:              "/usr/local/go_temp_files/test/trainKV/dbtest",
+	WorkDir:              "/usr/projects_gen_data/goprogendata/trainkvdata/test/vlog",
+	MemTableSize:         1 << 10,
+	SSTableSize:          1 << 10,
+	ValueLogFileSize:     1 << 11,
+	ValueThreshold:       1,
+	MaxBatchCount:        10,
+	MaxBatchSize:         1 << 20,
+	ValueLogMaxEntries:   100,
+	BloomFalsePositive:   0.1,
+	CacheSize:            10240,
+	SSTBlockSize:         200,
+	UpdateVlogRePlayHead: make(chan model.ValuePtr),
 	//LogRotatesToFlush:  1000,
 	//MaxTableSize:       1000,
 }
@@ -137,6 +140,74 @@ func TestAPI(t *testing.T) {
 		fmt.Printf("db.Iterator key=%s, value=%s,meta:%d, expiresAt=%d \n",
 			model.ParseKey(it.Item.Key), it.Item.Value, it.Item.Meta, it.Item.ExpiresAt)
 		iter.Next()
+	}
+}
+
+func TestMultiPutDelGet(t *testing.T) {
+	clearDir()
+	db, _ := Open(opt)
+	defer func() { _ = db.Close() }()
+	putStart := 0
+	putEnd := 10
+	fmt.Println("========================put(0-60)==================================")
+	// 写入 0-60
+	for i := putStart; i <= putEnd; i++ {
+		key := fmt.Sprintf("key%d", i)
+		val := fmt.Sprintf("putVal%d", i)
+		e := model.NewEntry([]byte(key), []byte(val)).WithTTL(10000 * time.Second)
+		e.ExpiresAt = uint64(i)
+		if i == 60 {
+			e.ExpiresAt = 60000000000
+		} else if i == 6 {
+			e.ExpiresAt = 66666666666
+		} else if i == 2 {
+			e.ExpiresAt = 2222222222
+		} else if i == 20 {
+			e.ExpiresAt = 2000000000
+		}
+		if err := db.Set(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	fmt.Println("========================update1(0-60)==================================")
+	for i := putStart; i <= putEnd; i++ {
+		key := fmt.Sprintf("key%d", i)
+		val := fmt.Sprintf("update1Val%d", i)
+		e := model.NewEntry([]byte(key), []byte(val)).WithTTL(10000 * time.Second)
+		e.ExpiresAt = uint64(i)
+		if i == 60 {
+			e.ExpiresAt = 60000000000
+		} else if i == 6 {
+			e.ExpiresAt = 66666666666
+		} else if i == 2 {
+			e.ExpiresAt = 2222222222
+		} else if i == 20 {
+			e.ExpiresAt = 2000000000
+		}
+		if err := db.Set(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	fmt.Println("========================update2(0-60)==================================")
+	for i := putStart; i <= putEnd; i++ {
+		key := fmt.Sprintf("key%d", i)
+		val := fmt.Sprintf("update2Val%d", i)
+		e := model.NewEntry([]byte(key), []byte(val)).WithTTL(10000 * time.Second)
+		e.ExpiresAt = uint64(i)
+		if i == 60 {
+			e.ExpiresAt = 60000000000
+		} else if i == 6 {
+			e.ExpiresAt = 66666666666
+		} else if i == 2 {
+			e.ExpiresAt = 2222222222
+		} else if i == 20 {
+			e.ExpiresAt = 2000000000
+		}
+		if err := db.Set(e); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

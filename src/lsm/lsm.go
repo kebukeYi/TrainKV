@@ -16,6 +16,8 @@ type Options struct {
 	// BloomFalsePositive is the false positive probability of bloom filter.
 	BloomFalsePositive float64 // 布隆过滤器的容错率
 
+	CacheSize int // 缓存容量 B
+
 	// compact 合并相关
 	NumCompactors       int   // 合并协程数量;默认1
 	BaseLevelSize       int64 // 基层中 所期望的文件大小
@@ -24,6 +26,10 @@ type Options struct {
 	BaseTableSize       int64 // 基层中 文件所期望的文件大小
 	NumLevelZeroTables  int   // 第 0 层中,允许的表数量
 	MaxLevelNum         int   // 最大层数,默认是 15层
+
+	ExpiredValPtrChan chan model.ValuePtr // compact to lsm
+	ExpiredValNum     int
+	ExpiredValSize    int64
 
 	DiscardStatsCh *chan map[uint32]int64 //  用于 compact 组件 向 vlog 组件 传递信息使用,在合并过程中,知道哪些文件是失效的,让vlog组件知道,方便其GC;
 }
@@ -34,7 +40,7 @@ type LSM struct {
 	levelManger    *levelsManger
 	option         *Options
 	maxMemFID      uint32
-	closer         *utils.Closer
+	Closer         *utils.Closer
 }
 
 func NewLSM(opt *Options) *LSM {
@@ -43,7 +49,7 @@ func NewLSM(opt *Options) *LSM {
 	}
 	lsm.levelManger = lsm.InitLevelManger(opt)
 	lsm.memoryTable, lsm.immemoryTables = lsm.recovery()
-	lsm.closer = utils.NewCloser()
+	lsm.Closer = utils.NewCloser()
 	return lsm
 }
 
@@ -124,13 +130,13 @@ func (lsm *LSM) Rotate() {
 }
 func (lsm *LSM) StartCompacter() {
 	n := lsm.option.NumCompactors
-	lsm.closer.Add(n)
+	lsm.Closer.Add(n)
 	for i := 0; i < n; i++ {
 		go lsm.levelManger.runCompacter(i)
 	}
 }
 func (lsm *LSM) Close() error {
-	lsm.closer.Close()
+	lsm.Closer.Close()
 	if lsm.memoryTable != nil {
 		if err := lsm.memoryTable.close(false); err != nil {
 			return err

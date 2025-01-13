@@ -7,6 +7,7 @@ import (
 	"trainKv/common"
 	"trainKv/model"
 	"trainKv/utils"
+	"trainKv/utils/cache"
 )
 
 type levelsManger struct {
@@ -14,7 +15,7 @@ type levelsManger struct {
 	levelHandlers    []*levelHandler // 每层的处理器
 	opt              *Options
 	lsm              *LSM          // 上层引用
-	cache            *utils.Cache  // 缓存 block 和 sst.index() 数据
+	cache            *cache.Cache  // 缓存 block 和 sst.index() 数据
 	manifestFile     *ManifestFile // 增删 sst 元信息
 	compactIngStatus *compactIngStatus
 }
@@ -25,7 +26,7 @@ func (lsm *LSM) InitLevelManger(opt *Options) *levelsManger {
 		maxFID:        0,
 		levelHandlers: make([]*levelHandler, 0),
 		opt:           opt,
-		cache:         utils.NewCache(0),
+		cache:         cache.NewCache(opt.CacheSize),
 	}
 	lm.compactIngStatus = lsm.newCompactStatus()
 	if err := lm.loadManifestFile(); err != nil {
@@ -61,7 +62,7 @@ func (lm *levelsManger) build() error {
 		return err
 	}
 
-	lm.cache = utils.NewCache(0)
+	lm.cache = cache.NewCache(lm.opt.CacheSize)
 
 	var maxFID uint64
 	for fid, tableInfo := range manifest.Tables {
@@ -130,9 +131,6 @@ func (lm *levelsManger) flush(imm *memoryTable) (err error) {
 	return nil
 }
 func (lm *levelsManger) close() error {
-	if err := lm.cache.Close(); err != nil {
-		return err
-	}
 	if err := lm.manifestFile.Close(); err != nil {
 		return err
 	}

@@ -144,11 +144,12 @@ func (conIter *ConcatIterator) Close() error {
 }
 
 type MergeIterator struct {
-	left  node
-	right node
-	small *node
-
+	left    node
+	right   node
+	small   *node
+	lsm     *LSM
 	curKey  []byte
+	curVal  []byte
 	reverse bool
 }
 
@@ -210,7 +211,7 @@ func (n *node) seek(key []byte) {
 	n.setEntry()
 }
 
-func NewMergeIterator(iters []model.Iterator, reverse bool) model.Iterator {
+func NewMergeIterator(iters []model.Iterator, reverse bool, lsm *LSM) model.Iterator {
 	switch len(iters) {
 	case 0:
 		return nil
@@ -219,6 +220,7 @@ func NewMergeIterator(iters []model.Iterator, reverse bool) model.Iterator {
 	case 2:
 		m := &MergeIterator{
 			reverse: reverse,
+			lsm:     lsm,
 		}
 		m.left.setIterator(iters[0])
 		m.right.setIterator(iters[1])
@@ -227,13 +229,14 @@ func NewMergeIterator(iters []model.Iterator, reverse bool) model.Iterator {
 	}
 	mid := len(iters) / 2
 	return NewMergeIterator([]model.Iterator{
-		NewMergeIterator(iters[:mid], reverse),
-		NewMergeIterator(iters[mid:], reverse)}, reverse)
+		NewMergeIterator(iters[:mid], reverse, lsm),
+		NewMergeIterator(iters[mid:], reverse, lsm)}, reverse, lsm)
 }
 
 func (iter *MergeIterator) Name() string {
 	return iter.small.iter.Name()
 }
+
 func (m *MergeIterator) fix() {
 	if !m.otherNode().valid {
 		return
@@ -248,9 +251,19 @@ func (m *MergeIterator) fix() {
 		// 原生key 相同下, 再比较时间戳版本,决定留哪个,祛除哪个;
 		if model.ParseTsVersion(m.small.entry.Key) > model.ParseTsVersion(m.otherNode().entry.Key) {
 			//fmt.Printf("    fix()cmp==0: mi.small.entry.Key:%s  meta:%d > mi.bigger().entry.Key:%s meta:%d ;\n", utils.ParseKey(mi.small.entry.Key), mi.small.entry.Meta, utils.ParseKey(mi.bigger().entry.Key), mi.bigger().entry.Meta)
+			if m.lsm != nil {
+				var vp model.ValuePtr
+				vp.Decode(m.otherNode().entry.Value)
+				m.lsm.option.ExpiredValPtrChan <- vp
+			}
 			m.otherNode().next()
 		} else {
 			//fmt.Printf("    fix()cmp==0: mi.small.entry.Key:%s  meta:%d <= mi.bigger().entry.Key:%s meta:%d ;\n", utils.ParseKey(mi.small.entry.Key), mi.small.entry.Meta, utils.ParseKey(mi.bigger().entry.Key), mi.bigger().entry.Meta)
+			if m.lsm != nil {
+				var vp model.ValuePtr
+				vp.Decode(m.otherNode().entry.Value)
+				m.lsm.option.ExpiredValPtrChan <- vp
+			}
 			m.small.next()
 			m.swapSmall()
 		}
@@ -286,6 +299,8 @@ func (m *MergeIterator) otherNode() *node {
 
 func (m *MergeIterator) Next() {
 	for m.small.valid {
+		fmt.Printf("    Next():smallqEntry[Key:%s,val:%s] mi.cur[key:%s,val:%s] \n",
+			model.ParseKey(m.small.entry.Key), m.small.entry.Value, model.ParseKey(m.curKey), m.curVal)
 		if !bytes.Equal(model.ParseKey(m.small.entry.Key), model.ParseKey(m.curKey)) {
 			break
 		}
@@ -316,6 +331,7 @@ func (m *MergeIterator) setCurrentKey() {
 		fmt.Errorf("mi.small.entry is nil"))
 	if m.small.valid {
 		m.curKey = append(m.curKey[:0], m.small.entry.Key...)
+		m.curVal = append(m.curVal[:0], m.small.entry.Value...)
 	}
 }
 func (m *MergeIterator) Valid() bool {

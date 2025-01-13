@@ -55,7 +55,7 @@ func TestBoundsMgmt(t *testing.T) {
 func TestEviction(t *testing.T) {
 	ch := make(chan Eviction, 1)
 
-	c := NewCache(0)
+	c := NewCache(10)
 	c.EvictionChannel = ch
 	c.Set("a", "b")
 	c.Evict(1)
