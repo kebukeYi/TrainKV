@@ -181,7 +181,7 @@ func (w *WAL) WalDecode(reader io.Reader) (*model.Entry, error) {
 	return entry, nil
 }
 
-// WalEncode | header(klen,vlen,meta,expir) | key | value | crc32 |
+// EstimateWalEncodeSize WalEncode | header(klen,vlen,meta,expir) | key | value | crc32 |
 func EstimateWalEncodeSize(e *model.Entry) int {
 	return WalHeaderSize + len(e.Key) + len(e.Value) + crcSize // crc 4B
 }

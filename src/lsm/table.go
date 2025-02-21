@@ -95,7 +95,7 @@ func (t *table) getBlock(idx int) (*block, error) {
 	}
 	var b *block
 	blockCacheKey := t.blockCacheKey(idx)
-	blk, ok := t.lm.cache.Get(string(blockCacheKey))
+	blk, ok := t.lm.cache.blockData.Get(blockCacheKey)
 	if ok && blk != nil {
 		b, _ = blk.(*block)
 		return b, nil
@@ -133,7 +133,7 @@ func (t *table) getBlock(idx int) (*block, error) {
 
 	b.entryOffsets = model.BytesToU32Slice(b.data[entriesIndexStart:entriesIndexEnd]) // 5. read entry[]
 	b.entriesIndexOff = entriesIndexStart
-	t.lm.cache.Set(string(blockCacheKey), b) // 6. cache block
+	t.lm.cache.blockData.Set(blockCacheKey, b) // 6. cache block
 	return b, nil
 }
 
@@ -179,6 +179,15 @@ func (t *table) IncrRef() {
 }
 func (t *table) DecrRef() error {
 	atomic.AddInt32(&t.ref, -1)
+	if t.ref == 0 {
+		// TODO 从缓存中删除
+		for i := 0; i < len(t.sst.Indexs().GetOffsets()); i++ {
+			t.lm.cache.blockData.Del(t.blockCacheKey(i))
+		}
+		if err := t.Delete(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 func decrRefs(tables []*table) error {
@@ -312,7 +321,6 @@ func (tier *tableIterator) SeekHelper(blockIdx int, key []byte) {
 	tier.it = tier.biter.Item()
 	tier.err = tier.biter.Error()
 }
-
 func (tier *tableIterator) SeekToFirst() {
 	numsBlocks := len(tier.t.sst.Indexs().GetOffsets())
 	if numsBlocks == 0 {
@@ -353,7 +361,6 @@ func (tier *tableIterator) SeekToLast() {
 	tier.it = tier.biter.Item()
 	tier.err = tier.biter.Error()
 }
-
 func (tier *tableIterator) Close() error {
 	tier.biter.Close()
 	return tier.t.DecrRef()

@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-const DefaultCacheSize = 10240
-
 func TestCacheLRUCRUD(t *testing.T) {
 	numEntries := 10
 	cache := NewCache(numEntries)

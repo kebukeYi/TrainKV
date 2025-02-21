@@ -7,26 +7,24 @@ import (
 	"trainKv/common"
 	"trainKv/model"
 	"trainKv/utils"
-	"trainKv/utils/cache"
 )
 
 type levelsManger struct {
-	maxFID           uint64          // 已经分配出去的最大fid，只要创建了 memoryTable 就算已分配
-	levelHandlers    []*levelHandler // 每层的处理器
-	opt              *Options
-	lsm              *LSM          // 上层引用
-	cache            *cache.Cache  // 缓存 block 和 sst.index() 数据
+	maxFID        uint64          // 已经分配出去的最大fid，只要创建了 memoryTable 就算已分配
+	levelHandlers []*levelHandler // 每层的处理器
+	opt           *Options
+	lsm           *LSM // 上层引用
+	//cache            *cache.Cache  // 缓存 block 和 sst.index() 数据
+	cache            *LevelsCache  // 缓存 block 和 sst.index() 数据
 	manifestFile     *ManifestFile // 增删 sst 元信息
 	compactIngStatus *compactIngStatus
 }
 
 func (lsm *LSM) InitLevelManger(opt *Options) *levelsManger {
 	lm := &levelsManger{
-		lsm:           lsm,
-		maxFID:        0,
-		levelHandlers: make([]*levelHandler, 0),
-		opt:           opt,
-		cache:         cache.NewCache(opt.CacheSize),
+		lsm:    lsm,
+		maxFID: 0,
+		opt:    opt,
 	}
 	lm.compactIngStatus = lsm.newCompactStatus()
 	if err := lm.loadManifestFile(); err != nil {
@@ -62,7 +60,7 @@ func (lm *levelsManger) build() error {
 		return err
 	}
 
-	lm.cache = cache.NewCache(lm.opt.CacheSize)
+	lm.cache = newLevelsCache(lm.opt)
 
 	var maxFID uint64
 	for fid, tableInfo := range manifest.Tables {
