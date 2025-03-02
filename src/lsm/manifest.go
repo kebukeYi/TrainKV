@@ -75,7 +75,7 @@ func OpenManifestFile(opt *model.FileOptions) (*ManifestFile, error) {
 		_ = file.Close()
 		return mf, err
 	}
-	err = file.Truncate(truncOffset)
+	err = file.Truncate(truncOffset) // Truncate file so we don't have a half-written entry at the end.
 	if err != nil {
 		_ = file.Close()
 		return mf, err

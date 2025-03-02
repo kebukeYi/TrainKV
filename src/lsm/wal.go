@@ -71,7 +71,7 @@ type WAL struct {
 }
 
 func OpenWalFile(opt *model.FileOptions) *WAL {
-	fmt.Printf("wal open file %s with flag: %v\n", opt.FileName, opt.Flag)
+	fmt.Printf("#OpenWalFile(), wal open file %s with flag: %v\n", opt.FileName, opt.Flag)
 
 	mmapFile, err := file.OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
 	if err != nil {

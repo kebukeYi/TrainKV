@@ -3,16 +3,17 @@ package lsm
 import (
 	"fmt"
 	"testing"
-	"time"
 	errors "trainKv/common"
 	"trainKv/model"
 )
 
+var lsmOptions = &Options{
+	WorkDir:      "/usr/projects_gen_data/goprogendata/trainkvdata/test/lsm",
+	MemTableSize: 1000,
+}
+
 func TestLSM_Get(t *testing.T) {
-	lsm := NewLSM(&Options{
-		WorkDir:      "F:\\TrainKV\\wal",
-		MemTableSize: 1000,
-	})
+	lsm := NewLSM(lsmOptions)
 
 	key := []byte("testKey")
 	value := []byte("testValue")
@@ -28,7 +29,7 @@ func TestLSM_Get(t *testing.T) {
 	//assert.Equal(t, errors.ErrNotFound, err)
 
 	// Test key found in memoryTable
-	keyWithTs := model.KeyWithTs(key, uint64(time.Now().Unix()/1e9))
+	keyWithTs := model.KeyWithTs(key)
 	lsm.memoryTable.Put(&model.Entry{Key: keyWithTs, Value: value})
 	entry, err := lsm.Get(keyWithTs)
 	errors.Panic(err)
@@ -38,7 +39,7 @@ func TestLSM_Get(t *testing.T) {
 
 	// Test key found in imemoryTables
 	lsm.immemoryTables = append(lsm.immemoryTables, lsm.NewMemoryTable())
-	keyWithTs = model.KeyWithTs(key, uint64(time.Now().Unix()/1e9))
+	keyWithTs = model.KeyWithTs(key)
 	lsm.immemoryTables[0].Put(&model.Entry{Key: keyWithTs, Value: value})
 	entry, err = lsm.Get(keyWithTs)
 	errors.Panic(err)
@@ -48,10 +49,7 @@ func TestLSM_Get(t *testing.T) {
 }
 
 func TestLSM_Put(t *testing.T) {
-	lsm := NewLSM(&Options{
-		WorkDir:      "F:\\TrainKV\\wal",
-		MemTableSize: 1000,
-	})
+	lsm := NewLSM(lsmOptions)
 	entry := &model.Entry{Key: []byte("testKey"), Value: []byte("testValue")}
 
 	// Test successful Put

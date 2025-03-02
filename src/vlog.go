@@ -17,7 +17,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 	"trainKv/common"
 	"trainKv/file"
 	"trainKv/model"
@@ -50,86 +49,53 @@ type VLogFileDisCardStaInfo struct {
 	Closer            *utils.Closer
 }
 
-func (vlog *ValueLog) Open(replayHead model.ValuePtr, replayFn model.LogEntry) error {
+func (vlog *ValueLog) Open(replayFn model.LogEntry) error {
 	vlog.VLogFileDisCardStaInfo.Closer.Add(1)
 	go vlog.handleDiscardStats()
 	if err := vlog.fillVlogFileMap(); err != nil {
 		return err
 	}
 	if len(vlog.filesMap) == 0 {
-		_, err := vlog.createVlogFile(1)
+		_, err := vlog.createVlogFile(1) // 无魔数,直接从vlog文件offset=0,开始写数据;
 		return common.WarpErr("Error while creating log file in valueLog.open", err)
 	}
-
-	if err2 := vlog.UpdateVlogReplayHead(replayHead, replayFn); err2 != nil {
-		return err2
-	}
-
-	lastVLogFile, ok := vlog.filesMap[vlog.maxFid]
-	common.CondPanic(!ok, errors.New("vlog.filesMap[vlog.maxFid] not found"))
-	lastOffset, err := lastVLogFile.Seek(0, io.SeekEnd)
-	if err != nil {
-		return errors.Wrapf(err, fmt.Sprintf("file.Seek to end path:[%s]", lastVLogFile.FileName()))
-	}
-	vlog.writableFileOffset = uint32(lastOffset)
-	// todo VlogReplayHead 定时内存更新+持久化
-	vlog.Db.VlogReplayHead = model.ValuePtr{Fid: vlog.maxFid, Offset: uint32(lastOffset)}
-	if err = vlog.sendDiscardStats(); err != nil {
-		fmt.Errorf("Failed to populate discard stats: %s\n", err)
-	}
-	return nil
-}
-
-func (vlog *ValueLog) UpdateVlogReplayHead(replayHead model.ValuePtr, replayFn model.LogEntry) error {
-	fids := vlog.sortedFiles()
-	for _, fid := range fids {
-		if fid < replayHead.Fid {
-			continue
-		}
-		vLogFile, ok := vlog.filesMap[fid]
+	files := vlog.sortedFiles()
+	for _, fid := range files {
+		lf, ok := vlog.filesMap[fid]
 		common.CondPanic(!ok, fmt.Errorf("vlog.filesMap[fid] fid not found"))
-		if err := vLogFile.Open(&model.FileOptions{
+		var err error
+		// 打开文件
+		if err = lf.Open(&model.FileOptions{
 			FID:      uint64(fid),
 			FileName: vlog.fpath(fid),
 			Dir:      vlog.DirPath,
 			Path:     vlog.DirPath,
 			MaxSz:    2 * vlog.Db.Opt.ValueLogFileSize,
 		}); err != nil {
-			return err
+			return errors.Wrapf(err, "Open existing file: %q", lf.FileName())
 		}
-		// 从 head 节点所在的 vlog文件开始重写
-		var startOffset uint32
-		if fid == replayHead.Fid {
-			startOffset = replayHead.Offset + replayHead.Len
-		}
-		fmt.Printf("Replaying vlogReplayHead in file id: %d at offset: %d\n", fid, startOffset)
-		now := time.Now()
-		if err := vlog.replayLog(vLogFile, startOffset, replayFn); err != nil {
-			if err == common.ErrDeleteVlogFile {
-				delete(vlog.filesMap, fid)
-				if err := vLogFile.Close(); err != nil {
-					return errors.Wrapf(err, "failed to close vlog file %s", vLogFile.FileName())
-				}
-				fpath := vlog.fpath(fid)
-				if err := os.Remove(fpath); err != nil {
-					return errors.Wrapf(err, "failed to delete empty value log file: %q", fpath)
-				}
-				continue
-			}
-			return err
-		}
-		fmt.Printf("Replay took: %s\n", time.Since(now))
-
-		// This file has been replayed. It can now be mmapped.
-		// For maxFid, the mmap would be done by the specially written code below.
+		// 如果当前文件不是 最后一个文件, 执行属性赋值操作;
 		if fid < vlog.maxFid {
-			if err := vLogFile.Init(); err != nil {
+			// This file has been replayed. It can now be mmapped.
+			// For maxFid, the mmap would be done by the specially written code below. 对于 maxFid，mmap 将由下面专门编写的代码完成
+			if err = lf.Init(); err != nil {
 				return err
 			}
 		}
-	} // for fids[] replayLog() over
+	}
+	lastVLogFile, ok := vlog.filesMap[vlog.maxFid]
+	common.CondPanic(!ok, errors.New("vlog.filesMap[vlog.maxFid] not found"))
+	endOffset, err := vlog.iterator(lastVLogFile, 0, replayFn)
+	if err != nil {
+		return errors.Wrapf(err, fmt.Sprintf("file.Seek to end path:[%s]", lastVLogFile.FileName()))
+	}
+	vlog.writableFileOffset = endOffset
+	if err = vlog.sendDiscardStats(); err != nil {
+		fmt.Errorf("Failed to populate discard stats: %s\n", err)
+	}
 	return nil
 }
+
 func (vlog *ValueLog) fillVlogFileMap() error {
 	vlog.filesMap = make(map[uint32]*file.VLogFile)
 
@@ -209,6 +175,7 @@ func (vlog *ValueLog) ReadValueBytes(vp *model.ValuePtr) ([]byte, *file.VLogFile
 	if err != nil {
 		return nil, nil, err
 	}
+	// file.read(), not vlog read;
 	buf, err := vlogFileLocked.Read(vp)
 	return buf, vlogFileLocked, err
 }
@@ -270,8 +237,10 @@ func (vlog *ValueLog) Write(reqs []*Request) error {
 		if err2 := flushToFile(); err2 != nil {
 			return err2
 		}
+		//
 		if vlog.getWriteOffset() > uint32(vlog.Opt.ValueLogFileSize) ||
 			vlog.entriesWrittenNum > vlog.Opt.ValueLogMaxEntries {
+			// 截断当前达到阈值的文件;
 			if err := curVlogFile.DoneWriting(vlog.getWriteOffset()); err != nil {
 				return err
 			}
@@ -351,8 +320,16 @@ func (vlog *ValueLog) Close() error {
 	for _, vLogFile := range vlog.filesMap {
 		vLogFile.Lock.Lock()
 		if vLogFile.FID == maxFid {
-			if truncErr := vLogFile.Truncate(int64(vlog.getWriteOffset())); truncErr != nil && err == nil {
-				err = truncErr
+			if vlog.getWriteOffset() == 0 {
+				vLogFile.Lock.Unlock()
+				if err = vlog.deleteVlogFile(vLogFile); err != nil {
+					return err
+				}
+				continue
+			} else {
+				if truncErr := vLogFile.Truncate(int64(vlog.getWriteOffset())); truncErr != nil && err == nil {
+					err = truncErr
+				}
 			}
 		}
 		if closeErr := vLogFile.Close(); closeErr != nil && err == nil {
@@ -362,6 +339,7 @@ func (vlog *ValueLog) Close() error {
 	}
 	return err
 }
+
 func (vlog *ValueLog) handleDiscardStats() {
 	defer vlog.VLogFileDisCardStaInfo.Closer.Done()
 	mergeStats := func(stateInfos map[uint32]int64) ([]byte, error) {
@@ -390,7 +368,7 @@ func (vlog *ValueLog) handleDiscardStats() {
 			return err
 		}
 		entries := []*model.Entry{{
-			Key:   model.KeyWithTs([]byte(common.VlogFileDiscardStatsKey), 1),
+			Key:   model.KeyWithTs([]byte(common.VlogFileDiscardStatsKey)),
 			Value: encodeMap,
 		}}
 		request, err := vlog.Db.SendToWriteCh(entries)
@@ -436,11 +414,11 @@ func (vlog *ValueLog) createVlogFile(fid uint32) (*file.VLogFile, error) {
 	defer vlog.Mux.Unlock()
 	vlog.filesMap[fid] = vlogFile
 	vlog.maxFid = fid
-	// 设置 replayHead
-	vlog.writableFileOffset = 0
+	vlog.writableFileOffset = 0 // 新创建的 vlog文件, 无魔数片头,直接从0开始写入;
 	vlog.entriesWrittenNum = 0
 	return vlogFile, nil
 }
+
 func (vlog *ValueLog) fpath(fid uint32) string {
 	return utils.VlogFilePath(vlog.DirPath, fid)
 }
@@ -494,9 +472,12 @@ func (vlog *ValueLog) iterator(vlogFile *file.VLogFile, offset uint32, fn model.
 	if int64(offset) == vlogFile.Size() {
 		return offset, common.ErrOutOffset
 	}
+
+	// We're not at the end of the file. Let's Seek to the offset and start reading.
 	if _, err := vlogFile.Seek(int64(offset), io.SeekStart); err != nil {
 		return 0, errors.Wrapf(err, "Unable to seek, name:%s", vlogFile.FileName())
 	}
+
 	reader := bufio.NewReader(vlogFile.FD())
 	var recordEntryOffset uint32 = offset
 	for {
@@ -505,6 +486,8 @@ func (vlog *ValueLog) iterator(vlogFile *file.VLogFile, offset uint32, fn model.
 		case err == io.EOF:
 			return recordEntryOffset, nil
 		case err == io.ErrUnexpectedEOF || err == common.ErrTruncate:
+			return recordEntryOffset, nil
+		case err == common.ErrEmptyVlogFile:
 			return recordEntryOffset, nil
 		case err != nil:
 			return 0, err
@@ -538,9 +521,16 @@ func (vlog *ValueLog) Entry(read io.Reader, offset uint32) (*model.Entry, error)
 	if err != nil {
 		return nil, err
 	}
+
 	if head.KLen > uint32(1<<16) {
 		return nil, common.ErrTruncate
 	}
+
+	// todo 先假设 key 和 value 出现0时,就认为在读取一个新的没有写入数据的空vlog文件;
+	if head.KLen == 0 || head.VLen == 0 {
+		return nil, common.ErrEmptyVlogFile
+	}
+
 	e := &model.Entry{}
 	e.Offset = offset
 	e.HeaderLen = hlen
@@ -553,7 +543,7 @@ func (vlog *ValueLog) Entry(read io.Reader, offset uint32) (*model.Entry, error)
 	}
 	e.Key = buf[:head.KLen]
 	e.Value = buf[head.KLen:]
-	sum32 := hashReader.Sum32()
+
 	var crcBuf [crc32.Size]byte
 	if _, err := io.ReadFull(read, crcBuf[:]); err != nil {
 		if err == io.EOF {
@@ -562,6 +552,7 @@ func (vlog *ValueLog) Entry(read io.Reader, offset uint32) (*model.Entry, error)
 		return nil, err
 	}
 	toU32 := model.BytesToU32(crcBuf[:])
+	sum32 := hashReader.Sum32()
 	if sum32 != toU32 {
 		return nil, common.ErrBadCRC
 	}
@@ -618,15 +609,10 @@ func (vlog *ValueLog) pickVlogFile(replayHead *model.ValuePtr) []*file.VLogFile 
 	return files
 }
 
-// 重放: 不论LSM中是否有, 都再写一次;
 func (vlog *ValueLog) replayLog(logFile *file.VLogFile, offset uint32, replayFn model.LogEntry) error {
 	endOffset, err := vlog.iterator(logFile, offset, replayFn)
 	if err != nil {
 		return common.WarpErr(fmt.Sprintf("Unable to replay logfile:[%s] err:%v \n", logFile.FileName(), err), err)
-
-	}
-	if int64(endOffset) == logFile.Size() {
-		return nil
 	}
 	fmt.Printf("Truncating vlog file %s to offset: %d\n", logFile.FileName(), endOffset)
 	if err = logFile.Truncate(int64(endOffset)); err != nil {

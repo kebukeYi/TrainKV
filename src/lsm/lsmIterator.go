@@ -44,24 +44,32 @@ func NewConcatIterator(tables []*table, opt *model.Options) *ConcatIterator {
 func (s *ConcatIterator) Name() string {
 	return s.curIer.Name()
 }
+func (conIter *ConcatIterator) Value() []byte {
+	return conIter.Item().Item.Value
+}
+func (conIter *ConcatIterator) Key() []byte {
+	return conIter.Item().Item.Key
+}
+
 func (conIter *ConcatIterator) setIdx(inx int) {
+	conIter.idx = inx // v2.0
 	if inx < 0 || inx >= len(conIter.tables) {
 		conIter.curIer = nil
 		return
 	}
-	conIter.idx = inx
+	//conIter.idx = inx // v1.0
 	if conIter.iters[inx] == nil {
 		conIter.iters[inx] = conIter.tables[inx].NewTableIterator(conIter.opt)
 	}
 	conIter.curIer = conIter.iters[inx]
+	//conIter.curIer = conIter.iters[conIter.idx]
 }
-
 func (conIter *ConcatIterator) Rewind() {
 	if len(conIter.iters) == 0 {
 		return
 	}
 	if conIter.opt.IsAsc {
-		// 升序: 开始遍历
+		// 升序, 设置第0个table开始;
 		conIter.setIdx(0)
 	} else {
 		conIter.setIdx(len(conIter.iters) - 1)
@@ -79,21 +87,23 @@ func (conIter *ConcatIterator) Item() model.Item {
 
 func (conIter *ConcatIterator) Seek(key []byte) {
 	var idx int
-	if conIter.opt.IsAsc { // 升序遍历
+	if conIter.opt.IsAsc { // 升序
 		idx = sort.Search(len(conIter.tables), func(i int) bool {
-			return model.CompareKey(conIter.tables[i].sst.MaxKey(), key) >= 0
+			maxKey := conIter.tables[i].sst.MaxKey()
+			cmp := model.CompareKeyNoTs(maxKey, key) >= 0
+			return cmp
 		})
-	} else { // 降序遍历
-		idx = sort.Search(len(conIter.tables), func(i int) bool {
-			return model.CompareKey(key, conIter.tables[i].sst.MinKey()) >= 0
-		})
+	} else { // 降序; sst 本身是 升序的; 需要从后往前找,小于当前值的;
+		//idx = sort.Search(len(conIter.tables), func(i int) bool {
+		//	minKey := conIter.tables[i].sst.MinKey()
+		//	cmp := model.CompareKeyNoTs(key, minKey) >= 0
+		//	return cmp
+		//})
 		// todo 看不懂
-		/*
-			n := len(s.tables)
-			idx = n - 1 - sort.Search(n, func(i int) bool {
-				return utils.CompareKeys(s.tables[n-1-i].ss.MinKey(), key) <= 0
-			})
-		*/
+		n := len(conIter.tables)
+		idx = n - 1 - sort.Search(n, func(i int) bool {
+			return model.CompareKeyNoTs(conIter.tables[n-1-i].sst.MinKey(), key) <= 0
+		})
 	}
 	if idx >= len(conIter.tables) || idx < 0 {
 		conIter.setIdx(-1)
@@ -104,14 +114,17 @@ func (conIter *ConcatIterator) Seek(key []byte) {
 }
 
 func (conIter *ConcatIterator) Next() {
-	conIter.curIer.Next()
+	// 当前 table 向后找一个 block;
+	conIter.curIer.Next() // 当前 table迭代器向后找一个;
+	// 假如当前 table到头了;
 	if conIter.curIer.Valid() {
 		return
 	}
+	// 如果向后找一个无效了;
 	for {
-		if conIter.opt.IsAsc {
+		if conIter.opt.IsAsc { // 升序,直接找后一个;
 			conIter.setIdx(conIter.idx + 1)
-		} else {
+		} else { // 降序找前一个;
 			conIter.setIdx(conIter.idx - 1)
 		}
 		if conIter.curIer == nil {
@@ -319,6 +332,13 @@ func (m *MergeIterator) Seek(key []byte) {
 
 func (m *MergeIterator) Item() model.Item {
 	return m.small.iter.Item()
+}
+
+func (m *MergeIterator) Key() []byte {
+	return m.Item().Item.Key
+}
+func (m *MergeIterator) Value() []byte {
+	return m.Item().Item.Value
 }
 func (m *MergeIterator) Rewind() {
 	m.left.Rewind()

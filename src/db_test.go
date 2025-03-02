@@ -9,7 +9,7 @@ import (
 	"trainKv/model"
 )
 
-var opt = &DBOptions{
+var dbOpt = &DBOptions{
 	//WorkDir:              "/usr/local/go_temp_files/test/trainKV/dbtest",
 	WorkDir:              "/usr/projects_gen_data/goprogendata/trainkvdata/test/vlog",
 	MemTableSize:         1 << 10,
@@ -28,21 +28,21 @@ var opt = &DBOptions{
 }
 
 func clearDir() {
-	_, err := os.Stat(opt.WorkDir)
+	_, err := os.Stat(dbOpt.WorkDir)
 	if err == nil {
-		if err = os.RemoveAll(opt.WorkDir); err != nil {
+		if err = os.RemoveAll(dbOpt.WorkDir); err != nil {
 			common.Panic(err)
 		}
 	}
-	err = os.Mkdir(opt.WorkDir, os.ModePerm)
+	err = os.Mkdir(dbOpt.WorkDir, os.ModePerm)
 	if err != nil {
-		_ = fmt.Sprintf("create dir %s failed", opt.WorkDir)
+		_ = fmt.Sprintf("create dir %s failed", dbOpt.WorkDir)
 	}
 }
 
 func TestAPI(t *testing.T) {
 	clearDir()
-	db, _ := Open(opt)
+	db, _ := Open(dbOpt)
 	defer func() { _ = db.Close() }()
 	putStart := 0
 	putEnd := 60
@@ -145,7 +145,7 @@ func TestAPI(t *testing.T) {
 
 func TestMultiPutDelGet(t *testing.T) {
 	clearDir()
-	db, _ := Open(opt)
+	db, _ := Open(dbOpt)
 	defer func() { _ = db.Close() }()
 	putStart := 0
 	putEnd := 10
@@ -212,7 +212,7 @@ func TestMultiPutDelGet(t *testing.T) {
 }
 
 func TestReStart(t *testing.T) {
-	db, _ := Open(opt)
+	db, _ := Open(dbOpt)
 	defer func() { _ = db.Close() }()
 	putStart := 0
 	putEnd := 90

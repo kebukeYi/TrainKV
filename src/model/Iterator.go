@@ -16,5 +16,5 @@ type Item struct {
 
 type Options struct {
 	Prefix []byte
-	IsAsc  bool
+	IsAsc  bool // 是否升序遍历, 默认是 true;
 }

@@ -1,7 +1,6 @@
 package lsm
 
 import (
-	"bytes"
 	"sort"
 	"sync"
 	"trainKv/common"
@@ -70,6 +69,8 @@ func (leh *levelHandler) searchL0SST(key []byte) (*model.Entry, error) {
 		if entry, err := table.Search(key, &version); err == nil {
 			//fmt.Printf("level[%d] orginKey:%s | Meta: %v table:%s;\n", 0, model.ParseKey(key), entry.Meta, table.Name)
 			return entry, nil
+		} else {
+			return nil, err
 		}
 	}
 	return nil, common.ErrKeyNotFound
@@ -80,6 +81,7 @@ func (leh *levelHandler) searchLnSST(key []byte) (*model.Entry, error) {
 	if getTable == nil {
 		return nil, common.ErrNotFoundTable
 	}
+	defer getTable.DecrRef()
 	var version uint64
 	var err error
 	if entry, err := getTable.Search(key, &version); err == nil {
@@ -92,18 +94,17 @@ func (leh *levelHandler) searchLnSST(key []byte) (*model.Entry, error) {
 
 // 默认从 首部 开始查询, 找到第一个大于等于key的sst, 除了 0层之外 ,其他层的 table 都是递增规律;
 func (leh *levelHandler) getTable(key []byte) *table {
-	if leh.numTables() > 0 && (bytes.Compare(leh.tables[0].sst.minKey, key) > 0 ||
-		bytes.Compare(leh.tables[leh.numTables()-1].sst.maxKey, key) < 0) {
+	idx := sort.Search(len(leh.tables), func(i int) bool {
+		// 1.原生key的比较
+		// 2.不比较版本
+		return model.CompareKeyNoTs(leh.tables[i].sst.MinKey(), key) >= 0
+	})
+	if idx >= len(leh.tables) {
 		return nil
-	} else {
-		for i := leh.numTables() - 1; i >= 0; i-- {
-			if bytes.Compare(key, leh.tables[i].sst.MinKey()) > -1 ||
-				bytes.Compare(key, leh.tables[i].sst.MaxKey()) < 1 {
-				return leh.tables[i]
-			}
-		}
 	}
-	return nil
+	tbl := leh.tables[idx]
+	tbl.IncrRef()
+	return tbl
 }
 
 func (leh *levelHandler) isLastLevel() bool {
@@ -120,7 +121,7 @@ func (leh *levelHandler) Sort() {
 		})
 	} else {
 		sort.Slice(leh.tables, func(i, j int) bool {
-			return model.CompareKey(leh.tables[i].sst.MinKey(), leh.tables[j].sst.MinKey()) < 0
+			return model.CompareKeyNoTs(leh.tables[i].sst.MinKey(), leh.tables[j].sst.MinKey()) < 0
 		})
 	}
 }
@@ -132,15 +133,15 @@ func (leh *levelHandler) findOverLappingTables(_ levelHandlerRLocked, kr keyRang
 		return 0, 0
 	}
 	left := sort.Search(leh.numTables(), func(i int) bool {
-		return model.CompareKey(kr.left, leh.tables[i].sst.MinKey()) >= 0 &&
-			model.CompareKey(kr.left, leh.tables[i].sst.MaxKey()) <= 0
+		return model.CompareKeyNoTs(kr.left, leh.tables[i].sst.MinKey()) >= 0 &&
+			model.CompareKeyNoTs(kr.left, leh.tables[i].sst.MaxKey()) <= 0
 	})
 	if left == leh.numTables() {
 		return 0, -1
 	}
 	right := sort.Search(leh.numTables(), func(i int) bool {
-		return model.CompareKey(kr.right, leh.tables[i].sst.MinKey()) >= 0 &&
-			model.CompareKey(kr.right, leh.tables[i].sst.MaxKey()) <= 0
+		return model.CompareKeyNoTs(kr.right, leh.tables[i].sst.MinKey()) >= 0 &&
+			model.CompareKeyNoTs(kr.right, leh.tables[i].sst.MaxKey()) <= 0
 	})
 	if right == leh.numTables() {
 		right = left
@@ -171,7 +172,7 @@ func (leh *levelHandler) updateTable(toDel, toAdd []*table) error {
 
 	leh.tables = newTables
 	sort.Slice(leh.tables, func(i, j int) bool {
-		return model.CompareKey(leh.tables[i].sst.MinKey(), leh.tables[j].sst.MinKey()) < 0
+		return model.CompareKeyNoTs(leh.tables[i].sst.MinKey(), leh.tables[j].sst.MinKey()) < 0
 	})
 	leh.mux.Unlock()
 	return decrRefs(toDel)
@@ -193,7 +194,7 @@ func (leh *levelHandler) deleteTable(toDel []*table) error {
 	}
 	leh.tables = newTables
 	sort.Slice(leh.tables, func(i, j int) bool {
-		return model.CompareKey(leh.tables[i].sst.MinKey(), leh.tables[j].sst.MinKey()) < 0
+		return model.CompareKeyNoTs(leh.tables[i].sst.MinKey(), leh.tables[j].sst.MinKey()) < 0
 	})
 	leh.mux.Unlock()
 	return decrRefs(toDel)

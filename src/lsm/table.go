@@ -53,7 +53,7 @@ func openTable(lm *levelsManger, tableName string, builder *sstBuilder) *table {
 		common.Err(err)
 		return nil
 	}
-	// 获取sst的最大key 需要使用迭代器
+	// 获取sst的最大key 需要使用迭代器, 逆向获得;
 	itr := t.NewTableIterator(&model.Options{IsAsc: false})
 	defer itr.Close()
 	itr.Rewind()
@@ -75,12 +75,11 @@ func (t *table) Search(key []byte, maxVs *uint64) (entry *model.Entry, err error
 	iterator := t.NewTableIterator(&model.Options{IsAsc: true})
 	defer iterator.Close()
 	iterator.Seek(key)
-	if !iterator.Valid() {
-		return nil, common.ErrKeyNotFound
+	if !iterator.Valid() { // 有可能在有效的情况下,返回错误的数值;
+		return nil, iterator.err
 	}
 	// todo 2. 判断key是否在sst中,也是祛除掉了 Key 的Ts版本号
 	if model.SameKey(key, iterator.Item().Item.Key) {
-		//if version := model.ParseTsVersion(iterator.Item().Item.Key); *maxVs < version {
 		if version := model.ParseTsVersion(iterator.Item().Item.Key); version > 0 {
 			*maxVs = version
 			return iterator.Item().Item, nil
@@ -101,8 +100,8 @@ func (t *table) getBlock(idx int) (*block, error) {
 		return b, nil
 	}
 	var ko pb.BlockOffset
-	getBlockOffset := t.getBlockOffset(idx, &ko)
-	common.CondPanic(!getBlockOffset, fmt.Errorf("block t.offset id=%d", idx))
+	isGetBlockOffset := t.getBlockOffset(idx, &ko)
+	common.CondPanic(!isGetBlockOffset, fmt.Errorf("block t.offset id=%d is ouf of range", idx))
 	b = &block{
 		offset: int(ko.Offset),
 	}
@@ -141,9 +140,6 @@ func (t *table) getBlockOffset(idx int, blo *pb.BlockOffset) bool {
 	indexData := t.sst.Indexs()
 	if idx < 0 || idx >= len(indexData.GetOffsets()) {
 		return false
-	}
-	if idx == len(indexData.GetOffsets()) {
-		return true
 	}
 	blockOffset := indexData.GetOffsets()[idx]
 	*blo = *blockOffset
@@ -207,17 +203,18 @@ func (t *table) Delete() error {
 
 // table 层面的容器迭代器
 type tableIterator struct {
-	name     string
-	it       model.Item
-	opt      *model.Options
-	t        *table
-	blockPos int
-	biter    *blockIterator
-	err      error
+	name         string
+	it           model.Item
+	opt          *model.Options
+	t            *table
+	blockIterPos int
+	biter        *blockIterator
+	err          error
 }
 
 func (t *table) NewTableIterator(opt *model.Options) *tableIterator {
 	t.IncrRef()
+	fmt.Printf("tableName:%s NewTableIterator()!\n", t.Name)
 	return &tableIterator{opt: opt, t: t, biter: &blockIterator{}, name: t.Name}
 }
 func (tier *tableIterator) Name() string {
@@ -225,7 +222,8 @@ func (tier *tableIterator) Name() string {
 }
 
 func (tier *tableIterator) Item() model.Item {
-	return tier.it
+	//return tier.it
+	return tier.biter.it
 }
 
 func (tier *tableIterator) Rewind() {
@@ -237,55 +235,105 @@ func (tier *tableIterator) Rewind() {
 }
 
 func (tier *tableIterator) Next() {
+	if tier.opt.IsAsc {
+		tier.next()
+	} else {
+		tier.prev()
+	}
+}
+
+func (tier *tableIterator) next() {
 	tier.err = nil
-	if tier.blockPos >= len(tier.t.sst.Indexs().GetOffsets()) {
+	if tier.blockIterPos >= len(tier.t.sst.Indexs().GetOffsets()) {
 		tier.err = io.EOF
 		return
 	}
 
 	if len(tier.biter.data) == 0 {
-		Block, err := tier.t.getBlock(tier.blockPos)
+		Block, err := tier.t.getBlock(tier.blockIterPos)
 		if err != nil {
 			tier.err = err
 			return
 		}
 		tier.biter.tableID = tier.t.fid
-		tier.biter.blockID = tier.blockPos
+		tier.biter.blockID = tier.blockIterPos
 		tier.biter.setBlock(Block)
 		tier.biter.seekToFirst()
-		tier.it = tier.biter.Item()
+		//tier.it = tier.biter.Item()
 		tier.err = tier.biter.Error()
 		return
 	}
 
 	tier.biter.Next()
 	if !tier.biter.Valid() { // 当前block已经遍历完了, 换下一个block
-		tier.blockPos++
+		tier.blockIterPos++
 		tier.biter.data = nil
 		tier.Next()
 		return
 	}
-	// todo 这是何意? badger 源码中没有;
 	tier.it = tier.biter.Item()
 }
 
-func (tier *tableIterator) Valid() bool {
-	return tier.err != io.EOF // 如果没有的时候 则是EOF
+func (tier *tableIterator) prev() {
+	tier.err = nil
+	if tier.blockIterPos < 0 {
+		tier.err = io.EOF
+		return
+	}
+	if tier.biter.data == nil {
+		block, err := tier.t.getBlock(tier.blockIterPos)
+		if err != nil {
+			tier.err = err
+			return
+		}
+		tier.biter.tableID = tier.t.fid
+		tier.biter.blockID = tier.blockIterPos
+		tier.biter.setBlock(block)
+		tier.biter.seekToLast()
+		//tier.it = tier.biter.Item()
+		tier.err = tier.biter.Error()
+		return
+	}
+	tier.biter.Prev()
+	// 无效的话,当前block到头了,说明需要切换到前一个block;
+	if !tier.biter.Valid() {
+		tier.blockIterPos--
+		tier.biter.data = nil
+		tier.prev()
+		return
+	}
 }
 
-// Seek 在 sst 中扫描 index 索引数据来寻找 合适的 block
+func (tier *tableIterator) Valid() bool {
+	//return tier.err != io.EOF // 如果没有的时候 则是EOF
+	return tier.err == nil // 如果没有的时候 则是EOF;
+}
+
+// Seek 在 sst 中扫描 index 索引数据来寻找 合适的 block;
 func (tier *tableIterator) Seek(key []byte) {
+	if tier.opt.IsAsc {
+		tier.seek(key)
+	} else {
+		tier.seekPrev(key)
+	}
+}
+
+func (tier *tableIterator) seek(key []byte) {
+	tier.seekFrom(key)
+}
+
+func (tier *tableIterator) seekFrom(key []byte) {
 	var blo pb.BlockOffset
 	blockOffsetLen := len(tier.t.sst.Indexs().GetOffsets())
 	idx := sort.Search(blockOffsetLen, func(index int) bool {
 		getBlockOffset := tier.t.getBlockOffset(index, &blo)
-		common.CondPanic(!getBlockOffset,
-			fmt.Errorf("tableIterator.sort.Search idx < 0 || idx > len(index.GetOffsets()"))
+		common.CondPanic(!getBlockOffset, fmt.Errorf("tableIterator.sort.Search idx < 0 || idx > len(index.GetOffsets()"))
 		if index == blockOffsetLen {
 			return true
 		}
-		//return model.CompareKey(blo.GetKey(), key) > 0
-		return model.CompareBaseKeyNoTs(blo.GetKey(), key) > 0
+		blockBaseKey := blo.GetKey()
+		compareKeyNoTs := model.CompareKeyNoTs(blockBaseKey, key)
+		return compareKeyNoTs > 0
 	})
 	// todo table 寻找key
 	if idx == 0 { // 应该说明 没有这个 key 啊,找不到此key啊;
@@ -293,7 +341,7 @@ func (tier *tableIterator) Seek(key []byte) {
 		tier.SeekHelper(0, key)
 		return
 	}
-	// 1. 没有找到,返回n
+	// 1. 没有找到,返回n; 应该直接返回没有找到;
 	// 2. 找到了,找到了也返回n
 	// 只能碰碰运气
 	//if idx == blockOffsetLen {
@@ -303,10 +351,17 @@ func (tier *tableIterator) Seek(key []byte) {
 	// idx in (0,n) 区间, 那就取前一个 block 进行查询;
 	tier.SeekHelper(idx-1, key)
 }
+func (tier *tableIterator) seekPrev(key []byte) {
+	tier.seekFrom(key)
+	currKey := tier.Item().Item.Key
+	if !model.SameKey(key, currKey) {
+		tier.prev()
+	}
+}
 
 // SeekHelper 在 sst 中指定 block 进行扫描
 func (tier *tableIterator) SeekHelper(blockIdx int, key []byte) {
-	tier.blockPos = blockIdx
+	tier.blockIterPos = blockIdx
 	// 加载 block
 	block, err := tier.t.getBlock(blockIdx)
 	if err != nil {
@@ -314,11 +369,11 @@ func (tier *tableIterator) SeekHelper(blockIdx int, key []byte) {
 		return
 	}
 	tier.biter.tableID = tier.t.fid
-	tier.biter.blockID = tier.blockPos
+	tier.biter.blockID = tier.blockIterPos
 	tier.biter.setBlock(block)
 	// 从 block 中 加载 entry
 	tier.biter.Seek(key)
-	tier.it = tier.biter.Item()
+	//tier.it = tier.biter.Item()
 	tier.err = tier.biter.Error()
 }
 func (tier *tableIterator) SeekToFirst() {
@@ -327,18 +382,18 @@ func (tier *tableIterator) SeekToFirst() {
 		tier.err = io.EOF
 		return
 	}
-	tier.blockPos = 0
+	tier.blockIterPos = 0
 	var Block *block
 	var err error
-	if Block, err = tier.t.getBlock(tier.blockPos); err != nil {
+	if Block, err = tier.t.getBlock(tier.blockIterPos); err != nil {
 		tier.err = err
 		return
 	}
-	tier.biter.blockID = tier.blockPos
+	tier.biter.blockID = tier.blockIterPos
 	tier.biter.tableID = tier.t.fid
 	tier.biter.setBlock(Block)
 	tier.biter.seekToFirst()
-	tier.it = tier.biter.Item()
+	//tier.it = tier.biter.Item()
 	tier.err = tier.biter.Error()
 }
 func (tier *tableIterator) SeekToLast() {
@@ -347,18 +402,18 @@ func (tier *tableIterator) SeekToLast() {
 		tier.err = io.EOF
 		return
 	}
-	tier.blockPos = numsBlocks - 1
+	tier.blockIterPos = numsBlocks - 1
 	var Block *block
 	var err error
-	if Block, err = tier.t.getBlock(tier.blockPos); err != nil {
+	if Block, err = tier.t.getBlock(tier.blockIterPos); err != nil {
 		tier.err = err
 		return
 	}
-	tier.biter.blockID = tier.blockPos
+	tier.biter.blockID = tier.blockIterPos
 	tier.biter.tableID = tier.t.fid
 	tier.biter.setBlock(Block)
 	tier.biter.seekToLast()
-	tier.it = tier.biter.Item()
+	// tier.it = tier.biter.Item() // 指针赋值?
 	tier.err = tier.biter.Error()
 }
 func (tier *tableIterator) Close() error {

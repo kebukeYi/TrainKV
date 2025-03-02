@@ -53,7 +53,7 @@ func OpenMmapFile(fileName string, flag int, maxSz int) (*MmapFile, error) {
 	return &MmapFile{
 		Buf:    buf,
 		Fd:     fd,
-		BufLen: int64(fileSize),
+		BufLen: int64(maxSz),
 	}, err
 }
 

@@ -32,9 +32,8 @@ func (vlog *VLogFile) Open(opt *model.FileOptions) error {
 	if err != nil {
 		return common.WarpErr("Unable to run file.Stat", err)
 	}
-	vlog.size = uint32(info.Size())
-	common.CondPanic(vlog.size > math.MaxUint32, fmt.Errorf("file size: %d greater than %d",
-		vlog.size, uint32(math.MaxUint32)))
+	vlog.size = uint32(info.Size()) // 看最终截断的长度;
+	common.CondPanic(vlog.size > math.MaxUint32, fmt.Errorf("file size: %d greater than %d", vlog.size, uint32(math.MaxUint32)))
 	return nil
 }
 

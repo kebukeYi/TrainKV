@@ -5,7 +5,6 @@ import (
 	"github.com/pkg/errors"
 	"log"
 	"math"
-	"math/rand"
 	"strings"
 	"sync/atomic"
 	"trainKv/model"
@@ -103,7 +102,7 @@ func (skipList *SkipList) DecrRef() {
 }
 func (skipList *SkipList) randomHeight() int {
 	h := 1
-	for h < maxHeight && (rand.Int() <= heightIncrease) {
+	for h < maxHeight && model.FastRand() <= heightIncrease {
 		h++
 	}
 	return h
@@ -165,7 +164,6 @@ func (skipList *SkipList) findNear(key []byte, less bool, allowEqual bool) (*ski
 		}
 		// nextNode!=nil
 		getKey := nextNode.getKey(skipList.arena)
-		//cmp := model.CompareKey(key, getKey)
 		cmp := model.CompareKeyNoTs(key, getKey)
 		if cmp > 0 {
 			x = nextNode
@@ -214,8 +212,9 @@ func (skipList *SkipList) findSpliceForLevel(key []byte, before uint32, level in
 		if nextNode == nil {
 			return before, nextOffset
 		}
+		nextKey := nextNode.getKey(skipList.arena)
 		// todo 跳表对比key时, 祛除掉 ts版本号
-		cmp := model.CompareKey(key, nextNode.getKey(skipList.arena))
+		cmp := model.CompareKeyNoTs(key, nextKey)
 		if cmp == 0 {
 			return nextOffset, nextOffset
 		}
@@ -286,7 +285,9 @@ func (skipList *SkipList) Put(e *model.Entry) {
 			x.next[i] = next[i]
 			pnode := skipList.arena.getNode(prev[i])
 			if pnode.casNextOffset(i, next[i], skipList.arena.getNodeOffset(x)) {
-				atomic.AddInt32(&skipList.num, 1)
+				if i == 0 {
+					atomic.AddInt32(&skipList.num, 1)
+				}
 				// Managed to insert x between prev[i] and next[i]. Go to the next level.
 				break
 			}
@@ -317,7 +318,7 @@ func (skipList *SkipList) Draw(align bool) {
 			if next != nil {
 				key := next.getKey(skipList.arena)
 				vs := next.getVal(skipList.arena)
-				nodeStr = fmt.Sprintf("%s(%s)", key, vs.Value)
+				nodeStr = fmt.Sprintf("%s(%s)", model.ParseKey(key), vs.Value)
 			} else {
 				break
 			}

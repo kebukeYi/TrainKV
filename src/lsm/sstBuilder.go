@@ -118,12 +118,13 @@ func (ssb *sstBuilder) add(e *model.Entry, isStale bool) {
 		ssb.maxVersion = version
 	}
 
+	// baseKey:  key:timestamp
 	// 按照 block 为单位 构建 baseKey, 而不是按照16个kv为一组来构建的;
 	var diffKey []byte
 	if len(ssb.curBlock.baseKey) == 0 {
-		//ssb.curBlock.baseKey = append(ssb.curBlock.baseKey, key...)
+		ssb.curBlock.baseKey = append(ssb.curBlock.baseKey, key...)
 		//ssb.curBlock.baseKey = append(ssb.curBlock.baseKey[:0], key...)
-		ssb.curBlock.baseKey = append(ssb.curBlock.baseKey[:0], key[:len(key)-8]...)
+		//ssb.curBlock.baseKey = append(ssb.curBlock.baseKey[:0], key[:len(key)-8]...)
 		diffKey = key
 	} else {
 		diffKey = ssb.keyDiff(key)
@@ -243,6 +244,15 @@ func (ssb *sstBuilder) done() buildData {
 	bd.checksum = checksum
 	bd.size = int(dataSize) + len(blockIndex) + len(checksum) + 4 /* len(blockIndex) */ + 4 /* len(checksum) */
 	return bd
+}
+
+func (ssb *sstBuilder) Finish() []byte {
+	// 构建 table的数据;
+	bd := ssb.done()
+	buf := make([]byte, bd.size)
+	written := bd.copy(buf)
+	common.CondPanic(written != len(buf), fmt.Errorf("tableBuilder.flush written != len(buf)"))
+	return buf
 }
 
 func (ssb *sstBuilder) buildBlockIndex(bloom []byte) ([]byte, uint32) {
@@ -377,19 +387,20 @@ func (itr *blockIterator) Seek(key []byte) {
 		}
 		itr.setIndex(idx)
 		// todo block 寻找 key
-		//return model.CompareKey(itr.key, key) >= 0
 		return model.CompareKeyNoTs(itr.key, key) >= 0
 	})
+	// idx = 0 有可能也是不存在值的;(例如寻找最小不存在的值)
 	itr.setIndex(findEntryIndex)
 }
 
 func (itr *blockIterator) setIndex(idx int) {
+	itr.idx = idx // v2.0
 	if idx >= len(itr.entryOffsets) || idx < 0 {
 		itr.err = io.EOF
 		return
 	}
 	itr.err = nil
-	itr.idx = idx
+	//itr.idx = idx// v1.0
 	// 找到entry data区域
 	startOffset := int(itr.entryOffsets[idx])
 	if len(itr.baseKey) == 0 { // 说明当前 block 没有重叠key, 因此直接获得不同的key区间
@@ -427,6 +438,10 @@ func (itr *blockIterator) setIndex(idx int) {
 
 func (itr *blockIterator) Next() {
 	itr.setIndex(itr.idx + 1)
+}
+
+func (itr *blockIterator) Prev() {
+	itr.setIndex(itr.idx - 1)
 }
 
 func (itr *blockIterator) Valid() bool {

@@ -428,7 +428,7 @@ func (lm *levelsManger) findMaxLevelTables(tables []*table, cd *compactDef) bool
 	cd.nextTables = []*table{}
 	collectBotTables := func(t *table, needSz int64) {
 		idx := sort.Search(len(tables), func(i int) bool {
-			return model.CompareKey(tables[i].sst.minKey, t.sst.minKey) >= 0
+			return model.CompareKeyNoTs(tables[i].sst.minKey, t.sst.minKey) >= 0
 		})
 		common.CondPanic(tables[idx].fid != t.fid, errors.New("tables[j].ID() != t.ID()"))
 		totalSize := t.Size()
@@ -587,7 +587,7 @@ func (lm *levelsManger) compactBuildTables(level int, cd compactDef) ([]*table, 
 		return nil, nil, fmt.Errorf("compactBuildTables while running compactions for: %+v, %v", cd, err)
 	}
 	sort.Slice(newTables, func(i, j int) bool {
-		return model.CompareKey(newTables[i].sst.MaxKey(), newTables[j].sst.MaxKey()) < 0
+		return model.CompareKeyNoTs(newTables[i].sst.MaxKey(), newTables[j].sst.MaxKey()) < 0
 	})
 	return newTables, func() error {
 		return decrRefs(newTables)
@@ -615,7 +615,7 @@ func (lm *levelsManger) subCompact(iterator model.Iterator, kr keyRange, cd comp
 			key := iterator.Item().Item.Key
 			isDeletedOrExpired := IsDeletedOrExpired(iterator.Item().Item)
 			if !model.SameKey(key, lastKey) {
-				if len(kr.right) > 0 && model.CompareKey(key, kr.right) >= 0 {
+				if len(kr.right) > 0 && model.CompareKeyNoTs(key, kr.right) >= 0 {
 					break
 				}
 				if builder.ReachedCapacity() {
@@ -645,7 +645,7 @@ func (lm *levelsManger) subCompact(iterator model.Iterator, kr keyRange, cd comp
 
 	for iterator.Valid() {
 		key := iterator.Item().Item.Key
-		if len(kr.right) > 0 && model.CompareKey(key, kr.right) >= 0 {
+		if len(kr.right) > 0 && model.CompareKeyNoTs(key, kr.right) >= 0 {
 			break
 		}
 
@@ -679,7 +679,7 @@ func (lm *levelsManger) updateDiscardStats(discardStats map[uint32]int64) {
 }
 
 func (lsm *LSM) MonitorVlogExpiredValPtr() {
-	defer lsm.Close()
+	// defer lsm.Close()
 	discardStats := make(map[uint32]int64)
 	var expiredValNum int
 	var expiredValSize int64
@@ -733,7 +733,7 @@ func (lm *levelsManger) addSplits(cd *compactDef) {
 			return
 		}
 		if i%width == width-1 {
-			right := model.KeyWithTs(model.ParseKey(t.sst.MaxKey()), math.MaxUint64)
+			right := model.KeyWithTs(model.ParseKey(t.sst.MaxKey()))
 			addRange(right)
 		}
 	}
@@ -907,16 +907,16 @@ func getKeyRange(tables ...*table) keyRange {
 	minKey := tables[0].sst.MinKey()
 	maxKey := tables[0].sst.MaxKey()
 	for i := 1; i < len(tables); i++ {
-		if model.CompareKey(tables[i].sst.MinKey(), minKey) < 0 {
+		if model.CompareKeyNoTs(tables[i].sst.MinKey(), minKey) < 0 {
 			minKey = tables[i].sst.MinKey()
 		}
-		if model.CompareKey(tables[i].sst.MaxKey(), maxKey) > 0 {
+		if model.CompareKeyNoTs(tables[i].sst.MaxKey(), maxKey) > 0 {
 			maxKey = tables[i].sst.MaxKey()
 		}
 	}
 	return keyRange{
-		left:  model.KeyWithTs(model.ParseKey(minKey), math.MaxUint64),
-		right: model.KeyWithTs(model.ParseKey(maxKey), 0),
+		left:  model.KeyWithTs(model.ParseKey(minKey)),
+		right: model.KeyWithTs(model.ParseKey(maxKey)),
 	}
 }
 func (key keyRange) isEmpty() bool {
@@ -935,10 +935,10 @@ func (key *keyRange) extend(dst keyRange) {
 	if key.isEmpty() {
 		*key = dst
 	}
-	if len(key.left) == 0 || model.CompareKey(dst.left, key.left) < 0 {
+	if len(key.left) == 0 || model.CompareKeyNoTs(dst.left, key.left) < 0 {
 		key.left = dst.left
 	}
-	if len(key.right) == 0 || model.CompareKey(dst.right, key.right) > 0 {
+	if len(key.right) == 0 || model.CompareKeyNoTs(dst.right, key.right) > 0 {
 		key.right = dst.right
 	}
 	if dst.inf {
@@ -956,10 +956,10 @@ func (key keyRange) overlapWith(dst keyRange) bool {
 		return true
 	}
 
-	if model.CompareKey(key.left, dst.right) > 0 {
+	if model.CompareKeyNoTs(key.left, dst.right) > 0 {
 		return false
 	}
-	if model.CompareKey(key.right, dst.left) < 0 {
+	if model.CompareKeyNoTs(key.right, dst.left) < 0 {
 		return false
 	}
 	return true

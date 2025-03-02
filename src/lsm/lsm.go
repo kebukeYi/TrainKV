@@ -25,7 +25,7 @@ type Options struct {
 	TableSizeMultiplier int   // 决定每层 文件 递增倍数
 	BaseTableSize       int64 // 基层中 文件所期望的文件大小
 	NumLevelZeroTables  int   // 第 0 层中,允许的表数量
-	MaxLevelNum         int   // 最大层数,默认是 15层
+	MaxLevelNum         int   // 最大层数,默认是 7 层
 
 	ExpiredValPtrChan chan model.ValuePtr // compact to lsm
 	ExpiredValNum     int
@@ -64,8 +64,8 @@ func (lsm *LSM) Put(entry *model.Entry) (err error) {
 		lsm.Rotate()
 	}
 
-	// 1. 跳表中进行对比时, key 去除掉 Ts 版本号
-	// 2. 添加进跳表中的 key 是携带有 Ts版本号
+	// 1. 跳表中进行对比时, key 去除掉 Ts 版本号, 原生key相同则更新;
+	// 2. 添加进跳表中的 key 是携带有 Ts版本号;
 	// 3. wal的 key 是携带有 Ts版本号
 	err = lsm.memoryTable.Put(entry)
 	if err != nil {
@@ -94,7 +94,7 @@ func (lsm *LSM) Get(key []byte) (*model.Entry, error) {
 	if len(key) == 0 {
 		return nil, common.ErrEmptyKey
 	}
-	// 1. 跳表中进行对比时, key 去除掉 Ts 版本号
+	// 1. 跳表中进行对比时, key 去除掉 Ts 版本号, 假如key相同时,则比较谁的版本高;
 	entry, err := lsm.memoryTable.Get(key)
 	if entry != nil && entry.Value != nil {
 		//fmt.Printf("memtable[%d] orginKey:%s | Meta: %v | v:%s;\n", 0, model.ParseKey(key), entry.Meta, entry.Value)
