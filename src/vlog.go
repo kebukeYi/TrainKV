@@ -10,7 +10,6 @@ import (
 	"hash/crc32"
 	"io"
 	"math"
-	"math/rand"
 	"os"
 	"sort"
 	"strconv"
@@ -56,7 +55,7 @@ func (vlog *ValueLog) Open(replayFn model.LogEntry) error {
 		return err
 	}
 	if len(vlog.filesMap) == 0 {
-		_, err := vlog.createVlogFile(1) // 无魔数,直接从vlog文件offset=0,开始写数据;
+		_, err := vlog.createVlogFile(0) // 无魔数,直接从vlog文件offset=0,开始写数据;
 		return common.WarpErr("Error while creating log file in valueLog.open", err)
 	}
 	files := vlog.sortedFiles()
@@ -423,14 +422,14 @@ func (vlog *ValueLog) fpath(fid uint32) string {
 	return utils.VlogFilePath(vlog.DirPath, fid)
 }
 
-func (vlog *ValueLog) runGC(discardRatio float64, replayHead *model.ValuePtr) error {
+func (vlog *ValueLog) runGC(discardRatio float64) error {
 	select {
 	case vlog.GarbageCh <- struct{}{}:
 		defer func() {
 			<-vlog.GarbageCh
 		}()
 		var err error
-		vLogFiles := vlog.pickVlogFile(replayHead)
+		vLogFiles := vlog.pickVlogFile()
 		if vLogFiles == nil || len(vLogFiles) == 0 {
 			return common.ErrNoRewrite
 		}
@@ -440,7 +439,7 @@ func (vlog *ValueLog) runGC(discardRatio float64, replayHead *model.ValuePtr) er
 				continue
 			}
 			tried[vLogFile.FID] = true
-			if err = vlog.doRunGC(vLogFile, discardRatio); err == nil {
+			if err = vlog.doRunGC(vLogFile); err == nil {
 				return nil
 			}
 		}
@@ -450,7 +449,7 @@ func (vlog *ValueLog) runGC(discardRatio float64, replayHead *model.ValuePtr) er
 	}
 }
 
-func (vlog *ValueLog) doRunGC(logFile *file.VLogFile, discardRatio float64) error {
+func (vlog *ValueLog) doRunGC(logFile *file.VLogFile) error {
 	var err error
 	defer func() {
 		if err == nil {
@@ -565,7 +564,7 @@ func (vlog *ValueLog) getIteratorCount() int {
 	return int(atomic.LoadInt32(&vlog.activeIteratorNum))
 }
 
-func (vlog *ValueLog) pickVlogFile(replayHead *model.ValuePtr) []*file.VLogFile {
+func (vlog *ValueLog) pickVlogFile() []*file.VLogFile {
 	vlog.Mux.Lock()
 	defer vlog.Mux.Unlock()
 	files := make([]*file.VLogFile, 0)
@@ -573,14 +572,16 @@ func (vlog *ValueLog) pickVlogFile(replayHead *model.ValuePtr) []*file.VLogFile 
 	if len(sortedFileIDs) <= 1 {
 		return nil
 	}
+
 	candidate := struct {
 		fid          uint32
 		discardRatio int64
 	}{math.MaxUint32, 0}
+
 	vlog.VLogFileDisCardStaInfo.mux.RLock()
 	for _, sortedFileId := range sortedFileIDs {
-		if sortedFileId >= replayHead.Fid {
-			break
+		if sortedFileId == vlog.maxFid {
+			continue
 		}
 		if vlog.VLogFileDisCardStaInfo.FileMap[sortedFileId] > candidate.discardRatio {
 			candidate.fid = sortedFileId
@@ -591,21 +592,6 @@ func (vlog *ValueLog) pickVlogFile(replayHead *model.ValuePtr) []*file.VLogFile 
 	if candidate.fid != math.MaxUint32 {
 		files = append(files, vlog.filesMap[candidate.fid])
 	}
-
-	var headIdx int
-	for i, logFileID := range sortedFileIDs {
-		if logFileID == replayHead.Fid {
-			headIdx = i
-			break
-		}
-	}
-	// 说明 vlog 的 重放 还未完成, 等待下一轮的 选择;
-	if headIdx == 0 {
-		return nil
-	}
-	//  interval [0,n)  int [0,1)
-	idx := rand.Intn(headIdx)
-	files = append(files, vlog.filesMap[sortedFileIDs[idx]])
 	return files
 }
 
@@ -623,35 +609,42 @@ func (vlog *ValueLog) replayLog(logFile *file.VLogFile, offset uint32, replayFn 
 
 // GC: LSM中 有的话说明有效数据,就再重新写到新文件中,否则就丢弃掉;
 func (vlog *ValueLog) gcReWriteLog(logFile *file.VLogFile) error {
-	vlog.Mux.Lock()
+	vlog.Mux.RLock()
 	maxFid := vlog.maxFid
 	vlog.Mux.RUnlock()
-	common.CondPanic((logFile.FID) >= maxFid, fmt.Errorf("fid to move: %d. Current max fid: %d",
-		logFile.FID, maxFid))
+	common.CondPanic((logFile.FID) >= maxFid, fmt.Errorf("fid to move: %d. Current max fid: %d", logFile.FID, maxFid))
 	tempArray := make([]*model.Entry, 0, 1000)
 	var size int64
 	var count, moved int
-	fn := func(entry *model.Entry) error {
+	fn := func(vlogEntry *model.Entry) error {
 		count++
-		val, err := vlog.Db.Lsm.Get(entry.Key)
+		lsmEntry, err := vlog.Db.Lsm.Get(vlogEntry.Key)
 		if err != nil {
 			return err
 		}
-		if model.IsDiscardEntry(entry) {
+		if model.IsDiscardEntry(vlogEntry, lsmEntry) {
 			return nil
 		}
+
+		if lsmEntry.Value == nil || len(lsmEntry.Value) == 0 {
+			return errors.Errorf("#gcReWriteLog(): Empty lsmEntry.value: %+v  from lsm;", lsmEntry)
+		}
+
 		var vp *model.ValuePtr
-		vp.Decode(val.Value)
-		if vp.Fid > logFile.FID || vp.Offset > entry.Offset {
+		vp.Decode(lsmEntry.Value)
+
+		if vp.Fid > logFile.FID || vp.Offset > vlogEntry.Offset {
 			return nil
 		}
-		if vp.Fid == logFile.FID && vp.Offset > entry.Offset {
+
+		//if vp.Fid == logFile.FID && vp.Offset > vlogEntry.Offset {
+		if vp.Fid == logFile.FID && vp.Offset == vlogEntry.Offset {
 			moved++
 			e := &model.Entry{}
-			e.Meta = 0
-			e.ExpiresAt = entry.ExpiresAt
-			e.Key = append([]byte{}, entry.Key...)
-			e.Value = append([]byte{}, entry.Value...)
+			e.Meta = vlogEntry.Meta
+			e.ExpiresAt = vlogEntry.ExpiresAt
+			e.Key = append([]byte{}, vlogEntry.Key...)
+			e.Value = append([]byte{}, vlogEntry.Value...)
 			es := int64(e.EstimateSize(vlog.Db.Opt.ValueLogFileSize))
 			es += int64(len(e.Value))
 			if int64(len(tempArray)+1) >= vlog.Opt.MaxBatchCount || size+es >= vlog.Opt.MaxBatchSize {
@@ -661,6 +654,9 @@ func (vlog *ValueLog) gcReWriteLog(logFile *file.VLogFile) error {
 				size = 0
 				tempArray = tempArray[:0]
 			}
+			tempArray = append(tempArray, e)
+			size += es
+		} else {
 		}
 		return nil
 	}
@@ -689,7 +685,7 @@ func (vlog *ValueLog) gcReWriteLog(logFile *file.VLogFile) error {
 
 	var deleteNow bool
 	{
-		vlog.Db.Mux.Lock()
+		vlog.Mux.Lock()
 		if _, ok := vlog.filesMap[logFile.FID]; !ok {
 			vlog.Mux.Unlock()
 		}

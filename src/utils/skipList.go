@@ -236,6 +236,8 @@ func (skipList *SkipList) Get(key []byte) model.ValueExt {
 	}
 	valOffset, valSize := findNear.getValOffset()
 	val := skipList.arena.getVal(valOffset, valSize)
+	// todo 非常重要的一步, 需要显式分析出版本,以便在vlogGC中进行版本判断;
+	val.Version = model.ParseTsVersion(nextKey)
 	return val
 }
 func (skipList *SkipList) Put(e *model.Entry) {

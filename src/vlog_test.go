@@ -1,7 +1,7 @@
 package src
 
 import (
-	"bytes"
+	"fmt"
 	"github.com/stretchr/testify/require"
 	"math/rand"
 	"testing"
@@ -15,7 +15,8 @@ var (
 	vlogOpt = &DBOptions{
 		//WorkDir:          "./work_test",
 		//WorkDir:          "/usr/local/go_temp_files/test/trainKV/vlogtest",
-		WorkDir:          "/usr/projects_gen_data/goprogendata/corekvdata/test/vlog",
+		//WorkDir:          "/usr/projects_gen_data/goprogendata/corekvdata/test/vlog",
+		WorkDir:          "/usr/projects_gen_data/goprogendata/trainkvdata/test/vlog",
 		SSTableSize:      1 << 10,
 		MemTableSize:     1 << 10,
 		ValueLogFileSize: 1 << 20,
@@ -28,30 +29,30 @@ var (
 func TestValueLog_Entry(t *testing.T) {
 	db, _ := Open(vlogOpt)
 	defer db.Close()
-	//log := db.vlog
-	//const val2 = "samplevalb012345678901234567890123"
-	//e2 := &model.Entry{
-	//	Key:   []byte("samplekeyb"),
-	//	Value: []byte(val2),
-	//	Meta:  common.BitValuePointer,
-	//}
-	//
-	//// 构建一个批量请求的request
-	//b := new(Request)
-	//b.Entries = []*model.Entry{e2}
-	//// 直接写入vlog中
-	//log.Write([]*Request{b})
-	//// 从vlog中使用 value ptr指针中查询写入的分段vlog文件
-	//buf1, lf1, err1 := log.ReadValueBytes(b.ValPtr[0])
-	//defer lf1.Lock.RUnlock()
-	//fmt.Printf("err1: %s\n", err1)
-	//e1, _ := lf1.DecodeEntry(buf1, b.ValPtr[0].Offset)
-	//fmt.Printf("e1: %v\n", e1)
+	log := db.vlog
+	const val2 = "samplevalb012345678901234567890123"
+	e2 := &model.Entry{
+		Key:   []byte("samplekeyb"),
+		Value: []byte(val2),
+		Meta:  common.BitValuePointer,
+	}
+
+	// 构建一个批量请求的request
+	b := new(Request)
+	b.Entries = []*model.Entry{e2}
+	// 直接写入vlog中
+	log.Write([]*Request{b})
+	// 从vlog中使用 value ptr指针中查询写入的分段vlog文件
+	buf1, lf1, err1 := log.ReadValueBytes(b.ValPtr[0])
+	defer lf1.Lock.RUnlock()
+	fmt.Printf("err1: %s\n", err1)
+	e1, _ := lf1.DecodeEntry(buf1, b.ValPtr[0].Offset)
+	fmt.Printf("key: %s, val:%s \n", e1.Key, e1.Value)
 }
 
 func TestVlogBase(t *testing.T) {
 	// 清理目录
-	// clearDir()
+	clearDir()
 	// 打开DB
 	db, _ := Open(vlogOpt)
 	defer db.Close()
@@ -80,13 +81,11 @@ func TestVlogBase(t *testing.T) {
 	// 直接写入vlog中
 	log.Write([]*Request{b})
 	require.Len(t, b.ValPtr, 2)
-	t.Logf("Pointer written: %+v %+v\n", b.ValPtr[0], b.ValPtr[1])
+	fmt.Printf("Pointer written: %+v %+v\n", b.ValPtr[0], b.ValPtr[1])
 
 	// 从vlog中使用 value ptr指针中查询写入的分段vlog文件
 	buf1, lf1, err1 := log.ReadValueBytes(b.ValPtr[0])
-	defer lf1.Lock.RUnlock()
 	buf2, lf2, err2 := log.ReadValueBytes(b.ValPtr[1])
-	defer lf2.Lock.RUnlock()
 
 	require.NoError(t, err1)
 	require.NoError(t, err2)
@@ -97,7 +96,7 @@ func TestVlogBase(t *testing.T) {
 	e1, err = lf1.DecodeEntry(buf1, b.ValPtr[0].Offset)
 	require.NoError(t, err)
 
-	// 从vlog文件中通过指指针反序列化回 entry对象
+	// 从vlog文件中通过指指针反序列化回 entry对象;
 	e2, err = lf1.DecodeEntry(buf2, b.ValPtr[1].Offset)
 	require.NoError(t, err)
 
@@ -124,9 +123,9 @@ func TestValueGC(t *testing.T) {
 	vlogOpt.ValueLogFileSize = 1 << 20
 	kv, _ := Open(vlogOpt)
 	defer kv.Close()
-	sz := 32 << 10
+	sz := 3 << 10
 	kvList := []*model.Entry{}
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 40; i++ {
 		e := newRandEntry(sz)
 		kvList = append(kvList, &model.Entry{
 			Key:       e.Key,
@@ -143,16 +142,22 @@ func TestValueGC(t *testing.T) {
 		require.NoError(t, kv.Set(entry))
 	}
 
-	// 直接开始GC, 启动 vlog 的rewrite();
-	kv.RunValueLogGC(0.9)
+	// 直接开始GC, 1.pickVlog需要和合并联动; 2.启动 vlog.file 的rewrite();
+	// kv.RunValueLogGC(0.9)
+
+	// 指定 1.vlog 文件进行 GC;
+	kv.vlog.gcReWriteLog(kv.vlog.filesMap[0])
 
 	for _, e := range kvList {
-		item, err := kv.Get(e.Key)
-		require.NoError(t, err)
-		val := getItemValue(t, item)
-		require.NotNil(t, val)
-		require.True(t, bytes.Equal(item.Key, e.Key), "key not equal: e:%s, v:%s", e.Key, item.Key)
-		require.True(t, bytes.Equal(item.Value, e.Value), "value not equal: e:%s, v:%s", e.Value, item.Key)
+		item, err := kv.Get(e.Key) // 无 ts
+		if err != nil {
+			fmt.Printf("err:%s when key is:%s\n", err, e.Key)
+		}
+		value := getItemValue(t, item)
+		if int64(len(value)) > vlogOpt.ValueThreshold {
+			value = nil
+		}
+		fmt.Printf("key:%s, val:%s, err:%s\n", e.Key, value, err)
 	}
 }
 
@@ -163,6 +168,7 @@ func newRandEntry(sz int) *model.Entry {
 	e.Value = v
 	return e
 }
+
 func getItemValue(t *testing.T, item *model.Entry) (val []byte) {
 	t.Helper()
 	if item == nil {

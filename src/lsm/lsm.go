@@ -14,9 +14,9 @@ type Options struct {
 	// BlockSize is the size of each block inside SSTable in bytes.
 	BlockSize uint32 // 数据持久化时的大小
 	// BloomFalsePositive is the false positive probability of bloom filter.
-	BloomFalsePositive float64 // 布隆过滤器的容错率
+	BloomFalsePositive float64 // 布隆过滤器的容错率;
 
-	CacheSize int // 缓存容量 B
+	CacheNums int // 缓存元素个数, 缺省值默认 1024*10个;
 
 	// compact 合并相关
 	NumCompactors       int   // 合并协程数量;默认1
@@ -27,10 +27,6 @@ type Options struct {
 	NumLevelZeroTables  int   // 第 0 层中,允许的表数量
 	MaxLevelNum         int   // 最大层数,默认是 7 层
 
-	ExpiredValPtrChan chan model.ValuePtr // compact to lsm
-	ExpiredValNum     int
-	ExpiredValSize    int64
-
 	DiscardStatsCh *chan map[uint32]int64 //  用于 compact 组件 向 vlog 组件 传递信息使用,在合并过程中,知道哪些文件是失效的,让vlog组件知道,方便其GC;
 }
 
@@ -40,7 +36,12 @@ type LSM struct {
 	levelManger    *levelsManger
 	option         *Options
 	maxMemFID      uint32
-	Closer         *utils.Closer
+
+	ExpiredValPtrChan chan model.ValuePtr // compact`MergeIterator`fix() to lsm;
+	ExpiredValNum     int
+	ExpiredValSize    int64
+
+	Closer *utils.Closer
 }
 
 func NewLSM(opt *Options) *LSM {

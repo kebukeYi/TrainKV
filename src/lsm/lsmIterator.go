@@ -262,12 +262,12 @@ func (m *MergeIterator) fix() {
 	switch {
 	case cmp == 0:
 		// 原生key 相同下, 再比较时间戳版本,决定留哪个,祛除哪个;
-		if model.ParseTsVersion(m.small.entry.Key) > model.ParseTsVersion(m.otherNode().entry.Key) {
+		if model.ParseTsVersion(m.small.entry.Key) >= model.ParseTsVersion(m.otherNode().entry.Key) {
 			//fmt.Printf("    fix()cmp==0: mi.small.entry.Key:%s  meta:%d > mi.bigger().entry.Key:%s meta:%d ;\n", utils.ParseKey(mi.small.entry.Key), mi.small.entry.Meta, utils.ParseKey(mi.bigger().entry.Key), mi.bigger().entry.Meta)
 			if m.lsm != nil {
 				var vp model.ValuePtr
 				vp.Decode(m.otherNode().entry.Value)
-				m.lsm.option.ExpiredValPtrChan <- vp
+				m.lsm.ExpiredValPtrChan <- vp
 			}
 			m.otherNode().next()
 		} else {
@@ -275,7 +275,7 @@ func (m *MergeIterator) fix() {
 			if m.lsm != nil {
 				var vp model.ValuePtr
 				vp.Decode(m.otherNode().entry.Value)
-				m.lsm.option.ExpiredValPtrChan <- vp
+				m.lsm.ExpiredValPtrChan <- vp
 			}
 			m.small.next()
 			m.swapSmall()
@@ -312,14 +312,15 @@ func (m *MergeIterator) otherNode() *node {
 
 func (m *MergeIterator) Next() {
 	for m.small.valid {
-		fmt.Printf("    Next():smallqEntry[Key:%s,val:%s] mi.cur[key:%s,val:%s] \n",
-			model.ParseKey(m.small.entry.Key), m.small.entry.Value, model.ParseKey(m.curKey), m.curVal)
+		fmt.Printf(" Next():smallEntry[Key:%s,val:%s] mi.cur[key:%s,val:%s] \n", model.ParseKey(m.small.entry.Key), m.small.entry.Value, model.ParseKey(m.curKey), m.curVal)
 		if !bytes.Equal(model.ParseKey(m.small.entry.Key), model.ParseKey(m.curKey)) {
 			break
 		}
-		m.small.next()
-		m.fix()
+		// m.small.entry.Key == m.curKey;
+		m.small.next() // n.setEntry()
+		m.fix()        // small 和 otherNode 相比较;
 	}
+	// 只管保存即可;
 	m.setCurrentKey()
 }
 
@@ -341,14 +342,13 @@ func (m *MergeIterator) Value() []byte {
 	return m.Item().Item.Value
 }
 func (m *MergeIterator) Rewind() {
-	m.left.Rewind()
-	m.right.Rewind()
-	m.fix()
-	m.setCurrentKey()
+	m.left.Rewind()   // n.setEntry()
+	m.right.Rewind()  // n.setEntry()
+	m.fix()           // 挑选最小值, 另外一个可能 next();
+	m.setCurrentKey() // 赋值最小值;
 }
 func (m *MergeIterator) setCurrentKey() {
-	common.CondPanic(m.small.entry == nil && m.small.valid == true,
-		fmt.Errorf("mi.small.entry is nil"))
+	common.CondPanic(m.small.entry == nil && m.small.valid == true, fmt.Errorf("mi.small.entry is nil"))
 	if m.small.valid {
 		m.curKey = append(m.curKey[:0], m.small.entry.Key...)
 		m.curVal = append(m.curVal[:0], m.small.entry.Value...)

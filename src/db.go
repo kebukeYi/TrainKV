@@ -50,7 +50,7 @@ func Open(opt *DBOptions) (*TrainKVDB, error) {
 		SSTableMaxSz:        opt.SSTableSize,
 		BlockSize:           opt.SSTBlockSize,
 		BloomFalsePositive:  opt.BloomFalsePositive,
-		CacheSize:           opt.CacheSize,
+		CacheNums:           opt.CacheSize,
 		NumCompactors:       2,
 		BaseLevelSize:       10 << 20,
 		LevelSizeMultiplier: 10,
@@ -70,7 +70,7 @@ func Open(opt *DBOptions) (*TrainKVDB, error) {
 	// 当后台 compact GC启动后, 此通道就 在遍历sst时 接收到 vlog 类型数据的过期数据;
 	go db.Lsm.MonitorVlogExpiredValPtr()
 	// 启动 sstable 的合并压缩过程
-	go db.Lsm.StartCompacter()
+	//go db.Lsm.StartCompacter()
 	db.writeCh = make(chan *Request)
 	// 接收 vlog GC 重新写大量entry的请求
 	go db.handleWriteCh()
@@ -139,7 +139,8 @@ func (db *TrainKVDB) RunValueLogGC(discardRatio float64) error {
 	if discardRatio >= 1.0 || discardRatio <= 0.0 {
 		return nil
 	}
-	return nil
+	// Pick a log file and run GC. 寻找合适的 vlog 文件 进行 gc;
+	return db.vlog.runGC(discardRatio)
 }
 
 // BatchSet batch set entries

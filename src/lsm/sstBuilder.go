@@ -433,6 +433,7 @@ func (itr *blockIterator) setIndex(idx int) {
 	eny.Value = itr.val
 	eny.ExpiresAt = val.ExpiresAt
 	eny.Meta = val.Meta
+	eny.Version = model.ParseTsVersion(itr.key)
 	itr.it = model.Item{Item: eny}
 }
 

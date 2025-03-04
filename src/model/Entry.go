@@ -37,7 +37,7 @@ func NewEntry(key, val []byte) *Entry {
 // 生成随机字符串作为key和value
 func randStr(length int) string {
 	// 包括特殊字符,进行测试
-	str := "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ~=+%^*/()[]{}/!@#$?|©®😁😭🉑️🐂㎡硬核课堂"
+	str := "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	bytes := []byte(str)
 	result := []byte{}
 	rand.Seed(time.Now().UnixNano() + int64(rand.Intn(100)))

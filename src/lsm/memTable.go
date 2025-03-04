@@ -46,8 +46,8 @@ func (m *memoryTable) Get(key []byte) (*model.Entry, error) {
 	if key == nil {
 		return nil, errors.ErrNotFound
 	}
-	val := m.skipList.Get(key)
-	if val.Value == nil {
+	val := m.skipList.Get(key) // 没有找到就返回: model.ValueExt{}
+	if val.Meta == 0 && val.Value == nil {
 		return nil, errors.ErrNotFound
 	}
 	e := &model.Entry{

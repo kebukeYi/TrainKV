@@ -687,11 +687,11 @@ func (lsm *LSM) MonitorVlogExpiredValPtr() {
 		select {
 		case <-lsm.Closer.CloseSignal:
 			return
-		case vp := <-lsm.option.ExpiredValPtrChan:
+		case vp := <-lsm.ExpiredValPtrChan:
 			discardStats[vp.Fid] += int64(vp.Len)
 			expiredValSize += int64(vp.Len)
 			expiredValNum++
-			if expiredValNum >= lsm.option.ExpiredValNum || expiredValSize >= lsm.option.ExpiredValSize {
+			if expiredValNum >= lsm.ExpiredValNum || expiredValSize >= lsm.ExpiredValSize {
 				lsm.levelManger.updateDiscardStats(discardStats)
 				discardStats = make(map[uint32]int64)
 			}

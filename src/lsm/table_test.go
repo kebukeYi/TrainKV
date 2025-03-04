@@ -277,7 +277,8 @@ func TestMergingIterator(t *testing.T) {
 		{"k1", "a1"},
 		{"k2", "b2"},
 		{"k3", "b3"},
-		{"k4", "a4"},
+		//{"k4", "a4"},
+		{"k4", "b4"},
 		{"k5", "a5"},
 	}
 
@@ -287,9 +288,11 @@ func TestMergingIterator(t *testing.T) {
 	defer it.Close()
 
 	var i int
-	for it.Rewind(); it.Valid(); it.Next() {
+	it.Rewind()
+	for ; it.Valid(); it.Next() {
 		k := it.Item().Item.Key
 		vs := it.Item().Item.Value
+		fmt.Printf("key: %v, value: %v\n", string(model.ParseKey(k)), string(vs))
 		require.EqualValues(t, expected[i].key, string(model.ParseKey(k)))
 		require.EqualValues(t, expected[i].value, string(vs))
 		i++
