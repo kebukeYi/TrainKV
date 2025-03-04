@@ -7,14 +7,14 @@ type LevelsCache struct {
 	blockData *cache.Cache
 }
 
-const defaultCacheSize = 1024 * 10
+const defaultCacheNums = 1024 * 10
 
 func newLevelsCache(opt *Options) *LevelsCache {
-	if opt.CacheSize == 0 {
-		opt.CacheSize = defaultCacheSize
+	if opt.CacheNums == 0 {
+		opt.CacheNums = defaultCacheNums
 	}
 	return &LevelsCache{
-		indexData: cache.NewCache(opt.CacheSize),
-		blockData: cache.NewCache(opt.CacheSize),
+		indexData: cache.NewCache(opt.CacheNums),
+		blockData: cache.NewCache(opt.CacheNums),
 	}
 }
