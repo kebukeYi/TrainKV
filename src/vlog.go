@@ -203,10 +203,10 @@ func (vlog *ValueLog) getUnlockCallBack(vlogFile *file.VLogFile) func() {
 	return vlogFile.Lock.RUnlock
 }
 
-func (vlog *ValueLog) NewValuePtr(entry model.Entry) (*model.ValuePtr, error) {
+func (vlog *ValueLog) NewValuePtr(entry *model.Entry) (*model.ValuePtr, error) {
 	req := RequestPool.Get().(*Request)
 	req.Reset()
-	req.Entries = []model.Entry{entry}
+	req.Entries = []*model.Entry{entry}
 	req.Wg.Add(1)
 	req.IncrRef()
 	defer req.DecrRef()
@@ -260,7 +260,7 @@ func (vlog *ValueLog) Write(reqs []*Request) error {
 		req.ValPtr = req.ValPtr[:0]
 		var writteNum int
 		for _, entry := range req.Entries {
-			if vlog.Db.ShouldWriteValueToLSM(entry) {
+			if vlog.Db.ShouldWriteValueToLSM(*entry) {
 				req.ValPtr = append(req.ValPtr, &model.ValuePtr{})
 				continue
 			}
@@ -744,7 +744,7 @@ var RequestPool = sync.Pool{
 }
 
 type Request struct {
-	Entries []model.Entry
+	Entries []*model.Entry
 	ValPtr  []*model.ValuePtr
 	Wg      sync.WaitGroup
 	Err     error

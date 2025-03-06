@@ -61,7 +61,7 @@ func TestSkipListUpdate(t *testing.T) {
 	//Put & Get
 	key := fmt.Sprintf("key%d", 60)
 	val := fmt.Sprintf("val%d", 60)
-	e := model.NewEntry([]byte(key), []byte(val)).WithTTL(10000 * time.Second)
+	e := model.NewEntry([]byte(key), []byte(val))
 	e.Key = model.KeyWithTs(e.Key)
 	list.Put(e)
 	vs := list.Get(e.Key)

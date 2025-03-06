@@ -102,7 +102,7 @@ func TestVlogBase(t *testing.T) {
 	require.NoError(t, err)
 
 	// 比较entry对象是否相等
-	readEntries := []model.Entry{*e1, *e2}
+	readEntries := []*model.Entry{e1, e2}
 	require.EqualValues(t, []model.Entry{
 		{
 			Key:    []byte("samplekey"),
@@ -162,7 +162,7 @@ func TestValueGC(t *testing.T) {
 	}
 }
 
-func newRandEntry(sz int) *model.Entry {
+func newRandEntry(sz int) model.Entry {
 	v := make([]byte, sz)
 	rand.Read(v[:rand.Intn(sz)])
 	e := model.BuildEntry()
@@ -170,9 +170,9 @@ func newRandEntry(sz int) *model.Entry {
 	return e
 }
 
-func getItemValue(t *testing.T, item *model.Entry) (val []byte) {
+func getItemValue(t *testing.T, item model.Entry) (val []byte) {
 	t.Helper()
-	if item == nil {
+	if item.Value == nil {
 		return nil
 	}
 	var v []byte

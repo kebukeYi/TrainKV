@@ -127,7 +127,7 @@ func (vlog *VLogFile) Close() error {
 // +--------+-----+-------+-------+
 // | header | key | value | crc32 |
 // +--------+-----+-------+-------+
-func (vlog *VLogFile) EncodeEntry(entry model.Entry, out *bytes.Buffer) (int, error) {
+func (vlog *VLogFile) EncodeEntry(entry *model.Entry, out *bytes.Buffer) (int, error) {
 	header := model.EntryHeader{
 		KLen:      uint32(len(entry.Key)),
 		VLen:      uint32(len(entry.Value)),

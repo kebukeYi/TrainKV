@@ -97,7 +97,7 @@ func (db *TrainKVDB) Set(entry model.Entry) error {
 	entry.Key = model.KeyWithTs(entry.Key)
 	entry.Version = model.ParseTsVersion(entry.Key)
 	if !db.ShouldWriteValueToLSM(entry) {
-		if vp, err = db.vlog.NewValuePtr(entry); err != nil {
+		if vp, err = db.vlog.NewValuePtr(&entry); err != nil {
 			return err
 		}
 		entry.Meta |= common.BitValuePointer
@@ -215,13 +215,13 @@ func (db *TrainKVDB) writeToLSM(req *Request) error {
 		return errors.Errorf("Ptrs and Entries don't match: %+v", req)
 	}
 	for i, entry := range req.Entries {
-		if db.ShouldWriteValueToLSM(entry) {
+		if db.ShouldWriteValueToLSM(*entry) {
 			entry.Meta &= ^common.BitValuePointer
 		} else {
 			entry.Meta |= common.BitValuePointer
 			entry.Value = req.ValPtr[i].Encode()
 		}
-		if err := db.Lsm.Put(entry); err != nil {
+		if err := db.Lsm.Put(*entry); err != nil {
 			return err
 		}
 	}

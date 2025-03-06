@@ -46,12 +46,12 @@ func randStr(length int) string {
 	}
 	return string(result)
 }
-func BuildEntry() *Entry {
+func BuildEntry() Entry {
 	rand.Seed(time.Now().Unix())
 	key := []byte(fmt.Sprintf("%s%s", randStr(16), "12345678"))
 	value := []byte(randStr(128))
 	expiresAt := uint64(time.Now().Add(12*time.Hour).UnixNano() / 1e6)
-	return &Entry{
+	return Entry{
 		Key:       key,
 		Value:     value,
 		ExpiresAt: expiresAt,
