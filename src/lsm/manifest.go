@@ -10,13 +10,12 @@ import (
 	"path/filepath"
 	"sync"
 	"trainKv/common"
-	"trainKv/model"
 	"trainKv/pb"
 	"trainKv/utils"
 )
 
 type ManifestFile struct {
-	opt                      *model.FileOptions
+	opt                      *utils.FileOptions
 	f                        *os.File
 	mux                      sync.Mutex
 	deletionRewriteThreshold int
@@ -45,7 +44,7 @@ type TableMeta struct {
 	Checksum []byte
 }
 
-func OpenManifestFile(opt *model.FileOptions) (*ManifestFile, error) {
+func OpenManifestFile(opt *utils.FileOptions) (*ManifestFile, error) {
 	path := filepath.Join(opt.Dir, common.ManifestFilename)
 	opt.FileName = path
 	opt.Path = path
@@ -339,13 +338,14 @@ func (mf *ManifestFile) checkSSTable(ids map[uint64]struct{}) error {
 	// 1. Check all files in manifest exist.
 	for _, table := range mf.manifest.Tables {
 		if _, ok := ids[table.ID]; !ok {
-			return fmt.Errorf("sst file  can`t does not exist for table %d", table.ID)
+			// manifest 中存在, 实际目录中却不存在;
+			return fmt.Errorf("#checkSSTable(): can`t does not exist for sstable %d", table.ID)
 		}
 	}
 	// 2. Delete files that shouldn't exist.
 	for id := range ids {
 		if _, ok := mf.manifest.Tables[id]; !ok {
-			common.Err(fmt.Errorf("Table file %d  not referenced in MANIFEST", id))
+			fmt.Printf("#checkSSTable(): Table file %d  not referenced in MANIFEST.\n", id)
 			ssTablePath := GetSSTablePathFromId(mf.opt.Dir, id)
 			if err := os.Remove(ssTablePath); err != nil {
 				return common.ErrBadRemoveSST

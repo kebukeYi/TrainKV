@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"trainKv/common"
 	"trainKv/file"
+	"trainKv/lsm"
 	"trainKv/model"
 	"trainKv/utils"
 )
@@ -32,8 +33,8 @@ type ValueLog struct {
 	FilesToDel         []uint32
 	activeIteratorNum  int32
 	writableFileOffset uint32
-	entriesWrittenNum  uint32
-	Opt                *DBOptions
+	entriesWrittenNum  int32
+	Opt                *lsm.Options
 
 	Db                     *TrainKVDB
 	GarbageCh              chan struct{}
@@ -64,7 +65,7 @@ func (vlog *ValueLog) Open(replayFn model.LogEntry) error {
 		common.CondPanic(!ok, fmt.Errorf("vlog.filesMap[fid] fid not found"))
 		var err error
 		// 打开文件
-		if err = lf.Open(&model.FileOptions{
+		if err = lf.Open(&utils.FileOptions{
 			FID:      uint64(fid),
 			FileName: vlog.fpath(fid),
 			Dir:      vlog.DirPath,
@@ -202,10 +203,10 @@ func (vlog *ValueLog) getUnlockCallBack(vlogFile *file.VLogFile) func() {
 	return vlogFile.Lock.RUnlock
 }
 
-func (vlog *ValueLog) NewValuePtr(entry *model.Entry) (*model.ValuePtr, error) {
+func (vlog *ValueLog) NewValuePtr(entry model.Entry) (*model.ValuePtr, error) {
 	req := RequestPool.Get().(*Request)
 	req.Reset()
-	req.Entries = []*model.Entry{entry}
+	req.Entries = []model.Entry{entry}
 	req.Wg.Add(1)
 	req.IncrRef()
 	defer req.DecrRef()
@@ -273,13 +274,13 @@ func (vlog *ValueLog) Write(reqs []*Request) error {
 			p.Len = uint32(plen)
 			req.ValPtr = append(req.ValPtr, &p)
 			writteNum++
-			if buf.Len() > vlog.Db.Opt.ValueLogFileSize {
+			if int32(buf.Len()) > vlog.Db.Opt.ValueLogFileSize {
 				if err := flushToFile(); err != nil {
 					return err
 				}
 			}
 		}
-		vlog.entriesWrittenNum += uint32(writteNum)
+		vlog.entriesWrittenNum += int32(writteNum)
 		writeNow := vlog.getWriteOffset()+uint32(buf.Len()) > uint32(vlog.Opt.ValueLogFileSize) ||
 			vlog.entriesWrittenNum > vlog.Opt.ValueLogMaxEntries
 		if writeNow {
@@ -393,7 +394,7 @@ func (vlog *ValueLog) handleDiscardStats() {
 func (vlog *ValueLog) createVlogFile(fid uint32) (*file.VLogFile, error) {
 	fpath := vlog.fpath(fid)
 	vlogFile := &file.VLogFile{FID: fid, Lock: sync.RWMutex{}}
-	if err := vlogFile.Open(&model.FileOptions{
+	if err := vlogFile.Open(&utils.FileOptions{
 		FID:      uint64(fid),
 		FileName: fpath,
 		Dir:      vlog.DirPath,
@@ -622,7 +623,7 @@ func (vlog *ValueLog) gcReWriteLog(logFile *file.VLogFile) error {
 		if err != nil {
 			return err
 		}
-		if model.IsDiscardEntry(vlogEntry, lsmEntry) {
+		if model.IsDiscardEntry(vlogEntry, &lsmEntry) {
 			return nil
 		}
 
@@ -645,7 +646,7 @@ func (vlog *ValueLog) gcReWriteLog(logFile *file.VLogFile) error {
 			e.ExpiresAt = vlogEntry.ExpiresAt
 			e.Key = append([]byte{}, vlogEntry.Key...)
 			e.Value = append([]byte{}, vlogEntry.Value...)
-			es := int64(e.EstimateSize(vlog.Db.Opt.ValueLogFileSize))
+			es := int64(e.EstimateSize(vlog.Db.Opt.ValueThreshold))
 			es += int64(len(e.Value))
 			if int64(len(tempArray)+1) >= vlog.Opt.MaxBatchCount || size+es >= vlog.Opt.MaxBatchSize {
 				if err := vlog.Db.BatchSet(tempArray); err != nil {
@@ -743,7 +744,7 @@ var RequestPool = sync.Pool{
 }
 
 type Request struct {
-	Entries []*model.Entry
+	Entries []model.Entry
 	ValPtr  []*model.ValuePtr
 	Wg      sync.WaitGroup
 	Err     error

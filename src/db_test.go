@@ -4,45 +4,41 @@ import (
 	"fmt"
 	"os"
 	"testing"
-	"time"
 	"trainKv/common"
+	"trainKv/lsm"
 	"trainKv/model"
 )
 
-var dbOpt = &DBOptions{
-	//WorkDir:              "/usr/local/go_temp_files/test/trainKV/dbtest",
-	WorkDir:              "/usr/projects_gen_data/goprogendata/trainkvdata/test/vlog",
-	MemTableSize:         1 << 10,
-	SSTableSize:          1 << 10,
-	ValueLogFileSize:     1 << 11,
-	ValueThreshold:       1,
-	MaxBatchCount:        10,
-	MaxBatchSize:         1 << 20,
-	ValueLogMaxEntries:   100,
-	BloomFalsePositive:   0.1,
-	CacheSize:            10240,
-	SSTBlockSize:         200,
-	UpdateVlogRePlayHead: make(chan model.ValuePtr),
-	//LogRotatesToFlush:  1000,
-	//MaxTableSize:       1000,
+var dbTestOpt = &lsm.Options{
+	WorkDir:            "/usr/projects_gen_data/goprogendata/trainkvdata/test/vlog",
+	MemTableSize:       1 << 10,
+	SSTableMaxSz:       1 << 10,
+	ValueLogFileSize:   1 << 11,
+	ValueThreshold:     1,
+	MaxBatchCount:      10,
+	MaxBatchSize:       1 << 20,
+	ValueLogMaxEntries: 100,
+	BloomFalsePositive: 0.1,
+	CacheNums:          10240,
+	BlockSize:          200,
 }
 
 func clearDir() {
-	_, err := os.Stat(dbOpt.WorkDir)
+	_, err := os.Stat(dbTestOpt.WorkDir)
 	if err == nil {
-		if err = os.RemoveAll(dbOpt.WorkDir); err != nil {
+		if err = os.RemoveAll(dbTestOpt.WorkDir); err != nil {
 			common.Panic(err)
 		}
 	}
-	err = os.Mkdir(dbOpt.WorkDir, os.ModePerm)
+	err = os.Mkdir(dbTestOpt.WorkDir, os.ModePerm)
 	if err != nil {
-		_ = fmt.Sprintf("create dir %s failed", dbOpt.WorkDir)
+		_ = fmt.Sprintf("create dir %s failed", dbTestOpt.WorkDir)
 	}
 }
 
 func TestAPI(t *testing.T) {
 	clearDir()
-	db, _ := Open(dbOpt)
+	db, _ := Open(dbTestOpt)
 	defer func() { _ = db.Close() }()
 	putStart := 0
 	putEnd := 60
@@ -55,7 +51,7 @@ func TestAPI(t *testing.T) {
 	for i := putStart; i <= putEnd; i++ {
 		key := fmt.Sprintf("key%d", i)
 		val := fmt.Sprintf("val%d", i)
-		e := model.NewEntry([]byte(key), []byte(val)).WithTTL(10000 * time.Second)
+		e := model.NewEntry([]byte(key), []byte(val))
 		e.ExpiresAt = uint64(i)
 		if i == 60 {
 			e.ExpiresAt = 60000000000
@@ -145,7 +141,7 @@ func TestAPI(t *testing.T) {
 
 func TestMultiPutDelGet(t *testing.T) {
 	clearDir()
-	db, _ := Open(dbOpt)
+	db, _ := Open(dbTestOpt)
 	defer func() { _ = db.Close() }()
 	putStart := 0
 	putEnd := 10
@@ -154,7 +150,7 @@ func TestMultiPutDelGet(t *testing.T) {
 	for i := putStart; i <= putEnd; i++ {
 		key := fmt.Sprintf("key%d", i)
 		val := fmt.Sprintf("putVal%d", i)
-		e := model.NewEntry([]byte(key), []byte(val)).WithTTL(10000 * time.Second)
+		e := model.NewEntry([]byte(key), []byte(val))
 		e.ExpiresAt = uint64(i)
 		if i == 60 {
 			e.ExpiresAt = 60000000000
@@ -174,7 +170,7 @@ func TestMultiPutDelGet(t *testing.T) {
 	for i := putStart; i <= putEnd; i++ {
 		key := fmt.Sprintf("key%d", i)
 		val := fmt.Sprintf("update1Val%d", i)
-		e := model.NewEntry([]byte(key), []byte(val)).WithTTL(10000 * time.Second)
+		e := model.NewEntry([]byte(key), []byte(val))
 		e.ExpiresAt = uint64(i)
 		if i == 60 {
 			e.ExpiresAt = 60000000000
@@ -194,7 +190,7 @@ func TestMultiPutDelGet(t *testing.T) {
 	for i := putStart; i <= putEnd; i++ {
 		key := fmt.Sprintf("key%d", i)
 		val := fmt.Sprintf("update2Val%d", i)
-		e := model.NewEntry([]byte(key), []byte(val)).WithTTL(10000 * time.Second)
+		e := model.NewEntry([]byte(key), []byte(val))
 		e.ExpiresAt = uint64(i)
 		if i == 60 {
 			e.ExpiresAt = 60000000000
@@ -212,7 +208,7 @@ func TestMultiPutDelGet(t *testing.T) {
 }
 
 func TestReStart(t *testing.T) {
-	db, _ := Open(dbOpt)
+	db, _ := Open(dbTestOpt)
 	defer func() { _ = db.Close() }()
 	putStart := 0
 	putEnd := 90

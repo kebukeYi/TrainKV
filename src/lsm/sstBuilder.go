@@ -85,16 +85,18 @@ func newSSTBuilder(opt *Options) *sstBuilder {
 }
 
 // 1. 向当前block中 append kv数据
-func (ssb *sstBuilder) AddKey(e *model.Entry) {
+func (ssb *sstBuilder) AddKey(e model.Entry) {
 	ssb.add(e, false)
 }
 
-func (ssb *sstBuilder) AddStaleKey(e *model.Entry) {
+func (ssb *sstBuilder) AddStaleKey(e model.Entry) {
 	ssb.staleDataSize += len(e.Key) + len(e.Value) + 4 /* entry offset */ + 4 /* header size */
 	ssb.add(e, true)
 }
 
-func (ssb *sstBuilder) add(e *model.Entry, isStale bool) {
+func (ssb *sstBuilder) add(e model.Entry, isStale bool) {
+	fmt.Printf("ssb add key: %s, val: %s, version:%d meta:%d ;\n",
+		string(e.Key), string(e.Value), e.Version, e.Meta)
 	key := e.Key
 	val := model.ValueExt{
 		Meta:      e.Meta,
@@ -165,7 +167,7 @@ func (ssb *sstBuilder) allocate(need int) []byte {
 	return curb.data[curb.endOffset-need : curb.endOffset]
 }
 
-func (ssb *sstBuilder) tryNewBlock(e *model.Entry) bool {
+func (ssb *sstBuilder) tryNewBlock(e model.Entry) bool {
 	if ssb.curBlock == nil {
 		return true
 	}
@@ -207,12 +209,12 @@ func (ssb *sstBuilder) flush(lm *levelsManger, tableName string) (t *table, err 
 	bd := ssb.done()
 	fid := utils.FID(tableName)
 	t = &table{lm: lm, fid: fid, Name: strconv.FormatUint(fid, 10) + SSTableName}
-	t.sst = OpenSStable(&model.FileOptions{
+	t.sst = OpenSStable(&utils.FileOptions{
 		FileName: tableName,
-		Dir:      lm.opt.WorkDir,
-		Flag:     os.O_CREATE | os.O_RDWR,
-		MaxSz:    bd.size,
-		FID:      t.fid,
+		//Dir:      lm.opt.WorkDir,
+		Flag:  os.O_CREATE | os.O_RDWR,
+		MaxSz: int32(bd.size),
+		FID:   t.fid,
 	})
 	buf := make([]byte, bd.size)
 	written := bd.copy(buf)
@@ -335,6 +337,10 @@ func (ssb *sstBuilder) empty() bool {
 	return len(ssb.keyHashes) == 0
 }
 
+func (ssb *sstBuilder) close() bool {
+	return len(ssb.keyHashes) == 0
+}
+
 func (ssb *sstBuilder) ReachedCapacity() bool {
 	return ssb.estimateSize > ssb.sstSize
 }
@@ -426,7 +432,7 @@ func (itr *blockIterator) setIndex(idx int) {
 	valueOffset := headerSize + header.dif
 	diffKey := entryData[headerSize:valueOffset]
 	itr.key = append(itr.key[:header.overlap], diffKey...)
-	eny := &model.Entry{Key: itr.key}
+	eny := model.Entry{Key: itr.key}
 	val := &model.ValueExt{}
 	val.DecodeVal(entryData[valueOffset:])
 	itr.val = val.Value

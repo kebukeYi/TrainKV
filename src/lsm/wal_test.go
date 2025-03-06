@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 	"trainKv/model"
+	"trainKv/utils"
 )
 
 var r = rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -19,15 +20,20 @@ func RandString(len int) string {
 	return string(bytes)
 }
 
-// /usr/local/temp/train/wal
-// /usr/local/temp/train/tables
-func TestWAL_Write(t *testing.T) {
-	w := OpenWalFile(&model.FileOptions{
+func getDefaultFileOpt() *utils.FileOptions {
+	return &utils.FileOptions{
+		FID:      0,
 		FileName: "/usr/local/go_temp_files/test/trainKV/waltest/00001.wal",
+		Dir:      "",
+		Path:     "",
 		MaxSz:    3 * 1024,
-	})
+	}
+}
+
+func TestWAL_Write(t *testing.T) {
+	w := OpenWalFile(getDefaultFileOpt())
 	for i := 0; i < 10; i++ {
-		var entry = &model.Entry{
+		var entry = model.Entry{
 			Key:       []byte(RandString(10)),
 			Value:     []byte(RandString(10)),
 			Meta:      1,
@@ -43,7 +49,7 @@ func TestWAL_Write(t *testing.T) {
 	reader := model.NewHashReader(w.file.Fd)
 	var readAt uint32 = 0
 	for {
-		var entry *model.Entry
+		var entry model.Entry
 		entry, readAt = w.Read(reader)
 		if readAt > 0 {
 			fmt.Printf("entry: key:%s val:%s meta:%d exp:%d \n",

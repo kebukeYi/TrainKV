@@ -30,7 +30,7 @@ type SSTable struct {
 	creationTime   time.Time
 }
 
-func OpenSStable(opt *model.FileOptions) *SSTable {
+func OpenSStable(opt *utils.FileOptions) *SSTable {
 	mmapFile, err := file.OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
 	if err != nil {
 		return nil

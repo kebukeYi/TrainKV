@@ -11,6 +11,7 @@ import (
 
 type levelsManger struct {
 	maxFID        uint64          // 已经分配出去的最大fid，只要创建了 memoryTable 就算已分配
+	nextFileID    atomic.Uint64   // 全局唯一 FID
 	levelHandlers []*levelHandler // 每层的处理器
 	opt           *Options
 	lsm           *LSM // 上层引用
@@ -18,6 +19,11 @@ type levelsManger struct {
 	cache            *LevelsCache  // 缓存 block 和 sst.index() 数据
 	manifestFile     *ManifestFile // 增删 sst 元信息
 	compactIngStatus *compactIngStatus
+}
+
+func (lm *levelsManger) reserveFileID() uint64 {
+	id := lm.nextFileID.Add(1)
+	return id
 }
 
 func (lsm *LSM) InitLevelManger(opt *Options) *levelsManger {
@@ -38,7 +44,7 @@ func (lsm *LSM) InitLevelManger(opt *Options) *levelsManger {
 
 func (lm *levelsManger) loadManifestFile() (err error) {
 	// 打开的同时, 并做好了内存数据结构;
-	lm.manifestFile, err = OpenManifestFile(&model.FileOptions{Dir: lm.opt.WorkDir})
+	lm.manifestFile, err = OpenManifestFile(&utils.FileOptions{Dir: lm.opt.WorkDir})
 	return err
 }
 
@@ -56,6 +62,7 @@ func (lm *levelsManger) build() error {
 	}
 
 	manifest := lm.manifestFile.GetManifest()
+
 	if err := lm.manifestFile.checkSSTable(utils.LoadIDMap(lm.opt.WorkDir)); err != nil {
 		return err
 	}
@@ -91,21 +98,39 @@ func (lm *levelsManger) iterators(opt *model.Options) []model.Iterator {
 	return iters
 }
 
-func (lm *levelsManger) Get(key []byte) (*model.Entry, error) {
+func (lm *levelsManger) Get(key []byte) (model.Entry, error) {
 	var (
-		entry *model.Entry
+		entry model.Entry
 		err   error
 	)
 	// L0层查询
-	if entry, err = lm.levelHandlers[0].Get(key); entry != nil {
+	if entry, err = lm.levelHandlers[0].Get(key); entry.Value != nil {
 		return entry, err
 	}
 	for i := 1; i < lm.opt.MaxLevelNum; i++ {
-		if entry, err = lm.levelHandlers[i].Get(key); entry != nil {
+		if entry, err = lm.levelHandlers[i].Get(key); entry.Value != nil {
 			return entry, nil
 		}
 	}
 	return entry, common.ErrKeyNotFound
+}
+
+// checkOverlap checks if the given tables overlap with any level from the given "lev" onwards.
+func (lm *levelsManger) checkOverlap(tables []*table, lev int) bool {
+	kr := getKeyRange(tables...) // 给定的 table 区间
+	for i, lh := range lm.levelHandlers {
+		if i < lev { // Skip upper levels.  跳过 低于本层的;
+			continue
+		}
+		lh.mux.RLock()
+		// 判断当前 level 是否存在区间;
+		left, right := lh.findOverLappingTables(levelHandlerRLocked{}, kr)
+		lh.mux.RUnlock()
+		if right-left > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (lm *levelsManger) flush(imm *memoryTable) (err error) {

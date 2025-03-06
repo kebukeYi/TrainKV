@@ -7,17 +7,18 @@ import (
 	"testing"
 	"time"
 	"trainKv/common"
+	"trainKv/lsm"
 	"trainKv/model"
 )
 
 var (
 	// 初始化opt
-	vlogOpt = &DBOptions{
+	vlogOpt = &lsm.Options{
 		//WorkDir:          "./work_test",
 		//WorkDir:          "/usr/local/go_temp_files/test/trainKV/vlogtest",
 		//WorkDir:          "/usr/projects_gen_data/goprogendata/corekvdata/test/vlog",
 		WorkDir:          "/usr/projects_gen_data/goprogendata/trainkvdata/test/vlog",
-		SSTableSize:      1 << 10,
+		SSTableMaxSz:     1 << 10,
 		MemTableSize:     1 << 10,
 		ValueLogFileSize: 1 << 20,
 		ValueThreshold:   1,
@@ -61,7 +62,7 @@ func TestVlogBase(t *testing.T) {
 	// 创建一个简单的kv entry对象
 	const val1 = "sampleval012345678901234567890123"
 	const val2 = "samplevalb012345678901234567890123"
-	require.True(t, int64(len(val1)) >= db.Opt.ValueThreshold)
+	require.True(t, len(val1) >= db.Opt.ValueThreshold)
 
 	e1 := &model.Entry{
 		Key:   []byte("samplekey"),
@@ -154,7 +155,7 @@ func TestValueGC(t *testing.T) {
 			fmt.Printf("err:%s when key is:%s\n", err, e.Key)
 		}
 		value := getItemValue(t, item)
-		if int64(len(value)) > vlogOpt.ValueThreshold {
+		if len(value) > vlogOpt.ValueThreshold {
 			value = nil
 		}
 		fmt.Printf("key:%s, val:%s, err:%s\n", e.Key, value, err)

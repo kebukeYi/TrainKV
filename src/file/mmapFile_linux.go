@@ -19,19 +19,19 @@ type MmapFile struct {
 	BufLen int64
 }
 
-func OpenMmapFile(fileName string, flag int, maxSz int) (*MmapFile, error) {
+func OpenMmapFile(fileName string, flag int, maxSz int32) (*MmapFile, error) {
 	fd, err := os.OpenFile(fileName, flag, common.DefaultFileMode)
 	if err != nil {
 		return nil, errors.Wrapf(err, "unable to open: %s", fileName)
 	}
 	writable := true
-	fileSize := 0
+	var fileSize int32
 	if flag == os.O_RDONLY {
 		writable = false
 	}
 	fileInfo, err := fd.Stat()
 	if err == nil && fileInfo != nil && fileInfo.Size() > 0 {
-		maxSz = int(fileInfo.Size())
+		maxSz = int32(fileInfo.Size())
 	}
 
 	if maxSz > 0 && fileInfo.Size() == 0 {

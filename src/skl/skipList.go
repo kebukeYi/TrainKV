@@ -1,4 +1,4 @@
-package utils
+package skl
 
 import (
 	"fmt"
@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"trainKv/model"
+	"unsafe"
 )
 
 const (
@@ -15,8 +16,11 @@ const (
 	heightIncrease = math.MaxUint32 / 3
 )
 
+const MaxSkipNodeSize = int(unsafe.Sizeof(skipNode{}))
+
 type skipNode struct {
-	// 前32位是地址 后32位是size
+	// 前32位是在arena空间里的首地址,后32位是size;
+	// 地址空间内容包括: meta, val, expireAt, not version;
 	value uint64
 
 	keyOffset uint32
@@ -141,7 +145,6 @@ func (skipList *SkipList) findLast() *skipNode {
 func (skipList *SkipList) Empty() bool {
 	return skipList.findLast() == nil
 }
-
 func (skipList *SkipList) findNear(key []byte, less bool, allowEqual bool) (*skipNode, bool) {
 	x := skipList.getHead()
 	level := int(skipList.getHeight() - 1)
@@ -231,7 +234,7 @@ func (skipList *SkipList) Get(key []byte) model.ValueExt {
 		return model.ValueExt{}
 	}
 	nextKey := skipList.arena.getKey(findNear.keyOffset, findNear.keySize)
-	if !model.SameKey(key, nextKey) {
+	if !model.SameKeyNoTs(key, nextKey) {
 		return model.ValueExt{}
 	}
 	valOffset, valSize := findNear.getValOffset()
@@ -240,7 +243,7 @@ func (skipList *SkipList) Get(key []byte) model.ValueExt {
 	val.Version = model.ParseTsVersion(nextKey)
 	return val
 }
-func (skipList *SkipList) Put(e *model.Entry) {
+func (skipList *SkipList) Put(e model.Entry) {
 	key, v := e.Key, model.ValueExt{
 		Meta:      e.Meta,
 		Value:     e.Value,
@@ -405,7 +408,7 @@ func (s *SkipListIterator) Rewind() {
 	s.SeekToFirst()
 }
 func (s *SkipListIterator) Item() model.Item {
-	return model.Item{Item: &model.Entry{
+	return model.Item{Item: model.Entry{
 		Key:       s.Key(),
 		Value:     s.Value().Value,
 		Meta:      s.Value().Meta,

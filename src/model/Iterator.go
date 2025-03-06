@@ -11,7 +11,7 @@ type Iterator interface {
 }
 
 type Item struct {
-	Item *Entry
+	Item Entry
 }
 
 type Options struct {

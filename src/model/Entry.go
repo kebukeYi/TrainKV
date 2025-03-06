@@ -27,8 +27,8 @@ type Entry struct {
 	ValThreshold int64
 }
 
-func NewEntry(key, val []byte) *Entry {
-	return &Entry{
+func NewEntry(key, val []byte) Entry {
+	return Entry{
 		Key:   key,
 		Value: val,
 	}
@@ -50,8 +50,6 @@ func BuildEntry() *Entry {
 	rand.Seed(time.Now().Unix())
 	key := []byte(fmt.Sprintf("%s%s", randStr(16), "12345678"))
 	value := []byte(randStr(128))
-	// key := []byte(fmt.Sprintf("%s%s", "硬核课堂", "12345678"))
-	// value := []byte("硬核😁课堂")
 	expiresAt := uint64(time.Now().Add(12*time.Hour).UnixNano() / 1e6)
 	return &Entry{
 		Key:       key,
@@ -95,6 +93,16 @@ func (e *Entry) EstimateSize(valThreshold int) int {
 		// 12 for ValuePointer, 1 for meta.
 		return len(e.Key) + 12 + 1
 	}
+}
+
+func (e *Entry) SafeCopy() Entry {
+	entry := Entry{}
+	entry.Key = SafeCopy(nil, e.Key)
+	entry.Value = SafeCopy(nil, e.Value)
+	entry.Version = e.Version
+	entry.Meta = SafeCopy(nil, []byte{e.Meta})[0]
+	entry.ExpiresAt = e.ExpiresAt
+	return entry
 }
 
 func sizeVarInt(a uint64) (n int) {

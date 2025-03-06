@@ -28,6 +28,15 @@ func CompareKeyNoTs(key1, key2 []byte) int {
 	return bytes.Compare(key1[:len(key1)-8], key2[:len(key2)-8])
 }
 
+func CompareKeyWithTs(key1, key2 []byte) int {
+	if cmp := bytes.Compare(key1[:len(key1)-8], key2[:len(key2)-8]); cmp != 0 {
+		return cmp
+	}
+	key1Version := key1[len(key1)-8:]
+	key2Version := key2[len(key2)-8:]
+	return bytes.Compare(key1Version, key2Version)
+}
+
 func ParseTsVersion(key []byte) uint64 {
 	if len(key) <= 8 {
 		return 0
@@ -44,7 +53,7 @@ func ParseKey(key []byte) []byte {
 	return key[:len(key)-8]
 }
 
-func SameKey(src, dst []byte) bool {
+func SameKeyNoTs(src, dst []byte) bool {
 	if len(src) != len(dst) {
 		return false
 	}
@@ -58,8 +67,17 @@ func KeyWithTs(key []byte) []byte {
 	return out
 }
 
+func KeyWithTestTs(key []byte, version uint64) []byte {
+	out := make([]byte, len(key)+8)
+	copy(out, key)
+	binary.BigEndian.PutUint64(out[len(key):], version)
+	return out
+}
+
 func SafeCopy(des, src []byte) []byte {
-	return append(des[:0], src...)
+	des = make([]byte, len(src))
+	copy(des, src)
+	return des
 }
 
 func NewCurVersion() uint64 {

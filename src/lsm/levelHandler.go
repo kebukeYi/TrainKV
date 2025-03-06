@@ -52,7 +52,7 @@ func (leh *levelHandler) numTables() int {
 	return len(leh.tables)
 }
 
-func (leh *levelHandler) Get(key []byte) (*model.Entry, error) {
+func (leh *levelHandler) Get(key []byte) (model.Entry, error) {
 	// 如果是第0层文件则进行特殊处理
 	if leh.levelID == 0 {
 		// 获取可能存在key的sst
@@ -62,7 +62,7 @@ func (leh *levelHandler) Get(key []byte) (*model.Entry, error) {
 	}
 }
 
-func (leh *levelHandler) searchL0SST(key []byte) (*model.Entry, error) {
+func (leh *levelHandler) searchL0SST(key []byte) (model.Entry, error) {
 	var version uint64
 	for i := len(leh.tables) - 1; i >= 0; i-- {
 		table := leh.tables[i]
@@ -70,16 +70,16 @@ func (leh *levelHandler) searchL0SST(key []byte) (*model.Entry, error) {
 			//fmt.Printf("level[%d] orginKey:%s | Meta: %v table:%s;\n", 0, model.ParseKey(key), entry.Meta, table.Name)
 			return entry, nil
 		} else {
-			return nil, err
+			return model.Entry{}, err
 		}
 	}
-	return nil, common.ErrKeyNotFound
+	return model.Entry{}, common.ErrKeyNotFound
 }
 
-func (leh *levelHandler) searchLnSST(key []byte) (*model.Entry, error) {
+func (leh *levelHandler) searchLnSST(key []byte) (model.Entry, error) {
 	getTable := leh.getTable(key)
 	if getTable == nil {
-		return nil, common.ErrNotFoundTable
+		return model.Entry{}, common.ErrNotFoundTable
 	}
 	defer getTable.DecrRef()
 	var version uint64
@@ -89,7 +89,7 @@ func (leh *levelHandler) searchLnSST(key []byte) (*model.Entry, error) {
 		return entry, nil
 	}
 	common.Err(err)
-	return nil, common.ErrKeyNotFound
+	return model.Entry{}, common.ErrKeyNotFound
 }
 
 // 默认从 首部 开始查询, 找到第一个大于等于key的sst, 除了 0层之外 ,其他层的 table 都是递增规律;
@@ -132,20 +132,12 @@ func (leh *levelHandler) findOverLappingTables(_ levelHandlerRLocked, kr keyRang
 	if len(kr.left) == 0 || len(kr.right) == 0 {
 		return 0, 0
 	}
-	left := sort.Search(leh.numTables(), func(i int) bool {
-		return model.CompareKeyNoTs(kr.left, leh.tables[i].sst.MinKey()) >= 0 &&
-			model.CompareKeyNoTs(kr.left, leh.tables[i].sst.MaxKey()) <= 0
+	left := sort.Search(len(leh.tables), func(i int) bool {
+		return model.CompareKeyNoTs(kr.left, leh.tables[i].sst.MaxKey()) <= 0
 	})
-	if left == leh.numTables() {
-		return 0, -1
-	}
-	right := sort.Search(leh.numTables(), func(i int) bool {
-		return model.CompareKeyNoTs(kr.right, leh.tables[i].sst.MinKey()) >= 0 &&
-			model.CompareKeyNoTs(kr.right, leh.tables[i].sst.MaxKey()) <= 0
+	right := sort.Search(len(leh.tables), func(i int) bool {
+		return model.CompareKeyNoTs(kr.right, leh.tables[i].sst.MinKey()) < 0
 	})
-	if right == leh.numTables() {
-		right = left
-	}
 	return left, right
 }
 

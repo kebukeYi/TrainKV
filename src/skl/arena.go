@@ -1,4 +1,4 @@
-package utils
+package skl
 
 import (
 	"fmt"
@@ -11,10 +11,8 @@ import (
 
 const (
 	// 8 - 1  = 7 字节
-	nodeAlign = int(unsafe.Sizeof(uint64(0))) - 1
-	//MaxNodeSize = int(unsafe.Sizeof(&skipNode{}))
-	MaxNodeSize = int(unsafe.Sizeof(skipNode{}))
-	offsetSize  = int(unsafe.Sizeof(uint32(0)))
+	nodeAlign  = int(unsafe.Sizeof(uint64(0))) - 1
+	offsetSize = int(unsafe.Sizeof(uint32(0)))
 )
 
 type Arena struct {
@@ -38,7 +36,7 @@ func (a *Arena) allocate(sz uint32) uint32 {
 		AssertTrue(int(offset) <= len(a.data))
 		return offset - sz
 	}
-	if int(offset) > len(a.data)-MaxNodeSize {
+	if int(offset) > len(a.data)-MaxSkipNodeSize {
 		growBy := uint32(len(a.data))
 		if growBy > 1<<30 {
 			growBy = 1 << 30
@@ -59,7 +57,7 @@ func (a *Arena) size() int64 {
 
 func (a *Arena) AllocateNode(height int) uint32 {
 	unUsedSize := (maxHeight - height) * offsetSize
-	u := uint32(MaxNodeSize - unUsedSize + nodeAlign)
+	u := uint32(MaxSkipNodeSize - unUsedSize + nodeAlign)
 	n := a.allocate(u)
 	m := (n + uint32(nodeAlign)) & ^uint32(nodeAlign)
 	return m

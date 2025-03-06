@@ -30,7 +30,7 @@ func TestLSM_Get(t *testing.T) {
 
 	// Test key found in memoryTable
 	keyWithTs := model.KeyWithTs(key)
-	lsm.memoryTable.Put(&model.Entry{Key: keyWithTs, Value: value})
+	lsm.memoryTable.Put(model.Entry{Key: keyWithTs, Value: value})
 	entry, err := lsm.Get(keyWithTs)
 	errors.Panic(err)
 	fmt.Printf("entry: %v\n", entry)
@@ -40,7 +40,7 @@ func TestLSM_Get(t *testing.T) {
 	// Test key found in imemoryTables
 	lsm.immemoryTables = append(lsm.immemoryTables, lsm.NewMemoryTable())
 	keyWithTs = model.KeyWithTs(key)
-	lsm.immemoryTables[0].Put(&model.Entry{Key: keyWithTs, Value: value})
+	lsm.immemoryTables[0].Put(model.Entry{Key: keyWithTs, Value: value})
 	entry, err = lsm.Get(keyWithTs)
 	errors.Panic(err)
 	fmt.Printf("entry: %v\n", entry)
@@ -50,7 +50,7 @@ func TestLSM_Get(t *testing.T) {
 
 func TestLSM_Put(t *testing.T) {
 	lsm := NewLSM(lsmOptions)
-	entry := &model.Entry{Key: []byte("testKey"), Value: []byte("testValue")}
+	entry := model.Entry{Key: []byte("testKey"), Value: []byte("testValue")}
 
 	// Test successful Put
 	success := lsm.Put(entry)

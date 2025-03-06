@@ -23,6 +23,7 @@ func (b BloomFilter) mayContain(keyHash uint32) bool {
 	}
 	return true
 }
+
 func (b BloomFilter) mayContainKey(key []byte) bool {
 	return b.mayContain(utils.Hash(key))
 }

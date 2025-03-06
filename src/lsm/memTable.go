@@ -10,7 +10,8 @@ import (
 	"sync/atomic"
 	errors "trainKv/common"
 	"trainKv/model"
-	. "trainKv/utils"
+	. "trainKv/skl"
+	"trainKv/utils"
 )
 
 const MemTableName string = ".memtable"
@@ -27,10 +28,10 @@ type memoryTable struct {
 
 func (lsm *LSM) NewMemoryTable() *memoryTable {
 	newFid := atomic.AddUint64(&(lsm.levelManger.maxFID), 1)
-	walFileOpt := &model.FileOptions{
+	walFileOpt := &utils.FileOptions{
 		Dir:      lsm.option.WorkDir,
 		Flag:     os.O_CREATE | os.O_RDWR,
-		MaxSz:    int(lsm.option.MemTableSize), // wal 要设置多大比较合理？ 姑且跟sst一样大
+		MaxSz:    int32(lsm.option.MemTableSize),
 		FID:      newFid,
 		FileName: mtFilePath(lsm.option.WorkDir, newFid),
 	}
@@ -42,15 +43,15 @@ func (lsm *LSM) NewMemoryTable() *memoryTable {
 	}
 }
 
-func (m *memoryTable) Get(key []byte) (*model.Entry, error) {
+func (m *memoryTable) Get(key []byte) (model.Entry, error) {
 	if key == nil {
-		return nil, errors.ErrNotFound
+		return model.Entry{}, errors.ErrNotFound
 	}
 	val := m.skipList.Get(key) // 没有找到就返回: model.ValueExt{}
 	if val.Meta == 0 && val.Value == nil {
-		return nil, errors.ErrNotFound
+		return model.Entry{}, errors.ErrNotFound
 	}
-	e := &model.Entry{
+	e := model.Entry{
 		Key:       key,
 		Value:     val.Value,
 		Meta:      val.Meta,
@@ -60,7 +61,7 @@ func (m *memoryTable) Get(key []byte) (*model.Entry, error) {
 	return e, nil
 }
 
-func (m *memoryTable) Put(e *model.Entry) error {
+func (m *memoryTable) Put(e model.Entry) error {
 	if err := m.wal.Write(e); err != nil {
 		return err
 	}
@@ -129,10 +130,10 @@ func (lsm *LSM) recovery() (*memoryTable, []*memoryTable) {
 }
 
 func (lsm *LSM) openMemTable(walFid uint64) (*memoryTable, error) {
-	fileOpt := &model.FileOptions{
+	fileOpt := &utils.FileOptions{
 		Dir:      lsm.option.WorkDir,
 		Flag:     os.O_CREATE | os.O_RDWR,
-		MaxSz:    int(lsm.option.MemTableSize),
+		MaxSz:    int32(lsm.option.MemTableSize),
 		FID:      walFid,
 		FileName: mtFilePath(lsm.option.WorkDir, walFid),
 	}
@@ -157,9 +158,9 @@ func (m *memoryTable) recovery2SkipList() error {
 	//reader := bufio.NewReader(m.wal.file.NewReader(int(0))) // error
 	//reader := model.NewHashReader(m.wal.file.Fd) // ok
 	for {
-		var e *model.Entry
+		var e model.Entry
 		e, readAt = m.wal.Read(m.wal.file.Fd)
-		if readAt > 0 && e != nil {
+		if readAt > 0 && e.Value != nil {
 			m.skipList.Put(e)
 			continue
 		} else {

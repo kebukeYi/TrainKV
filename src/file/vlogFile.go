@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"trainKv/common"
 	"trainKv/model"
+	"trainKv/utils"
 )
 
 type VLogFile struct {
@@ -22,7 +23,7 @@ type VLogFile struct {
 	Lock sync.RWMutex
 }
 
-func (vlog *VLogFile) Open(opt *model.FileOptions) error {
+func (vlog *VLogFile) Open(opt *utils.FileOptions) error {
 	var err error
 	vlog.FID = uint32(opt.FID)
 	vlog.Lock = sync.RWMutex{}
@@ -126,7 +127,7 @@ func (vlog *VLogFile) Close() error {
 // +--------+-----+-------+-------+
 // | header | key | value | crc32 |
 // +--------+-----+-------+-------+
-func (vlog *VLogFile) EncodeEntry(entry *model.Entry, out *bytes.Buffer) (int, error) {
+func (vlog *VLogFile) EncodeEntry(entry model.Entry, out *bytes.Buffer) (int, error) {
 	header := model.EntryHeader{
 		KLen:      uint32(len(entry.Key)),
 		VLen:      uint32(len(entry.Value)),

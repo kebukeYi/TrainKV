@@ -16,7 +16,7 @@ func (db *TrainKVDB) NewDBIterator(opt *model.Options) *DBIterator {
 	iters = append(iters, db.Lsm.NewLsmIterator(opt)...)
 	res := &DBIterator{
 		//iter: nil,
-		iter: lsm.NewMergeIterator(iters, !opt.IsAsc, nil),
+		iter: lsm.NewMergeIterator(iters, !opt.IsAsc),
 		vlog: db.vlog,
 	}
 	return res
@@ -24,7 +24,7 @@ func (db *TrainKVDB) NewDBIterator(opt *model.Options) *DBIterator {
 
 func (dbIter *DBIterator) Next() {
 	dbIter.iter.Next()
-	for ; dbIter.Valid() && dbIter.Item().Item == nil; dbIter.iter.Next() {
+	for ; dbIter.Valid() && dbIter.Item().Item.Value == nil; dbIter.iter.Next() {
 	}
 }
 
@@ -37,14 +37,14 @@ func (dbIter *DBIterator) Seek(key []byte) {
 }
 func (dbIter *DBIterator) Rewind() {
 	dbIter.iter.Rewind()
-	for ; dbIter.Valid() && dbIter.Item().Item == nil; dbIter.iter.Next() {
+	for ; dbIter.Valid() && dbIter.Item().Item.Value == nil; dbIter.iter.Next() {
 	}
 }
 func (dbIter *DBIterator) Item() model.Item {
 	entry := dbIter.iter.Item().Item
 	var value []byte
 
-	if entry != nil && model.IsValPtr(entry) {
+	if entry.Value != nil && model.IsValPtr(entry) {
 		//var vp *model.ValuePtr
 		var vp model.ValuePtr
 		vp.Decode(entry.Value)
@@ -52,7 +52,7 @@ func (dbIter *DBIterator) Item() model.Item {
 		defer model.RunCallback(callback)
 		if err != nil {
 			fmt.Printf("dbIter read Item()value error: %v", err)
-			return model.Item{Item: nil}
+			return model.Item{Item: model.Entry{}}
 		}
 		value = model.SafeCopy(nil, read)
 	}
@@ -60,9 +60,9 @@ func (dbIter *DBIterator) Item() model.Item {
 	if entry.IsDeleteOrExpired() {
 		fmt.Printf("entry is deleted or expired, key:%s, len(val):%d, expiresAt:%d, Meat:%d ;\n",
 			model.ParseKey(entry.Key), len(entry.Value), entry.ExpiresAt, entry.Meta)
-		return model.Item{Item: nil}
+		return model.Item{Item: model.Entry{}}
 	}
-	ret := &model.Entry{
+	ret := model.Entry{
 		Key:       entry.Key,
 		Value:     value,
 		ExpiresAt: entry.ExpiresAt,

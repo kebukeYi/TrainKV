@@ -11,6 +11,7 @@ import (
 	errors "trainKv/common"
 	"trainKv/file"
 	"trainKv/model"
+	"trainKv/utils"
 )
 
 const (
@@ -64,13 +65,13 @@ func (h *WalHeader) decode(reader *model.HashReader) (int, error) {
 type WAL struct {
 	mux     *sync.Mutex
 	file    *file.MmapFile
-	opt     *model.FileOptions
+	opt     *utils.FileOptions
 	size    uint32
 	writeAt uint32
 	readAt  uint32
 }
 
-func OpenWalFile(opt *model.FileOptions) *WAL {
+func OpenWalFile(opt *utils.FileOptions) *WAL {
 	fmt.Printf("#OpenWalFile(), wal open file %s with flag: %v\n", opt.FileName, opt.Flag)
 
 	mmapFile, err := file.OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
@@ -92,7 +93,7 @@ func OpenWalFile(opt *model.FileOptions) *WAL {
 	return wal
 }
 
-func (w *WAL) Write(e *model.Entry) error {
+func (w *WAL) Write(e model.Entry) error {
 	w.mux.Lock()
 	defer w.mux.Unlock()
 	walEncode, size := w.WalEncode(e)
@@ -104,20 +105,20 @@ func (w *WAL) Write(e *model.Entry) error {
 	return nil
 }
 
-func (w *WAL) Read(reader io.Reader) (*model.Entry, uint32) {
+func (w *WAL) Read(reader io.Reader) (model.Entry, uint32) {
 	entry, err := w.WalDecode(reader)
 	if err != nil {
 		if err == io.EOF {
-			return nil, 0
+			return model.Entry{}, 0
 		}
 		errors.Panic(err)
-		return nil, 0
+		return model.Entry{}, 0
 	}
 	return entry, w.readAt
 }
 
 // WalEncode | header(klen,vlen,meta,expir) | key | value | crc32 |
-func (w *WAL) WalEncode(e *model.Entry) ([]byte, int) {
+func (w *WAL) WalEncode(e model.Entry) ([]byte, int) {
 	header := WalHeader{
 		keyLen:    uint32(len(e.Key)),
 		valLen:    uint32(len(e.Value)),
@@ -141,18 +142,18 @@ func (w *WAL) WalEncode(e *model.Entry) ([]byte, int) {
 	return buf.Bytes(), len(headerEnc[:sz]) + len(e.Key) + len(e.Value) + len(crcBuf)
 }
 
-func (w *WAL) WalDecode(reader io.Reader) (*model.Entry, error) {
+func (w *WAL) WalDecode(reader io.Reader) (model.Entry, error) {
 	var err error
 	hashReader := model.NewHashReader(reader)
 	var header WalHeader
 	headLen, err := header.decode(hashReader)
 	if header.keyLen == 0 {
-		return nil, io.EOF
+		return model.Entry{}, io.EOF
 	}
 	if err != nil {
-		return nil, err
+		return model.Entry{}, err
 	}
-	entry := &model.Entry{}
+	entry := model.Entry{}
 
 	dataBuf := make([]byte, header.keyLen+header.valLen)
 	dataLen, err := io.ReadFull(hashReader, dataBuf[:])
@@ -160,7 +161,7 @@ func (w *WAL) WalDecode(reader io.Reader) (*model.Entry, error) {
 		if err == io.EOF {
 			err = errors.ErrTruncate
 		}
-		return nil, err
+		return model.Entry{}, err
 	}
 	entry.Key = dataBuf[:header.keyLen]
 	entry.Value = dataBuf[header.keyLen:]
@@ -171,11 +172,11 @@ func (w *WAL) WalDecode(reader io.Reader) (*model.Entry, error) {
 	crcBuf := make([]byte, crcSize)
 	crcLen, err := io.ReadFull(reader, crcBuf[:])
 	if err != nil {
-		return nil, err
+		return model.Entry{}, err
 	}
 	readChecksumIEEE := binary.BigEndian.Uint32(crcBuf[:])
 	if readChecksumIEEE != sum32 {
-		return nil, errors.ErrWalInvalidCrc
+		return model.Entry{}, errors.ErrWalInvalidCrc
 	}
 	w.readAt += uint32(headLen + dataLen + crcLen)
 	return entry, nil

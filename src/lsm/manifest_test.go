@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 	"trainKv/common"
-	interfaces "trainKv/model"
+	"trainKv/utils"
 )
 
 func TestOpenManifestFile(t *testing.T) {
@@ -18,9 +18,8 @@ func TestOpenManifestFile(t *testing.T) {
 
 	// Test case 1: File does not exist, should create a new file and manifest
 	t.Run("FileDoesNotExist", func(t *testing.T) {
-		opt := &interfaces.FileOptions{Dir: tempDir}
-		fileOptions := interfaces.FileOptions(*opt)
-		manifestFile, err := OpenManifestFile(&fileOptions)
+		opt := &utils.FileOptions{Dir: tempDir}
+		manifestFile, err := OpenManifestFile(opt)
 		if err != nil {
 			t.Errorf("Expected no error, got %v", err)
 		}
@@ -37,9 +36,8 @@ func TestOpenManifestFile(t *testing.T) {
 
 	// Test case 2: File exists, should open the existing file and manifest
 	t.Run("FileExists", func(t *testing.T) {
-		opt := &interfaces.FileOptions{Dir: tempDir}
-		fileOptions := interfaces.FileOptions(*opt)
-		manifestFile, _ := OpenManifestFile(&fileOptions)
+		opt := &utils.FileOptions{Dir: tempDir}
+		manifestFile, _ := OpenManifestFile(opt)
 
 		// Create a dummy file with some content
 		content := []byte("dummy content")
@@ -49,7 +47,7 @@ func TestOpenManifestFile(t *testing.T) {
 		}
 
 		// Open the existing file
-		manifestFile, err = OpenManifestFile(&fileOptions)
+		manifestFile, err = OpenManifestFile(opt)
 		if err != nil {
 			t.Errorf("Expected no error, got: %v", err)
 		}

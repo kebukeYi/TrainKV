@@ -46,7 +46,6 @@ func buildTestTable(t *testing.T, prefix string, n int, opts *Options) *table {
 	return buildTable(t, keyValues, opts)
 }
 
-// keyValues is n by 2 where n is number of pairs.
 func buildTable(t *testing.T, keyValues [][]string, opts *Options) *table {
 	builder := newSSTBuilder(opts)
 	// TODO: Add test for file garbage collection here. No files should be left after the tests here.
@@ -58,7 +57,7 @@ func buildTable(t *testing.T, keyValues [][]string, opts *Options) *table {
 		return keyValues[i][0] < keyValues[j][0]
 	})
 	for _, kv := range keyValues {
-		e := &model.Entry{
+		e := model.Entry{
 			Key:   model.KeyWithTs([]byte(kv[0])),
 			Value: []byte(kv[1]),
 		}
@@ -284,7 +283,7 @@ func TestMergingIterator(t *testing.T) {
 
 	it1 := tbl1.NewTableIterator(&model.Options{IsAsc: true})
 	it2 := NewConcatIterator([]*table{tbl2}, &model.Options{IsAsc: true})
-	it := NewMergeIterator([]model.Iterator{it1, it2}, false, nil)
+	it := NewMergeIterator([]model.Iterator{it1, it2}, false)
 	defer it.Close()
 
 	var i int

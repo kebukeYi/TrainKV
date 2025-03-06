@@ -33,6 +33,9 @@ func openTable(lm *levelsManger, tableName string, builder *sstBuilder) *table {
 		err error
 	)
 	fid := utils.FID(tableName)
+	if fid > lm.maxFID {
+		lm.maxFID = fid
+	}
 	if builder != nil {
 		if t, err = builder.flush(lm, tableName); err != nil {
 			common.Err(err)
@@ -40,12 +43,12 @@ func openTable(lm *levelsManger, tableName string, builder *sstBuilder) *table {
 		}
 	} else {
 		t = &table{lm: lm, fid: fid, Name: strconv.FormatUint(fid, 10) + SSTableName}
-		t.sst = OpenSStable(&model.FileOptions{
+		t.sst = OpenSStable(&utils.FileOptions{
 			FileName: tableName,
-			Dir:      lm.opt.WorkDir,
-			Flag:     os.O_CREATE | os.O_RDWR,
-			MaxSz:    int(lm.opt.SSTableMaxSz),
-			FID:      fid,
+			//Dir:      lm.opt.WorkDir,
+			Flag:  os.O_CREATE | os.O_RDWR,
+			MaxSz: int32(lm.opt.SSTableMaxSz),
+			FID:   fid,
 		})
 	}
 	t.IncrRef()
@@ -64,28 +67,28 @@ func openTable(lm *levelsManger, tableName string, builder *sstBuilder) *table {
 	return t
 }
 
-func (t *table) Search(key []byte, maxVs *uint64) (entry *model.Entry, err error) {
+func (t *table) Search(key []byte, maxVs *uint64) (entry model.Entry, err error) {
 	t.IncrRef()
 	defer t.DecrRef()
 	indexData := t.sst.Indexs()
 	bloomFilter := utils.Filter(indexData.BloomFilter)
 	if t.sst.HasBloomFilter() && !bloomFilter.MayContainKey(model.ParseKey(key)) {
-		return nil, common.ErrNotFound
+		return model.Entry{}, common.ErrNotFound
 	}
 	iterator := t.NewTableIterator(&model.Options{IsAsc: true})
 	defer iterator.Close()
 	iterator.Seek(key)
 	if !iterator.Valid() { // 有可能在有效的情况下,返回错误的数值;
-		return nil, iterator.err
+		return model.Entry{}, iterator.err
 	}
 	// todo 2. 判断key是否在sst中,也是祛除掉了 Key 的Ts版本号
-	if model.SameKey(key, iterator.Item().Item.Key) {
+	if model.SameKeyNoTs(key, iterator.Item().Item.Key) {
 		if version := model.ParseTsVersion(iterator.Item().Item.Key); version > 0 {
 			*maxVs = version
 			return iterator.Item().Item, nil
 		}
 	}
-	return nil, common.ErrKeyNotFound
+	return model.Entry{}, common.ErrKeyNotFound
 }
 
 func (t *table) getBlock(idx int) (*block, error) {
@@ -165,11 +168,9 @@ func (t *table) blockCacheKey(idx int) []byte {
 }
 
 func (t *table) Size() int64 { return t.sst.Size() }
-
 func (t *table) getStaleDataSize() uint32 {
 	return t.sst.Indexs().StaleDataSize
 }
-
 func (t *table) IncrRef() {
 	atomic.AddInt32(&t.ref, 1)
 }
@@ -181,6 +182,7 @@ func (t *table) DecrRef() error {
 			t.lm.cache.blockData.Del(t.blockCacheKey(i))
 		}
 		if err := t.Delete(); err != nil {
+
 			return err
 		}
 	}
@@ -198,10 +200,10 @@ func (t *table) GetCreatedAt() *time.Time {
 	return t.sst.GetCreatedAt()
 }
 func (t *table) Delete() error {
+	fmt.Printf("delete sstTable: %d \n", t.sst.fid)
 	return t.sst.Detele()
 }
 
-// table 层面的容器迭代器
 type tableIterator struct {
 	name         string
 	it           model.Item
@@ -354,12 +356,10 @@ func (tier *tableIterator) seekFrom(key []byte) {
 func (tier *tableIterator) seekPrev(key []byte) {
 	tier.seekFrom(key)
 	currKey := tier.Item().Item.Key
-	if !model.SameKey(key, currKey) {
+	if !model.SameKeyNoTs(key, currKey) {
 		tier.prev()
 	}
 }
-
-// SeekHelper 在 sst 中指定 block 进行扫描
 func (tier *tableIterator) SeekHelper(blockIdx int, key []byte) {
 	tier.blockIterPos = blockIdx
 	// 加载 block

@@ -142,6 +142,7 @@ func (lm *levelsManger) levelTargets() targets {
 	// 1, 为空
 	// 2, 不为空
 	totalSize := lm.lastLevel().getTotalSize()
+	// 从最底层开始向上扫描;
 	for i := len(lm.levelHandlers) - 1; i > 0; i-- {
 		levelTargetSize := adjusted(totalSize)
 		dst.levelTargetSSize[i] = levelTargetSize
@@ -309,8 +310,8 @@ func (lm *levelsManger) findTablesL0ToDstLevel(cd *compactDef) bool {
 	cd.thisTables = out
 
 	left, right := cd.nextLevel.findOverLappingTables(levelHandlerRLocked{}, cd.thisRange)
-	cd.nextTables = make([]*table, 0)
-	cd.nextTables = append(cd.nextTables, cd.nextLevel.tables[left:right+1]...)
+	cd.nextTables = make([]*table, right-left)
+	copy(cd.nextTables, cd.nextLevel.tables[left:right])
 
 	if len(cd.nextTables) == 0 {
 		cd.nextRange = cd.thisRange
@@ -393,9 +394,11 @@ func (lm *levelsManger) findTables(cd *compactDef) bool {
 			continue
 		}
 		cd.thisTables = []*table{t}
+
 		left, right := cd.nextLevel.findOverLappingTables(levelHandlerRLocked{}, cd.thisRange)
-		cd.nextTables = make([]*table, 0)
-		cd.nextTables = append(cd.nextTables, cd.nextLevel.tables[left:right+1]...)
+		cd.nextTables = make([]*table, right-left)
+		copy(cd.nextTables, cd.nextLevel.tables[left:right])
+
 		if len(cd.nextTables) == 0 {
 			cd.nextTables = []*table{}
 			cd.nextRange = cd.thisRange
@@ -498,7 +501,6 @@ func (lm *levelsManger) runCompactDef(id int, level int, cd compactDef) error {
 	thisLevel := cd.thisLevel
 	nextLevel := cd.nextLevel
 	if thisLevel == nextLevel {
-
 	} else {
 		lm.addSplits(&cd)
 	}
@@ -560,7 +562,7 @@ func (lm *levelsManger) compactBuildTables(level int, cd compactDef) ([]*table, 
 		go func(kr keyRange) {
 			defer inflightBuilders.Done(nil)
 			iterators := newIterator()
-			iterator := NewMergeIterator(iterators, false, lm.lsm)
+			iterator := NewMergeIterator(iterators, false)
 			defer iterator.Close()
 			lm.subCompact(iterator, kr, cd, inflightBuilders, res)
 		}(split)
@@ -601,7 +603,10 @@ func (lm *levelsManger) subCompact(iterator model.Iterator, kr keyRange, cd comp
 		lm.updateDiscardStats(discardStats)
 	}()
 	var lastKey []byte
-	updateDiscardStats := func(e *model.Entry) {
+	var lastEntry model.Entry
+
+	// 统计 需要通知 vlogGC的 无效key数据;
+	updateDiscardStats := func(e model.Entry) {
 		if e.Meta&common.BitValuePointer > 0 {
 			var vp model.ValuePtr
 			vp.Decode(e.Value)
@@ -609,33 +614,72 @@ func (lm *levelsManger) subCompact(iterator model.Iterator, kr keyRange, cd comp
 		}
 	}
 
-	addKeys := func(builder *sstBuilder) {
-		var tableKr keyRange
-		for ; iterator.Valid(); iterator.Next() {
-			key := iterator.Item().Item.Key
-			isDeletedOrExpired := IsDeletedOrExpired(iterator.Item().Item)
-			if !model.SameKey(key, lastKey) {
-				if len(kr.right) > 0 && model.CompareKeyNoTs(key, kr.right) >= 0 {
-					break
-				}
-				if builder.ReachedCapacity() {
-					break
-				}
-				lastKey = model.SafeCopy(lastKey, key)
-				if len(tableKr.left) == 0 {
-					tableKr.left = model.SafeCopy(tableKr.left, key)
-				}
-				tableKr.right = lastKey
-			}
-			switch {
-			case isDeletedOrExpired:
-				updateDiscardStats(iterator.Item().Item)
-				builder.AddStaleKey(iterator.Item().Item)
-			default:
-				builder.AddKey(iterator.Item().Item)
-			}
+	// 经过判断,得到最后真正需要保留的key;
+	builderAdd := func(builder *sstBuilder, e model.Entry) {
+		isDeletedOrExpired := IsDeletedOrExpired(e)
+		switch {
+		case isDeletedOrExpired:
+			builder.AddStaleKey(e)
+		default:
+			builder.AddKey(e)
 		}
 	}
+
+	// 1. 判断key是否需要保留
+	// 2. 判断key是否需要通知 vlogGC
+	judgeKeys := func(builder *sstBuilder) {
+		var tableKr keyRange
+		for ; iterator.Valid(); iterator.Next() {
+			curKey := iterator.Item().Item.Key
+			// 1.sst aaa:1
+			// 2.sst aaa:1 aaa:5 aaa:8 bbb:6 bbb:8 ccc:5
+			// 3.sst aaa:1 bbb:3 ddd:8(out)
+
+			if lastKey == nil {
+				lastKey = model.SafeCopy(lastKey, curKey)
+				item := iterator.Item().Item
+				lastEntry = item.SafeCopy()
+			}
+
+			if len(kr.right) > 0 && model.CompareKeyNoTs(curKey, kr.right) >= 0 {
+				lastEntry.Key = nil
+				break
+			}
+			if builder.ReachedCapacity() {
+				break
+			}
+			if len(tableKr.left) == 0 {
+				tableKr.left = model.SafeCopy(tableKr.left, curKey)
+			}
+			tableKr.right = model.SafeCopy(tableKr.right, curKey)
+
+			// lastKey: nil     curKey: bbb:5
+			// lastKey: aaa:5   curKey: bbb:5
+			if !model.SameKeyNoTs(curKey, lastKey) {
+				builderAdd(builder, lastEntry)
+				lastKey = model.SafeCopy(lastKey, curKey)
+				item := iterator.Item().Item
+				lastEntry = item.SafeCopy()
+			} else {
+				// lastKey: aaa:1  curKey: aaa:5  nextKey: aaa:9
+				if model.ParseTsVersion(curKey) > model.ParseTsVersion(lastKey) {
+					// skip lastKey
+					updateDiscardStats(lastEntry)
+					lastKey = model.SafeCopy(lastKey, curKey)
+					item := iterator.Item().Item
+					lastEntry = item.SafeCopy()
+				} else {
+					// model.ParseTsVersion(curKey) <= model.ParseTsVersion(lastKey)
+					// don`t do anything; continue to next key;
+				}
+			}
+		} // for over
+		// 额外情况: 假如当前 sst 中只含有一个 key, 那么也需要进行保存;
+		if lastEntry.Key != nil {
+			tableKr.right = model.SafeCopy(tableKr.right, lastEntry.Key)
+			builderAdd(builder, lastEntry)
+		}
+	} // addKeys Over;
 
 	if len(kr.left) > 0 {
 		iterator.Seek(kr.left)
@@ -650,7 +694,7 @@ func (lm *levelsManger) subCompact(iterator model.Iterator, kr keyRange, cd comp
 		}
 
 		builder := newSSTBuilderWithSSTableSize(lm.opt, cd.dst.fileSize[cd.nextLevel.levelID])
-		addKeys(builder)
+		judgeKeys(builder)
 		if builder.empty() {
 			continue
 		}
@@ -677,28 +721,6 @@ func (lm *levelsManger) updateDiscardStats(discardStats map[uint32]int64) {
 	case *lm.lsm.option.DiscardStatsCh <- discardStats:
 	}
 }
-
-func (lsm *LSM) MonitorVlogExpiredValPtr() {
-	// defer lsm.Close()
-	discardStats := make(map[uint32]int64)
-	var expiredValNum int
-	var expiredValSize int64
-	for {
-		select {
-		case <-lsm.Closer.CloseSignal:
-			return
-		case vp := <-lsm.ExpiredValPtrChan:
-			discardStats[vp.Fid] += int64(vp.Len)
-			expiredValSize += int64(vp.Len)
-			expiredValNum++
-			if expiredValNum >= lsm.ExpiredValNum || expiredValSize >= lsm.ExpiredValSize {
-				lsm.levelManger.updateDiscardStats(discardStats)
-				discardStats = make(map[uint32]int64)
-			}
-		}
-	}
-}
-
 func iteratorsReversed(tables []*table, options *model.Options) []model.Iterator {
 	out := make([]model.Iterator, 0)
 	for i := len(tables) - 1; i >= 0; i-- {
@@ -846,8 +868,8 @@ func (cs *compactIngStatus) compareAndAdd(_ thisAndNextLevelRLocked, cd compactD
 	return true
 }
 
-func IsDeletedOrExpired(e *model.Entry) bool {
-	if e.Value == nil || len(e.Value) == 0 || e.Meta&common.BitDelete > 0 {
+func IsDeletedOrExpired(e model.Entry) bool {
+	if e.Meta&common.BitDelete > 0 || e.Value == nil || len(e.Value) == 0 {
 		return true
 	}
 	if e.ExpiresAt == 0 {

@@ -1,7 +1,6 @@
 package src
 
 import (
-	"fmt"
 	"github.com/pkg/errors"
 	"sync"
 	"trainKv/common"
@@ -10,30 +9,11 @@ import (
 	"trainKv/utils"
 )
 
-type DBOptions struct {
-	ValueThreshold      int64
-	WorkDir             string
-	MemTableSize        int64
-	SSTableSize         int64
-	MaxBatchCount       int64
-	MaxBatchSize        int64
-	ValueLogFileSize    int
-	VerifyValueChecksum bool
-	ValueLogMaxEntries  uint32
-	BloomFalsePositive  float64
-	CacheSize           int // 缓存容量 B
-	SSTBlockSize        uint32
-	LogRotatesToFlush   int32
-	MaxTableSize        int64
-
-	UpdateVlogRePlayHead chan model.ValuePtr
-}
-
 type TrainKVDB struct {
 	Mux            sync.Mutex
 	Lsm            *lsm.LSM
 	vlog           *ValueLog
-	Opt            *DBOptions
+	Opt            *lsm.Options
 	writeCh        chan *Request
 	blockWrites    int32
 	VlogReplayHead model.ValuePtr
@@ -41,16 +21,16 @@ type TrainKVDB struct {
 	Closer         *utils.Closer
 }
 
-func Open(opt *DBOptions) (*TrainKVDB, error) {
+func Open(opt *lsm.Options) (*TrainKVDB, error) {
 	db := &TrainKVDB{Opt: opt}
 	db.initVlog()
 	db.Lsm = lsm.NewLSM(&lsm.Options{
 		WorkDir:             opt.WorkDir,
 		MemTableSize:        opt.MemTableSize,
-		SSTableMaxSz:        opt.SSTableSize,
-		BlockSize:           opt.SSTBlockSize,
+		SSTableMaxSz:        opt.SSTableMaxSz,
+		BlockSize:           opt.BlockSize,
 		BloomFalsePositive:  opt.BloomFalsePositive,
-		CacheNums:           opt.CacheSize,
+		CacheNums:           opt.CacheNums,
 		NumCompactors:       2,
 		BaseLevelSize:       10 << 20,
 		LevelSizeMultiplier: 10,
@@ -67,8 +47,6 @@ func Open(opt *DBOptions) (*TrainKVDB, error) {
 	}); err != nil {
 		common.Panic(err)
 	}
-	// 当后台 compact GC启动后, 此通道就 在遍历sst时 接收到 vlog 类型数据的过期数据;
-	go db.Lsm.MonitorVlogExpiredValPtr()
 	// 启动 sstable 的合并压缩过程
 	//go db.Lsm.StartCompacter()
 	db.writeCh = make(chan *Request)
@@ -77,28 +55,30 @@ func Open(opt *DBOptions) (*TrainKVDB, error) {
 	return db, nil
 }
 
-func (db *TrainKVDB) Get(key []byte) (*model.Entry, error) {
+func (db *TrainKVDB) Get(key []byte) (model.Entry, error) {
 	if key == nil {
-		return nil, common.ErrEmptyKey
+		return model.Entry{}, common.ErrEmptyKey
 	}
 	internalKey := model.KeyWithTs(key)
 	var (
-		entry *model.Entry
+		entry model.Entry
 		err   error
 	)
 	if entry, err = db.Lsm.Get(internalKey); err != nil {
-		return entry, err
+		return model.Entry{}, err
 	}
-	if entry != nil && lsm.IsDeletedOrExpired(entry) {
-		return nil, common.ErrKeyNotFound
+
+	if lsm.IsDeletedOrExpired(entry) {
+		return model.Entry{}, common.ErrKeyNotFound
 	}
-	if entry != nil && model.IsValPtr(entry) {
+
+	if entry.Value != nil && model.IsValPtr(entry) {
 		var vp model.ValuePtr
 		vp.Decode(entry.Value)
 		read, callBack, err := db.vlog.Read(&vp)
 		defer model.RunCallback(callBack)
 		if err != nil {
-			return nil, err
+			return model.Entry{}, err
 		}
 		entry.Value = model.SafeCopy(nil, read)
 	}
@@ -106,8 +86,8 @@ func (db *TrainKVDB) Get(key []byte) (*model.Entry, error) {
 	return entry, nil
 }
 
-func (db *TrainKVDB) Set(entry *model.Entry) error {
-	if entry == nil || len(entry.Key) == 0 {
+func (db *TrainKVDB) Set(entry model.Entry) error {
+	if entry.Key == nil || len(entry.Key) == 0 {
 		return common.ErrEmptyKey
 	}
 	var (
@@ -127,7 +107,7 @@ func (db *TrainKVDB) Set(entry *model.Entry) error {
 }
 
 func (db *TrainKVDB) Del(key []byte, id uint64) error {
-	return db.Set(&model.Entry{
+	return db.Set(model.Entry{
 		Key:       key,
 		Value:     nil,
 		Meta:      common.BitDelete,
@@ -248,8 +228,8 @@ func (db *TrainKVDB) writeToLSM(req *Request) error {
 	return nil
 }
 
-func (db *TrainKVDB) ShouldWriteValueToLSM(entry *model.Entry) bool {
-	return int64(len(entry.Value)) < db.Opt.ValueThreshold
+func (db *TrainKVDB) ShouldWriteValueToLSM(entry model.Entry) bool {
+	return len(entry.Value) < db.Opt.ValueThreshold
 }
 
 func (db *TrainKVDB) initVlog() {
@@ -267,85 +247,6 @@ func (db *TrainKVDB) initVlog() {
 	vlog.Opt = db.Opt
 	vlog.GarbageCh = make(chan struct{}, 1)
 	db.vlog = vlog
-}
-
-func (db *TrainKVDB) vlogReplayFunction() func(entry *model.Entry, vpr *model.ValuePtr) error {
-	toLSM := func(key []byte, vs model.ValueExt) {
-		err := db.Lsm.Put(&model.Entry{
-			Key:       key,
-			Value:     vs.Value,
-			ExpiresAt: vs.ExpiresAt,
-			Meta:      vs.Meta,
-			Version:   vs.Version,
-		})
-		if err != nil {
-			common.Err(err)
-		}
-	}
-	isInLSM := func(e *model.Entry, e_vlog *model.ValuePtr) bool {
-		vs, err := db.Lsm.Get(e.Key)
-		if err != nil {
-			fmt.Printf("Error while replaying key:%s  err:%v \n", e.Key, err)
-			return false
-		}
-		if vs == nil {
-			return false
-		}
-		if model.IsValPtr(vs) {
-			var newVp model.ValuePtr
-			newVp.Decode(vs.Value)
-			if newVp.Fid > e_vlog.Fid {
-				return true
-			}
-			if newVp.Offset > e_vlog.Offset {
-				return true
-			}
-			// 如果从lsm和vlog的同一个位置读取带entry则重新写回，也有可能读取到旧的
-			if newVp.Fid == e_vlog.Fid && newVp.Offset == e_vlog.Offset {
-				fmt.Printf("vlogReply: vlogKey:%s, sameOffset:Fid:%d, offet:%d next! \n",
-					e.Key, newVp.Fid, newVp.Offset)
-				return true
-			}
-			return false
-		} else {
-			lsmVersion := model.ParseTsVersion(vs.Key)
-			vlogVersion := model.ParseTsVersion(e.Key)
-			if lsmVersion >= vlogVersion {
-				fmt.Printf("vlogReply: vlogKey:%s v(%d) is in LSM Key:%s v(%d),next! \n",
-					e.Key, vlogVersion, vs.Key, lsmVersion)
-				return true
-			}
-			return false
-		}
-	}
-
-	return func(e *model.Entry, vpr *model.ValuePtr) error {
-		if isInLSM(e, vpr) {
-			//fmt.Printf("vlogReply: key: %s is in DB, next! \n", e.Key)
-			return nil
-		}
-		nk := make([]byte, len(e.Key))
-		copy(nk, e.Key)
-		var nv []byte
-		meta := e.Meta
-		if db.ShouldWriteValueToLSM(e) {
-			nv = make([]byte, len(e.Value))
-			copy(nv, e.Value)
-		} else {
-			nv = vpr.Encode()
-			meta = meta | common.BitValuePointer
-		}
-		v := model.ValueExt{
-			Meta:      e.Meta | common.BitValuePointer,
-			Value:     vpr.Encode(),
-			ExpiresAt: e.ExpiresAt,
-			Version:   e.Version,
-		}
-		toLSM(e.Key, v)
-		// todo update vlog replay head
-		db.Opt.UpdateVlogRePlayHead <- *vpr
-		return nil
-	}
 }
 
 func (db *TrainKVDB) Close() error {

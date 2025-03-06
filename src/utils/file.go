@@ -13,6 +13,15 @@ import (
 	"trainKv/common"
 )
 
+type FileOptions struct {
+	FID      uint64
+	FileName string
+	Dir      string
+	Path     string
+	Flag     int
+	MaxSz    int32
+}
+
 // LoadIDMap Get the id of all sst files in the current folder
 func LoadIDMap(dir string) map[uint64]struct{} {
 	fileInfos, err := os.ReadDir(dir)
@@ -23,14 +32,14 @@ func LoadIDMap(dir string) map[uint64]struct{} {
 			continue
 		}
 		fileID := FID(info.Name())
-		if fileID != 0 {
+		if fileID > 0 {
 			idMap[fileID] = struct{}{}
 		}
 	}
 	return idMap
 }
 
-// FID 根据file name 获取其fid
+// FID 根据file name 获取其fid;
 func FID(name string) uint64 {
 	name = path.Base(name)
 	if !strings.HasSuffix(name, ".sst") {
