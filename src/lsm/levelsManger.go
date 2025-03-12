@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"fmt"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -10,8 +11,7 @@ import (
 )
 
 type levelsManger struct {
-	maxFID        uint64          // 已经分配出去的最大fid，只要创建了 memoryTable 就算已分配
-	nextFileID    atomic.Uint64   // 全局唯一 FID
+	maxFID        atomic.Uint64   // sst 已经分配出去的最大fid,只要创建了 memoryTable 就算已分配;
 	levelHandlers []*levelHandler // 每层的处理器
 	opt           *Options
 	lsm           *LSM // 上层引用
@@ -21,16 +21,15 @@ type levelsManger struct {
 	compactIngStatus *compactIngStatus
 }
 
-func (lm *levelsManger) reserveFileID() uint64 {
-	id := lm.nextFileID.Add(1)
+func (lm *levelsManger) nextFileID() uint64 {
+	id := lm.maxFID.Add(1)
 	return id
 }
 
 func (lsm *LSM) InitLevelManger(opt *Options) *levelsManger {
 	lm := &levelsManger{
-		lsm:    lsm,
-		maxFID: 0,
-		opt:    opt,
+		lsm: lsm,
+		opt: opt,
 	}
 	lm.compactIngStatus = lsm.newCompactStatus()
 	if err := lm.loadManifestFile(); err != nil {
@@ -75,7 +74,7 @@ func (lm *levelsManger) build() error {
 		if fid > maxFID {
 			maxFID = fid
 		}
-		t := openTable(lm, fileName, nil)
+		t, _ := openTable(lm, fileName, nil)
 		lm.levelHandlers[tableInfo.LevelID].add(t)
 		lm.levelHandlers[tableInfo.LevelID].addSize(t)
 	}
@@ -83,13 +82,17 @@ func (lm *levelsManger) build() error {
 	for i := 0; i < lm.opt.MaxLevelNum; i++ {
 		lm.levelHandlers[i].Sort()
 	}
-	atomic.AddUint64(&lm.maxFID, maxFID)
+
+	if maxFID > lm.maxFID.Load() {
+		lm.maxFID.Store(maxFID)
+	}
 	return nil
 }
 
 func (lm *levelsManger) lastLevel() *levelHandler {
 	return lm.levelHandlers[len(lm.levelHandlers)-1]
 }
+
 func (lm *levelsManger) iterators(opt *model.Options) []model.Iterator {
 	iters := make([]model.Iterator, 0)
 	for _, handler := range lm.levelHandlers {
@@ -98,18 +101,19 @@ func (lm *levelsManger) iterators(opt *model.Options) []model.Iterator {
 	return iters
 }
 
-func (lm *levelsManger) Get(key []byte) (model.Entry, error) {
+func (lm *levelsManger) Get(keyTs []byte) (model.Entry, error) {
 	var (
 		entry model.Entry
 		err   error
 	)
+	entry.Version = -1
 	// L0层查询
-	if entry, err = lm.levelHandlers[0].Get(key); entry.Value != nil {
+	if entry, err = lm.levelHandlers[0].Get(keyTs); entry.Version != -1 {
 		return entry, err
 	}
 	for i := 1; i < lm.opt.MaxLevelNum; i++ {
-		if entry, err = lm.levelHandlers[i].Get(key); entry.Value != nil {
-			return entry, nil
+		if entry, err = lm.levelHandlers[i].Get(keyTs); entry.Version != -1 {
+			return entry, err
 		}
 	}
 	return entry, common.ErrKeyNotFound
@@ -139,20 +143,23 @@ func (lm *levelsManger) flush(imm *memoryTable) (err error) {
 
 	builder := newSSTBuilder(lm.opt)
 	skipListIterator := imm.skipList.NewSkipListIterator(strconv.FormatUint(fid, 10) + MemTableName)
+	defer skipListIterator.Close()
 	for skipListIterator.Rewind(); skipListIterator.Valid(); skipListIterator.Next() {
 		entry := skipListIterator.Item().Item
 		builder.add(entry, false)
 	}
 
-	t := openTable(lm, sstName, builder)
+	t, _ := openTable(lm, sstName, builder)
 	err = lm.manifestFile.AddTableMeta(0, &TableMeta{
 		ID:       fid,
 		Checksum: []byte{'s', 'k', 'i', 'p'},
 	})
 	common.Panic(err)
 	lm.levelHandlers[0].add(t)
+	fmt.Printf("flush sstable %d.sst; \n", fid)
 	return nil
 }
+
 func (lm *levelsManger) close() error {
 	if err := lm.manifestFile.Close(); err != nil {
 		return err

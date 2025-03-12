@@ -20,7 +20,7 @@ type Entry struct {
 	ExpiresAt uint64
 
 	Meta    byte
-	Version uint64
+	Version int64
 
 	HeaderLen    int
 	Offset       uint32
@@ -46,6 +46,7 @@ func randStr(length int) string {
 	}
 	return string(result)
 }
+
 func BuildEntry() Entry {
 	rand.Seed(time.Now().Unix())
 	key := []byte(fmt.Sprintf("%s%s", randStr(16), "12345678"))
@@ -74,15 +75,16 @@ func (e *Entry) IsDeleteOrExpired() bool {
 	if (e.Meta & common.BitDelete) > 0 {
 		return true
 	}
+	if e.Version == -1 {
+		return true
+	}
 	if e.Value == nil {
 		return true
 	}
-
 	if e.ExpiresAt == 0 {
 		return false
 	}
-	return false
-	//return e.ExpiresAt <= uint64(time.Now().Unix())
+	return e.ExpiresAt <= uint64(time.Now().Unix())
 }
 
 func (e *Entry) EstimateSize(valThreshold int) int {
@@ -131,6 +133,7 @@ func (h EntryHeader) Encode(out []byte) int {
 	index += binary.PutUvarint(out[index:], h.ExpiresAt)
 	return index
 }
+
 func (h *EntryHeader) Decode(buf []byte) int {
 	h.Meta = buf[0]
 	index := 1
@@ -180,7 +183,7 @@ type HashReader struct {
 func NewHashReader(read io.Reader) *HashReader {
 	return &HashReader{
 		R:        read,
-		H:        crc32.New(common.CastagnoliCrcTable),
+		H:        crc32.New(common.CastigationCryTable),
 		ByteRead: 0,
 	}
 }
@@ -203,6 +206,7 @@ func (r *HashReader) ReadByte() (byte, error) {
 	}
 	return buf[0], err
 }
+
 func (r *HashReader) Sum32() uint32 {
 	return r.H.Sum32()
 }

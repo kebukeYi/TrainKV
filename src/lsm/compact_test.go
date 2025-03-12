@@ -5,23 +5,36 @@ import (
 	"testing"
 	"trainKv/common"
 	"trainKv/model"
+
 	"trainKv/pb"
 	"trainKv/utils"
 )
 
+var compactTestPath = "/usr/projects_gen_data/goprogendata/trainkvdata/test/compact"
+
 var compactOptions = &Options{
-	WorkDir:             "/usr/projects_gen_data/goprogendata/trainkvdata/test/compact",
-	SSTableMaxSz:        10240,
-	MemTableSize:        10240,
-	BlockSize:           400,
-	BloomFalsePositive:  0.1,
-	BaseLevelSize:       2 << 20, //2,097,152 B
+	WorkDir:             compactTestPath,
+	MemTableSize:        1 << 10,  // 1KB; 64 << 20(64MB)
+	NumFlushMemtables:   1,        // 默认：15;
+	SSTableMaxSz:        1 << 10,  // 同上
+	BlockSize:           3 * 1024, // 4 * 1024
+	BloomFalsePositive:  0.01,     // 误差率
+	CacheNums:           1 * 1024, // 10240个
+	ValueThreshold:      1,        // 1B; 1 << 20(1MB)
+	ValueLogMaxEntries:  100,      // 1000000
+	ValueLogFileSize:    1 << 29,  // 512MB; 1<<30-1(1GB);
+	VerifyValueChecksum: false,    // false
+
+	MaxBatchCount: 10,
+	MaxBatchSize:  1 << 20,
+
+	NumCompactors:       2,       // 4
+	BaseLevelSize:       8 << 20, //8MB; 10 << 20(10MB)
 	LevelSizeMultiplier: 10,
-	BaseTableSize:       1 << 20, // 1,048,576 B
 	TableSizeMultiplier: 2,
-	NumLevelZeroTables:  15,
+	BaseTableSize:       2 << 20, // 2 << 20(2MB)
+	NumLevelZeroTables:  5,
 	MaxLevelNum:         common.MaxLevelNum,
-	NumCompactors:       3,
 }
 
 func createEmptyTable(lsm *LSM) *table {
@@ -30,7 +43,7 @@ func createEmptyTable(lsm *LSM) *table {
 	// Add one key so that we can open this table.
 	b.add(model.Entry{Key: model.KeyWithTestTs([]byte("foo"), uint64(1)), Value: []byte{}}, false)
 	fileName := utils.FileNameSSTable(compactOptions.WorkDir, lsm.levelManger.reserveFileID())
-	tab := openTable(&levelsManger{opt: &Options{SSTableMaxSz: compactOptions.SSTableMaxSz}}, fileName, b)
+	tab, _ := openTable(&levelsManger{opt: &Options{SSTableMaxSz: compactOptions.SSTableMaxSz}}, fileName, b)
 	return tab
 }
 
@@ -47,13 +60,14 @@ func createAndSetLevel(lsm *LSM, td []keyValVersion, level int) {
 		builder.add(e, false)
 	}
 	fileName := utils.FileNameSSTable(compactOptions.WorkDir, lsm.levelManger.reserveFileID())
-	tab := openTable(lsm.levelManger, fileName, builder)
+	tab, _ := openTable(lsm.levelManger, fileName, builder)
 	if err := lsm.levelManger.manifestFile.addChanges([]*pb.ManifestChange{newCreateChange(tab.fid, level)}); err != nil {
 		panic(err)
 	}
 	lsm.levelManger.levelHandlers[level].mux.Lock()
 	// Add table to the given level.
 	lsm.levelManger.levelHandlers[level].tables = append(lsm.levelManger.levelHandlers[level].tables, tab)
+	lsm.levelManger.levelHandlers[level].addSize(tab)
 	lsm.levelManger.levelHandlers[level].mux.Unlock()
 }
 
@@ -143,30 +157,26 @@ func TestCompaction(t *testing.T) {
 		runBadgerTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
 			l0 := []keyValVersion{
 				{"foo", "bar", 3, 0},
-				{"fooh", "barh", 1, 0}}
+				{"fooz", "baz", 1, 0}}
 			l01 := []keyValVersion{
-				{"fooa", "bara", 2, 0},
-				{"foob", "barb", 3, 0},
-				{"fooc", "barc", 4, 0},
-			}
+				{"foo", "bar", 2, 0}}
 			l1 := []keyValVersion{
-				{"foog", "barg", 5, 0},
-				{"foox", "bargx", 6, 0},
-			}
+				{"foo", "bar", 1, 0}}
 
 			// Level 0 has table l0 and l01.
-			createAndSetLevel(lsm, l0, 0)
-			createAndSetLevel(lsm, l01, 0)
+			createAndSetLevel(lsm, l0, 0)  // 110B
+			createAndSetLevel(lsm, l01, 0) // 88B
 
 			// Level 1 has table l1.
-			createAndSetLevel(lsm, l1, 1)
+			createAndSetLevel(lsm, l1, 1) // 88B
+			//  起始数据状态
+			getAllAndCheck(t, lsm, []keyValVersion{
+				{"foo", "bar", 1, 0},
+				{"foo", "bar", 2, 0},
+				{"foo", "bar", 3, 0},
+				{"fooz", "baz", 1, 0},
+			})
 
-			/*  起始数据状态
-			{"foo", "bar", 3, 0},
-			{"foo", "bar", 2, 0},
-			{"foo", "bar", 1, 0},
-			{"fooz", "baz", 1, 0},
-			*/
 			cdef := compactDef{
 				thisLevel:  lsm.levelManger.levelHandlers[0],
 				nextLevel:  lsm.levelManger.levelHandlers[1],
@@ -177,11 +187,31 @@ func TestCompaction(t *testing.T) {
 			cdef.dst.dstLevelId = 1
 			require.NoError(t, lsm.levelManger.runCompactDef(-1, 0, cdef))
 			// foo version 2,1 should be dropped after compaction.
-			// 合并后的数据状态
-			//{"foo", "bar", 3, 0},
-			//{"fooz", "baz", 1, 0}})
+			// 合并后的库中数据状态:
+			getAllAndCheck(t, lsm, []keyValVersion{
+				{"foo", "bar", 3, 0},
+				{"fooz", "baz", 1, 0}})
 		})
 	})
+}
+
+func getAllAndCheck(t *testing.T, lsm *LSM, expected []keyValVersion) {
+	newLsmIterator := lsm.NewLsmIterator(&model.Options{IsAsc: true})
+	it := NewMergeIterator(newLsmIterator, false)
+	defer it.Close()
+	i := 0
+	for it.Rewind(); it.Valid(); it.Next() {
+		item := it.Item().Item
+		//fmt.Printf("key:%s ,val:%s,varsion:%d, meta:%d\n", string(item.Key), string(item.Value), item.Version, item.Meta)
+		require.Less(t, i, len(expected), "DB has more number of key than expected")
+		expect := expected[i]
+		require.Equal(t, expect.key, string(item.Key), "expected key: %s actual key: %s", expect.key, item.Key)
+		require.Equal(t, expect.val, string(item.Value), "key: %s expected value: %s actual %s", item.Key, expect.val, item.Value)
+		require.Equal(t, expect.version, int(item.Version), "key: %s expected version: %d actual %d", item.Key, expect.version, item.Version)
+		require.Equal(t, expect.meta, item.Meta, "key: %s expected meta: %d meta %d", item.Key, expect.meta, item.Meta)
+		i++
+	}
+	require.Equal(t, len(expected), i, "keys examined should be equal to keys expected")
 }
 
 func runBadgerTest(t *testing.T, opts *Options, test func(t *testing.T, lsm *LSM)) {
@@ -191,7 +221,7 @@ func runBadgerTest(t *testing.T, opts *Options, test func(t *testing.T, lsm *LSM
 	c := make(chan map[uint32]int64)
 	compactOptions.DiscardStatsCh = &c
 	clearDir(opts.WorkDir)
-	lsm := NewLSM(opts)
+	lsm := NewLSM(opts, utils.NewCloser(1))
 	defer lsm.Close()
 	test(t, lsm)
 }

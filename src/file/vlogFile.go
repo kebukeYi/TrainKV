@@ -50,6 +50,7 @@ func (vlog *VLogFile) Read(vptr *model.ValuePtr) (buf []byte, err error) {
 	}
 	return buf, err
 }
+
 func (vlog *VLogFile) DoneWriting(offset uint32) error {
 	// (We call this from write() and thus know we have shared access to the fd.)
 	if err := vlog.f.Sync(); err != nil {
@@ -71,6 +72,7 @@ func (vlog *VLogFile) DoneWriting(offset uint32) error {
 	}
 	return nil
 }
+
 func (vlog *VLogFile) Write(offset uint32, buf []byte) (err error) {
 	return vlog.f.AppendBuffer(offset, buf)
 }
@@ -101,6 +103,7 @@ func (vlog *VLogFile) Init() error {
 	vlog.size = uint32(size)
 	return nil
 }
+
 func (vlog *VLogFile) FileName() string {
 	return vlog.f.Fd.Name()
 }
@@ -135,7 +138,7 @@ func (vlog *VLogFile) EncodeEntry(entry *model.Entry, out *bytes.Buffer) (int, e
 		Meta:      entry.Meta,
 	}
 
-	hash := crc32.New(common.CastagnoliCrcTable)
+	hash := crc32.New(common.CastigationCryTable)
 	writer := io.MultiWriter(out, hash)
 
 	var headerBuf [common.MaxHeaderSize]byte

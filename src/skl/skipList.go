@@ -76,7 +76,7 @@ type SkipList struct {
 	num        int32
 	headOffset uint32
 	height     int32
-	ref        int32
+	ref        atomic.Int32
 	OnClose    func()
 }
 
@@ -84,18 +84,20 @@ func NewSkipList(arenaSize int64) *SkipList {
 	arena := NewArena(arenaSize)
 	head := newSkipNode(arena, nil, model.ValueExt{}, maxHeight)
 	headOffset := arena.getNodeOffset(head)
-	return &SkipList{
+	skip := &SkipList{
 		arena:      arena,
+		num:        0,
 		headOffset: headOffset,
 		height:     1,
-		ref:        1,
 	}
+	skip.ref.Store(1)
+	return skip
 }
 func (skipList *SkipList) IncrRef() {
-	atomic.AddInt32(&skipList.ref, 1)
+	skipList.ref.Add(1)
 }
 func (skipList *SkipList) DecrRef() {
-	newRef := atomic.AddInt32(&skipList.ref, -1)
+	newRef := skipList.ref.Add(-1)
 	if newRef > 0 {
 		return
 	}
@@ -103,6 +105,7 @@ func (skipList *SkipList) DecrRef() {
 		skipList.OnClose()
 	}
 	skipList.arena = nil
+	skipList.headOffset = 0
 }
 func (skipList *SkipList) randomHeight() int {
 	h := 1
@@ -121,7 +124,8 @@ func (skipList *SkipList) getHeight() int32 {
 	return atomic.LoadInt32(&skipList.height)
 }
 func (skipList *SkipList) GetMemSize() int64 {
-	return skipList.arena.size()
+	//return skipList.arena.size()
+	return int64(skipList.num)
 }
 func (skipList *SkipList) findLast() *skipNode {
 	n := skipList.getHead()
@@ -228,19 +232,20 @@ func (skipList *SkipList) findSpliceForLevel(key []byte, before uint32, level in
 		before = nextOffset
 	}
 }
-func (skipList *SkipList) Get(key []byte) model.ValueExt {
-	findNear, _ := skipList.findNear(key, false, true)
+func (skipList *SkipList) Get(userKeyTs []byte) model.ValueExt {
+	findNear, _ := skipList.findNear(userKeyTs, false, true)
 	if findNear == nil {
-		return model.ValueExt{}
+		return model.ValueExt{Version: -1}
 	}
-	nextKey := skipList.arena.getKey(findNear.keyOffset, findNear.keySize)
-	if !model.SameKeyNoTs(key, nextKey) {
-		return model.ValueExt{}
+	nearKeyTs := skipList.arena.getKey(findNear.keyOffset, findNear.keySize)
+	if !model.SameKeyNoTs(userKeyTs, nearKeyTs) {
+		return model.ValueExt{Version: -1}
 	}
 	valOffset, valSize := findNear.getValOffset()
 	val := skipList.arena.getVal(valOffset, valSize)
-	// todo 非常重要的一步, 需要显式分析出版本,以便在vlogGC中进行版本判断;
-	val.Version = model.ParseTsVersion(nextKey)
+	// todo 非常重要的一步, 需要显式分析出版本,以便在vlogGC中进行版本判断,决定去留;
+	// 此时的 nearKeyTs 的版本时间戳 可能是大于等于 userKeyTs的; 因此需要显示解析出确定的版本号;
+	val.Version = model.ParseTsVersion(nearKeyTs)
 	return val
 }
 func (skipList *SkipList) Put(e model.Entry) {
@@ -363,7 +368,6 @@ func (skipList *SkipList) Draw(align bool) {
 		fmt.Println()
 	}
 }
-
 func (skipList *SkipList) NewSkipListIterator(name string) model.Iterator {
 	skipList.IncrRef()
 	return &SkipListIterator{
@@ -381,7 +385,6 @@ type SkipListIterator struct {
 func (s *SkipListIterator) Name() string {
 	return s.name
 }
-
 func (s *SkipListIterator) Key() []byte {
 	return s.list.arena.getKey(s.curr.keyOffset, s.curr.keySize)
 }
@@ -425,7 +428,7 @@ func (s *SkipListIterator) SeekForPrev(target []byte) {
 	s.curr, _ = s.list.findNear(target, true, true)
 }
 func (s *SkipListIterator) SeekToFirst() {
-	s.curr = s.list.getNextNode(s.list.getHead(), 0)
+	s.curr = s.list.getNextNode(s.list.getHead(), 0) // 有可能是 nil
 }
 func (s *SkipListIterator) SeekToLast() {
 	s.curr = s.list.findLast()

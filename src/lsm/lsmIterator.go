@@ -33,6 +33,9 @@ type ConcatIterator struct {
 }
 
 func NewConcatIterator(tables []*table, opt *model.Options) *ConcatIterator {
+	for i := 0; i < len(tables); i++ {
+		tables[i].IncrRef()
+	}
 	return &ConcatIterator{
 		tables: tables,
 		iters:  make([]model.Iterator, len(tables)),
@@ -50,7 +53,6 @@ func (conIter *ConcatIterator) Value() []byte {
 func (conIter *ConcatIterator) Key() []byte {
 	return conIter.Item().Item.Key
 }
-
 func (conIter *ConcatIterator) setIdx(inx int) {
 	conIter.idx = inx // v2.0
 	if inx < 0 || inx >= len(conIter.tables) {
@@ -62,7 +64,6 @@ func (conIter *ConcatIterator) setIdx(inx int) {
 		conIter.iters[inx] = conIter.tables[inx].NewTableIterator(conIter.opt)
 	}
 	conIter.curIer = conIter.iters[inx]
-	//conIter.curIer = conIter.iters[conIter.idx]
 }
 func (conIter *ConcatIterator) Rewind() {
 	if len(conIter.iters) == 0 {
@@ -76,30 +77,26 @@ func (conIter *ConcatIterator) Rewind() {
 	}
 	conIter.curIer.Rewind()
 }
-
 func (conIter *ConcatIterator) Valid() bool {
 	return conIter.curIer != nil && conIter.curIer.Valid()
 }
-
 func (conIter *ConcatIterator) Item() model.Item {
 	return conIter.curIer.Item()
 }
-
 func (conIter *ConcatIterator) Seek(key []byte) {
 	var idx int
-	if conIter.opt.IsAsc { // 升序
+	if conIter.opt.IsAsc { // 升序遍历;
 		idx = sort.Search(len(conIter.tables), func(i int) bool {
 			maxKey := conIter.tables[i].sst.MaxKey()
 			cmp := model.CompareKeyNoTs(maxKey, key) >= 0
 			return cmp
 		})
-	} else { // 降序; sst 本身是 升序的; 需要从后往前找,小于当前值的;
+	} else { // 降序遍历; sst 本身是 升序的; 需要从后往前找,小于当前值的;
 		//idx = sort.Search(len(conIter.tables), func(i int) bool {
 		//	minKey := conIter.tables[i].sst.MinKey()
 		//	cmp := model.CompareKeyNoTs(key, minKey) >= 0
 		//	return cmp
 		//})
-		// todo 看不懂
 		n := len(conIter.tables)
 		idx = n - 1 - sort.Search(n, func(i int) bool {
 			return model.CompareKeyNoTs(conIter.tables[n-1-i].sst.MinKey(), key) <= 0
@@ -112,15 +109,14 @@ func (conIter *ConcatIterator) Seek(key []byte) {
 	conIter.setIdx(idx)
 	conIter.curIer.Seek(key)
 }
-
 func (conIter *ConcatIterator) Next() {
 	// 当前 table 向后找一个 block;
 	conIter.curIer.Next() // 当前 table迭代器向后找一个;
-	// 假如当前 table到头了;
+	// 假如当前 block 有效, 则直接返回;
 	if conIter.curIer.Valid() {
 		return
 	}
-	// 如果向后找一个无效了;
+	// 如果向后找一个block无效了; 开始找下一个 table;
 	for {
 		if conIter.opt.IsAsc { // 升序,直接找后一个;
 			conIter.setIdx(conIter.idx + 1)
@@ -136,7 +132,6 @@ func (conIter *ConcatIterator) Next() {
 		}
 	}
 }
-
 func (conIter *ConcatIterator) Close() error {
 	for _, t := range conIter.tables {
 		if err := t.DecrRef(); err != nil {
@@ -144,6 +139,7 @@ func (conIter *ConcatIterator) Close() error {
 			return err
 		}
 	}
+
 	for _, t := range conIter.iters {
 		if t == nil {
 			continue
@@ -181,7 +177,6 @@ func (n *node) setIterator(iter model.Iterator) {
 	n.merge, _ = iter.(*MergeIterator)
 	n.concat, _ = iter.(*ConcatIterator)
 }
-
 func (n *node) setEntry() {
 	switch {
 	case n.merge != nil:
@@ -201,7 +196,6 @@ func (n *node) setEntry() {
 		}
 	}
 }
-
 func (n *node) next() {
 	switch {
 	case n.merge != nil:
@@ -213,12 +207,10 @@ func (n *node) next() {
 	}
 	n.setEntry()
 }
-
 func (n *node) Rewind() {
 	n.iter.Rewind()
 	n.setEntry()
 }
-
 func (n *node) seek(key []byte) {
 	n.iter.Seek(key)
 	n.setEntry()
@@ -244,11 +236,9 @@ func NewMergeIterator(iters []model.Iterator, reverse bool) model.Iterator {
 		NewMergeIterator(iters[:mid], reverse),
 		NewMergeIterator(iters[mid:], reverse)}, reverse)
 }
-
 func (iter *MergeIterator) Name() string {
 	return iter.small.iter.Name()
 }
-
 func (m *MergeIterator) fix() {
 	if !m.otherNode().valid {
 		return
@@ -257,8 +247,8 @@ func (m *MergeIterator) fix() {
 		m.swapSmall()
 		return
 	}
-	//cmp := model.CompareKeyNoTs(m.small.entry.Key, m.otherNode().entry.Key)
-	// 这里应该全数返回, 具体取舍让 compact组件 定夺;
+	// cmp := model.CompareKeyNoTs(m.small.entry.Key, m.otherNode().entry.Key)
+	// 这里应该全量对比, 具体去留让 compact组件 定夺;
 	cmp := model.CompareKeyWithTs(m.small.entry.Key, m.otherNode().entry.Key)
 	switch {
 	case cmp == 0:
@@ -269,14 +259,13 @@ func (m *MergeIterator) fix() {
 			m.swapSmall()
 		} else {
 		}
-	case cmp > 0:
+	default:
 		if m.reverse {
 		} else {
 			m.swapSmall()
 		}
 	}
 }
-
 func (m *MergeIterator) swapSmall() {
 	if m.small == &m.left {
 		m.small = &m.right
@@ -284,7 +273,6 @@ func (m *MergeIterator) swapSmall() {
 		m.small = &m.left
 	}
 }
-
 func (m *MergeIterator) otherNode() *node {
 	if &m.left == m.small {
 		return &m.right
@@ -292,32 +280,25 @@ func (m *MergeIterator) otherNode() *node {
 		return &m.left
 	}
 }
-
 func (m *MergeIterator) Next() {
 	for m.small.valid {
-		//fmt.Printf(" Next():smallEntry[Key:%s,val:%s] mi.cur[key:%s,val:%s] \n", model.ParseKey(m.small.entry.Key), m.small.entry.Value, model.ParseKey(m.curKey), m.curVal)
 		if !bytes.Equal(m.small.entry.Key, m.curKey) {
 			break
 		}
-		// m.small.entry.Key == m.curKey;
 		m.small.next() // n.setEntry()
 		m.fix()        // small 和 otherNode 相比较;
 	}
-	// 只管保存即可;
 	m.setCurrentKey()
 }
-
 func (m *MergeIterator) Seek(key []byte) {
 	m.left.seek(key)
 	m.right.seek(key)
 	m.fix()
 	m.setCurrentKey()
 }
-
 func (m *MergeIterator) Item() model.Item {
 	return m.small.iter.Item()
 }
-
 func (m *MergeIterator) Key() []byte {
 	return m.Item().Item.Key
 }
@@ -340,7 +321,6 @@ func (m *MergeIterator) setCurrentKey() {
 func (m *MergeIterator) Valid() bool {
 	return m.small.valid
 }
-
 func (m *MergeIterator) Close() error {
 	if err := m.left.iter.Close(); err != nil {
 		return common.WarpErr("MergeIterator.Close", err)

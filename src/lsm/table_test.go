@@ -13,11 +13,32 @@ import (
 
 var sstID uint64
 
+var sstTestPath = "/usr/projects_gen_data/goprogendata/trainkvdata/test/sst"
+
 func getTestTableOptions() *Options {
 	return &Options{
-		WorkDir:            "/usr/projects_gen_data/goprogendata/trainkvdata/test/sst",
-		BlockSize:          4 * 1024,
-		BloomFalsePositive: 0.01,
+		WorkDir:             sstTestPath,
+		MemTableSize:        1 << 10,  // 1KB; 64 << 20(64MB)
+		NumFlushMemtables:   1,        // 默认：15;
+		SSTableMaxSz:        1 << 10,  // 同上
+		BlockSize:           3 * 1024, // 4 * 1024
+		BloomFalsePositive:  0.01,     // 误差率
+		CacheNums:           1 * 1024, // 10240个
+		ValueThreshold:      1,        // 1B; 1 << 20(1MB)
+		ValueLogMaxEntries:  100,      // 1000000
+		ValueLogFileSize:    1 << 29,  // 512MB; 1<<30-1(1GB);
+		VerifyValueChecksum: false,    // false
+
+		MaxBatchCount: 10,
+		MaxBatchSize:  1 << 20,
+
+		NumCompactors:       2,       // 4
+		BaseLevelSize:       8 << 20, //8MB; 10 << 20(10MB)
+		LevelSizeMultiplier: 10,
+		TableSizeMultiplier: 2,
+		BaseTableSize:       2 << 20, // 2 << 20(2MB)
+		NumLevelZeroTables:  5,
+		MaxLevelNum:         common.MaxLevelNum,
 	}
 }
 
@@ -48,7 +69,6 @@ func buildTestTable(t *testing.T, prefix string, n int, opts *Options) *table {
 
 func buildTable(t *testing.T, keyValues [][]string, opts *Options) *table {
 	builder := newSSTBuilder(opts)
-	// TODO: Add test for file garbage collection here. No files should be left after the tests here.
 	manger := &levelsManger{opt: opts}
 	manger.cache = newLevelsCache(opts)
 	sstID++
@@ -63,7 +83,7 @@ func buildTable(t *testing.T, keyValues [][]string, opts *Options) *table {
 		}
 		builder.add(e, false)
 	}
-	tbl := openTable(manger, ssName, builder)
+	tbl, _ := openTable(manger, ssName, builder)
 	return tbl
 }
 
@@ -74,10 +94,10 @@ func TestTable(t *testing.T) {
 	defer func() { require.NoError(t, table.DecrRef()) }()
 	ti := table.NewTableIterator(&model.Options{IsAsc: true})
 	defer ti.Close()
-	kid := 1010 // 3) 正常存在的数值
-	//seek := y.KeyWithTs([]byte(key("key", kid)), opts.testVersion) // 4)相同版本的数据;
-	//seek := y.KeyWithTs([]byte(key("key", kid)), 10) // 5)大于当前版本的数据; 900-10=890; 读取不到;
-	seek := model.KeyWithTs([]byte(key("tableKey", kid))) // 6)小于当前版本的数据; 900-200=700; 可读取到;
+	kid := 1010
+	//seek := y.KeyWithTs([]byte(key("key", kid)), opts.testVersion)
+	//seek := y.KeyWithTs([]byte(key("key", kid)), 10)
+	seek := model.KeyWithTs([]byte(key("tableKey", kid)))
 	ti.Seek(seek)
 	for ; ti.Valid(); ti.Next() {
 		k := ti.Item().Item.Key
@@ -92,13 +112,10 @@ func TestTable(t *testing.T) {
 	// 要搜寻的key太小找不到, 迭代器会返回当前table的最小值,但不是其要查找的值;
 	// 因此迭代器有效,但返回的值无效;
 	ti.Seek(model.KeyWithTs([]byte(key("key", 99999))))
-	// require.False(t, ti.Valid())
 	fmt.Printf("It`s Key: %v", string(model.ParseKey(ti.it.Item.Key)))
 
 	// 要搜寻的key太大找不到, 迭代器会返回当前table的最大值,但不是其要查找的值;
 	ti.Seek(model.KeyWithTs([]byte(key("zzzzzzzzkey", 1111))))
-	// require.True(t, ti.Valid())
-	// require.EqualValues(t, string(model.ParseKey(k)), key("key", 0))
 	fmt.Printf("It`s Key: %v", string(model.ParseKey(ti.Item().Item.Key)))
 }
 
@@ -115,7 +132,8 @@ func TestTableIterator(t *testing.T) {
 			for it.Rewind(); it.Valid(); it.Next() {
 				v := it.Item().Item
 				k := model.KeyWithTs([]byte(key("key", count)))
-				fmt.Printf("seekKey: %v, val: %v, count: %v; \n", string(model.ParseKey(k)), v.Value, count)
+				fmt.Printf("seekKey: %v, val: %v,version:%d, count: %v; \n",
+					string(model.ParseKey(k)), v.Value, v.Version, count)
 				//require.EqualValues(t, k, it.Key())
 				//require.EqualValues(t, fmt.Sprintf("%d", count), string(v.Value))
 				count++
@@ -153,7 +171,7 @@ func TestSeek(t *testing.T) {
 		it.Seek(model.KeyWithTs([]byte(tt.in)))
 		if !tt.valid {
 			// require.False(t, it.Valid())
-			fmt.Printf("seekKey: %v, val: %v;\n", tt.in, it.Item().Item.Value)
+			fmt.Printf("error: seekKey: %v, val: %v;\n", tt.in, it.Item().Item.Value)
 			continue
 		}
 		// require.True(t, it.Valid())
@@ -276,7 +294,7 @@ func TestMergingIterator(t *testing.T) {
 		{"k1", "a1"},
 		{"k2", "b2"},
 		{"k3", "b3"},
-		//{"k4", "a4"},
+		{"k4", "a4"},
 		{"k4", "b4"},
 		{"k5", "a5"},
 	}
@@ -297,5 +315,4 @@ func TestMergingIterator(t *testing.T) {
 		i++
 	}
 	require.Equal(t, i, len(expected))
-	//require.False(t, it.Valid())
 }

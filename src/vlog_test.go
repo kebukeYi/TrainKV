@@ -11,25 +11,43 @@ import (
 	"trainKv/model"
 )
 
+var vlogTestPath = "/usr/projects_gen_data/goprogendata/trainkvdata/test/vlog"
+
 var (
-	// 初始化opt
 	vlogOpt = &lsm.Options{
-		//WorkDir:          "./work_test",
-		//WorkDir:          "/usr/local/go_temp_files/test/trainKV/vlogtest",
-		//WorkDir:          "/usr/projects_gen_data/goprogendata/corekvdata/test/vlog",
-		WorkDir:          "/usr/projects_gen_data/goprogendata/trainkvdata/test/vlog",
-		SSTableMaxSz:     1 << 10,
-		MemTableSize:     1 << 10,
-		ValueLogFileSize: 1 << 20,
-		ValueThreshold:   1,
-		MaxBatchCount:    10,
-		MaxBatchSize:     1 << 20,
+		WorkDir:             vlogTestPath,
+		MemTableSize:        1 << 10,  // 1KB; 64 << 20(64MB)
+		NumFlushMemtables:   1,        // 默认：15;
+		SSTableMaxSz:        1 << 10,  // 同上
+		BlockSize:           3 * 1024, // 4 * 1024
+		BloomFalsePositive:  0.01,     // 误差率
+		CacheNums:           1 * 1024, // 10240个
+		ValueThreshold:      1,        // 1B; 1 << 20(1MB)
+		ValueLogMaxEntries:  100,      // 1000000
+		ValueLogFileSize:    1 << 29,  // 512MB; 1<<30-1(1GB);
+		VerifyValueChecksum: false,    // false
+
+		MaxBatchCount: 10,
+		MaxBatchSize:  1 << 20,
+
+		NumCompactors:       2,       // 4
+		BaseLevelSize:       8 << 20, //8MB; 10 << 20(10MB)
+		LevelSizeMultiplier: 10,
+		TableSizeMultiplier: 2,
+		BaseTableSize:       2 << 20, // 2 << 20(2MB)
+		NumLevelZeroTables:  5,
+		MaxLevelNum:         common.MaxLevelNum,
 	}
 )
 
 func TestValueLog_Entry(t *testing.T) {
-	db, _ := Open(vlogOpt)
-	defer db.Close()
+	db, _, callBack := Open(vlogOpt)
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		_ = callBack()
+	}()
 	log := db.vlog
 	const val2 = "samplevalb012345678901234567890123"
 	e2 := &model.Entry{
@@ -55,8 +73,13 @@ func TestVlogBase(t *testing.T) {
 	// 清理目录
 	clearDir()
 	// 打开DB
-	db, _ := Open(vlogOpt)
-	defer db.Close()
+	db, _, callBack := Open(vlogOpt)
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		_ = callBack()
+	}()
 	log := db.vlog
 	var err error
 	// 创建一个简单的kv entry对象
@@ -122,8 +145,13 @@ func TestVlogBase(t *testing.T) {
 func TestValueGC(t *testing.T) {
 	clearDir()
 	vlogOpt.ValueLogFileSize = 1 << 20
-	kv, _ := Open(vlogOpt)
-	defer kv.Close()
+	db, _, callBack := Open(vlogOpt)
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		_ = callBack()
+	}()
 	sz := 3 << 10
 	kvList := []*model.Entry{}
 	for i := 0; i < 40; i++ {
@@ -134,23 +162,23 @@ func TestValueGC(t *testing.T) {
 			Meta:      e.Meta,
 			ExpiresAt: e.ExpiresAt,
 		})
-		require.NoError(t, kv.Set(e))
+		require.NoError(t, db.Set(e))
 	}
 	time.Sleep(2 * time.Second)
 	for i := 0; i < 10; i++ {
 		entry := model.NewEntry(kvList[i].Key, nil)
 		entry.Meta |= common.BitDelete
-		require.NoError(t, kv.Set(entry))
+		require.NoError(t, db.Set(entry))
 	}
 
 	// 直接开始GC, 1.pickVlog需要和合并联动; 2.启动 vlog.file 的rewrite();
 	// kv.RunValueLogGC(0.9)
 
 	// 指定 1.vlog 文件进行 GC;
-	kv.vlog.gcReWriteLog(kv.vlog.filesMap[0])
+	db.vlog.gcReWriteLog(db.vlog.filesMap[0])
 
 	for _, e := range kvList {
-		item, err := kv.Get(e.Key) // 无 ts
+		item, err := db.Get(e.Key) // 无 ts
 		if err != nil {
 			fmt.Printf("err:%s when key is:%s\n", err, e.Key)
 		}

@@ -3,11 +3,14 @@ package lsm
 import (
 	"fmt"
 	"math/rand"
+	"path/filepath"
 	"testing"
 	"time"
 	"trainKv/model"
 	"trainKv/utils"
 )
+
+var walTestPath = "/usr/projects_gen_data/goprogendata/trainkvdata/test/wal"
 
 var r = rand.New(rand.NewSource(time.Now().UnixNano()))
 
@@ -21,13 +24,15 @@ func RandString(len int) string {
 }
 
 func getDefaultFileOpt() *utils.FileOptions {
-	return &utils.FileOptions{
+	options := &utils.FileOptions{
 		FID:      0,
-		FileName: "/usr/local/go_temp_files/test/trainKV/waltest/00001.wal",
-		Dir:      "",
-		Path:     "",
+		FileName: "00001.wal",
+		Dir:      walTestPath,
+		Path:     walTestPath,
 		MaxSz:    3 * 1024,
 	}
+	options.FileName = filepath.Join(walTestPath, options.FileName)
+	return options
 }
 
 func TestWAL_Write(t *testing.T) {

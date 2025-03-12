@@ -54,6 +54,7 @@ func FID(name string) uint64 {
 	}
 	return uint64(id)
 }
+
 func VlogFilePath(dirPath string, fid uint32) string {
 	return fmt.Sprintf("%s%s%05d.vlog", dirPath, string(os.PathSeparator), fid)
 }
@@ -64,18 +65,17 @@ func FileNameSSTable(dir string, id uint64) string {
 
 // VerifyChecksum crc32
 func VerifyChecksum(data []byte, expected []byte) error {
-	actual := uint64(crc32.Checksum(data, common.CastagnoliCrcTable))
+	actual := uint64(crc32.Checksum(data, common.CastigationCryTable))
 	expectedU64 := binary.BigEndian.Uint64(expected)
 	if actual != expectedU64 {
 		return errors.Wrapf(common.ErrChecksumMismatch, "actual: %d, expected: %d", actual, expectedU64)
 	}
-
 	return nil
 }
 
 // CalculateChecksum _
 func CalculateChecksum(data []byte) uint64 {
-	return uint64(crc32.Checksum(data, common.CastagnoliCrcTable))
+	return uint64(crc32.Checksum(data, common.CastigationCryTable))
 }
 
 func SyncDir(dir string) error {

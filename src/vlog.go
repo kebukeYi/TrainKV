@@ -29,7 +29,7 @@ type ValueLog struct {
 	DirPath            string
 	Mux                sync.RWMutex
 	filesMap           map[uint32]*file.VLogFile
-	maxFid             uint32
+	maxFid             uint32 // vlog 组件的最大id
 	FilesToDel         []uint32
 	activeIteratorNum  int32
 	writableFileOffset uint32
@@ -39,6 +39,7 @@ type ValueLog struct {
 	Db                     *TrainKVDB
 	GarbageCh              chan struct{}
 	VLogFileDisCardStaInfo *VLogFileDisCardStaInfo
+	closer                 *utils.Closer
 }
 
 type VLogFileDisCardStaInfo struct {
@@ -46,17 +47,15 @@ type VLogFileDisCardStaInfo struct {
 	FileMap           map[uint32]int64
 	FlushCh           chan map[uint32]int64
 	UpdatesSinceFlush int // flush 次数
-	Closer            *utils.Closer
 }
 
 func (vlog *ValueLog) Open(replayFn model.LogEntry) error {
-	vlog.VLogFileDisCardStaInfo.Closer.Add(1)
 	go vlog.handleDiscardStats()
 	if err := vlog.fillVlogFileMap(); err != nil {
 		return err
 	}
 	if len(vlog.filesMap) == 0 {
-		_, err := vlog.createVlogFile(0) // 无魔数,直接从vlog文件offset=0,开始写数据;
+		_, err := vlog.createVlogFile(1) // 无魔数,直接从vlog文件offset=0,开始写数据;
 		return common.WarpErr("Error while creating log file in valueLog.open", err)
 	}
 	files := vlog.sortedFiles()
@@ -91,7 +90,9 @@ func (vlog *ValueLog) Open(replayFn model.LogEntry) error {
 	}
 	vlog.writableFileOffset = endOffset
 	if err = vlog.sendDiscardStats(); err != nil {
-		fmt.Errorf("Failed to populate discard stats: %s\n", err)
+		if !errors.Is(err, common.ErrKeyNotFound) {
+			common.Panic(fmt.Errorf("Failed to populate discard stats: %s\n", err))
+		}
 	}
 	return nil
 }
@@ -99,13 +100,13 @@ func (vlog *ValueLog) Open(replayFn model.LogEntry) error {
 func (vlog *ValueLog) fillVlogFileMap() error {
 	vlog.filesMap = make(map[uint32]*file.VLogFile)
 
-	dirEntries, err := os.ReadDir(vlog.DirPath)
+	vlogFiles, err := os.ReadDir(vlog.DirPath)
 	if err != nil {
 		return err
 	}
 
 	found := make(map[uint64]bool)
-	for _, f := range dirEntries {
+	for _, f := range vlogFiles {
 		if !strings.HasSuffix(f.Name(), ".vlog") {
 			continue
 		}
@@ -125,6 +126,7 @@ func (vlog *ValueLog) fillVlogFileMap() error {
 	}
 	return nil
 }
+
 func (vlog *ValueLog) sortedFiles() []uint32 {
 	toBeDelete := make(map[uint32]bool, 0)
 	for _, fid := range vlog.FilesToDel {
@@ -141,6 +143,7 @@ func (vlog *ValueLog) sortedFiles() []uint32 {
 	})
 	return ret
 }
+
 func (vlog *ValueLog) Read(vp *model.ValuePtr) ([]byte, func(), error) {
 	buf, vlogFileLocked, err := vlog.ReadValueBytes(vp)
 	callBack := vlog.getUnlockCallBack(vlogFileLocked)
@@ -148,7 +151,7 @@ func (vlog *ValueLog) Read(vp *model.ValuePtr) ([]byte, func(), error) {
 		return nil, callBack, err
 	}
 	if vlog.Opt.VerifyValueChecksum {
-		hash32 := crc32.New(common.CastagnoliCrcTable)
+		hash32 := crc32.New(common.CastigationCryTable)
 		if _, err := hash32.Write(buf[:len(buf)-crc32.Size]); err != nil {
 			model.RunCallback(callBack)
 			return nil, nil, errors.Wrapf(err, "failed to write hash for vp %+v", vp)
@@ -213,11 +216,13 @@ func (vlog *ValueLog) NewValuePtr(entry *model.Entry) (*model.ValuePtr, error) {
 	err := vlog.Write([]*Request{req})
 	return req.ValPtr[0], err
 }
+
 func (vlog *ValueLog) Write(reqs []*Request) error {
 	vlog.Mux.Lock()
 	curVlogFile := vlog.filesMap[vlog.maxFid]
 	vlog.Mux.Unlock()
 	var buf bytes.Buffer
+
 	flushToFile := func() error {
 		if buf.Len() == 0 {
 			return nil
@@ -237,7 +242,6 @@ func (vlog *ValueLog) Write(reqs []*Request) error {
 		if err2 := flushToFile(); err2 != nil {
 			return err2
 		}
-		//
 		if vlog.getWriteOffset() > uint32(vlog.Opt.ValueLogFileSize) ||
 			vlog.entriesWrittenNum > vlog.Opt.ValueLogMaxEntries {
 			// 截断当前达到阈值的文件;
@@ -246,11 +250,11 @@ func (vlog *ValueLog) Write(reqs []*Request) error {
 			}
 			newFid := atomic.AddUint32(&vlog.maxFid, 1)
 			common.CondPanic(newFid <= 0, fmt.Errorf("newid has overflown uint32: %v", newFid))
-			createVlogFile, err := vlog.createVlogFile(newFid)
+			_, err := vlog.createVlogFile(newFid)
 			if err != nil {
 				return err
 			}
-			curVlogFile = createVlogFile
+			curVlogFile = vlog.filesMap[newFid]
 			atomic.AddInt32(&vlog.Db.logRotates, 1)
 		}
 		return nil
@@ -280,6 +284,7 @@ func (vlog *ValueLog) Write(reqs []*Request) error {
 				}
 			}
 		}
+
 		vlog.entriesWrittenNum += int32(writteNum)
 		writeNow := vlog.getWriteOffset()+uint32(buf.Len()) > uint32(vlog.Opt.ValueLogFileSize) ||
 			vlog.entriesWrittenNum > vlog.Opt.ValueLogMaxEntries
@@ -291,6 +296,7 @@ func (vlog *ValueLog) Write(reqs []*Request) error {
 	}
 	return toWrite()
 }
+
 func (vlog *ValueLog) deleteVlogFile(vlogFile *file.VLogFile) error {
 	if vlogFile == nil {
 		return nil
@@ -305,6 +311,7 @@ func (vlog *ValueLog) deleteVlogFile(vlogFile *file.VLogFile) error {
 	}
 	return nil
 }
+
 func (vlog *ValueLog) getWriteOffset() uint32 {
 	return atomic.LoadUint32(&vlog.writableFileOffset)
 }
@@ -313,8 +320,6 @@ func (vlog *ValueLog) Close() error {
 	if vlog == nil || vlog.Db == nil {
 		return nil
 	}
-	// 默认阻塞
-	<-vlog.VLogFileDisCardStaInfo.Closer.CloseSignal
 	var err error
 	maxFid := vlog.maxFid
 	for _, vLogFile := range vlog.filesMap {
@@ -341,7 +346,6 @@ func (vlog *ValueLog) Close() error {
 }
 
 func (vlog *ValueLog) handleDiscardStats() {
-	defer vlog.VLogFileDisCardStaInfo.Closer.Done()
 	mergeStats := func(stateInfos map[uint32]int64) ([]byte, error) {
 		vlog.Mux.Lock()
 		defer vlog.Mux.Unlock()
@@ -362,6 +366,7 @@ func (vlog *ValueLog) handleDiscardStats() {
 		}
 		return nil, nil
 	}
+
 	processDiscardStats := func(stateInfos map[uint32]int64) error {
 		encodeMap, err := mergeStats(stateInfos)
 		if err != nil || encodeMap == nil {
@@ -378,11 +383,8 @@ func (vlog *ValueLog) handleDiscardStats() {
 		return request.Wait()
 	}
 
-	closer := vlog.VLogFileDisCardStaInfo.Closer
 	for {
 		select {
-		case <-closer.CloseSignal:
-			return
 		case stateInfo := <-vlog.VLogFileDisCardStaInfo.FlushCh:
 			if err := processDiscardStats(stateInfo); err != nil {
 				common.Err(fmt.Errorf("unable to process discardstats with error: %s", err))
@@ -423,6 +425,19 @@ func (vlog *ValueLog) fpath(fid uint32) string {
 	return utils.VlogFilePath(vlog.DirPath, fid)
 }
 
+func (vlog *ValueLog) waitOnGC(closer *utils.Closer) {
+	// 不继续等待 vlogGC 完毕吗? 仅仅是禁止新 GC启动;
+	defer closer.Done()
+	select {
+	case <-closer.CloseSignal:
+		// Block any GC in progress to finish, and don't allow any more writes to runGC by filling up
+		// the channel of size 1.
+		// 装满通道, 禁止vlogGC再启动;
+		vlog.GarbageCh <- struct{}{}
+		fmt.Println("vlog GC waitOnGC exit.")
+	}
+}
+
 func (vlog *ValueLog) runGC(discardRatio float64) error {
 	select {
 	case vlog.GarbageCh <- struct{}{}:
@@ -430,7 +445,7 @@ func (vlog *ValueLog) runGC(discardRatio float64) error {
 			<-vlog.GarbageCh
 		}()
 		var err error
-		vLogFiles := vlog.pickVlogFile()
+		vLogFiles := vlog.pickVlogFile(discardRatio)
 		if vLogFiles == nil || len(vLogFiles) == 0 {
 			return common.ErrNoRewrite
 		}
@@ -480,21 +495,17 @@ func (vlog *ValueLog) iterator(vlogFile *file.VLogFile, offset uint32, fn model.
 
 	reader := bufio.NewReader(vlogFile.FD())
 	var recordEntryOffset uint32 = offset
+LOOP:
 	for {
 		entry, err := vlog.Entry(reader, recordEntryOffset)
 		switch {
 		case err == io.EOF:
-			return recordEntryOffset, nil
+			break LOOP
 		case err == io.ErrUnexpectedEOF || err == common.ErrTruncate:
-			return recordEntryOffset, nil
+			break LOOP
 		case err == common.ErrEmptyVlogFile:
-			return recordEntryOffset, nil
+			break LOOP
 		case err != nil:
-			return 0, err
-			//case err == nil:
-			//	continue
-		}
-		if err != nil {
 			fmt.Printf("unable to decode entry, err:%v \n", err)
 			return recordEntryOffset, err
 		}
@@ -504,10 +515,7 @@ func (vlog *ValueLog) iterator(vlogFile *file.VLogFile, offset uint32, fn model.
 		vp.Offset = entry.Offset
 		vp.Fid = vlogFile.FID
 		recordEntryOffset += vp.Len
-		if err := fn(entry, &vp); err != nil {
-			if err == common.ErrStop {
-				break
-			}
+		if err = fn(entry, &vp); err != nil {
 			return 0, common.WarpErr(fmt.Sprintf("Iteration function %s", vlogFile.FileName()), err)
 		}
 	}
@@ -565,7 +573,7 @@ func (vlog *ValueLog) getIteratorCount() int {
 	return int(atomic.LoadInt32(&vlog.activeIteratorNum))
 }
 
-func (vlog *ValueLog) pickVlogFile() []*file.VLogFile {
+func (vlog *ValueLog) pickVlogFile(discardRatio float64) []*file.VLogFile {
 	vlog.Mux.Lock()
 	defer vlog.Mux.Unlock()
 	files := make([]*file.VLogFile, 0)
@@ -575,8 +583,8 @@ func (vlog *ValueLog) pickVlogFile() []*file.VLogFile {
 	}
 
 	candidate := struct {
-		fid          uint32
-		discardRatio int64
+		fid     uint32
+		discard int64
 	}{math.MaxUint32, 0}
 
 	vlog.VLogFileDisCardStaInfo.mux.RLock()
@@ -584,28 +592,22 @@ func (vlog *ValueLog) pickVlogFile() []*file.VLogFile {
 		if sortedFileId == vlog.maxFid {
 			continue
 		}
-		if vlog.VLogFileDisCardStaInfo.FileMap[sortedFileId] > candidate.discardRatio {
+		if vlog.VLogFileDisCardStaInfo.FileMap[sortedFileId] > candidate.discard {
 			candidate.fid = sortedFileId
-			candidate.discardRatio = vlog.VLogFileDisCardStaInfo.FileMap[sortedFileId]
+			candidate.discard = vlog.VLogFileDisCardStaInfo.FileMap[sortedFileId]
 		}
 	}
 	vlog.VLogFileDisCardStaInfo.mux.RUnlock()
+
 	if candidate.fid != math.MaxUint32 {
+		lf := vlog.filesMap[candidate.fid]
+		fileInfo, _ := lf.FD().Stat()
+		if size := discardRatio * float64(fileInfo.Size()); float64(candidate.discard) < size {
+			return nil
+		}
 		files = append(files, vlog.filesMap[candidate.fid])
 	}
 	return files
-}
-
-func (vlog *ValueLog) replayLog(logFile *file.VLogFile, offset uint32, replayFn model.LogEntry) error {
-	endOffset, err := vlog.iterator(logFile, offset, replayFn)
-	if err != nil {
-		return common.WarpErr(fmt.Sprintf("Unable to replay logfile:[%s] err:%v \n", logFile.FileName(), err), err)
-	}
-	fmt.Printf("Truncating vlog file %s to offset: %d\n", logFile.FileName(), endOffset)
-	if err = logFile.Truncate(int64(endOffset)); err != nil {
-		return common.WarpErr(fmt.Sprintf("Truncation needed at offset %d. Can be done manually as well.", endOffset), err)
-	}
-	return nil
 }
 
 // GC: LSM中 有的话说明有效数据,就再重新写到新文件中,否则就丢弃掉;
@@ -708,10 +710,7 @@ func (vlog *ValueLog) gcReWriteLog(logFile *file.VLogFile) error {
 
 func (vlog *ValueLog) sendDiscardStats() error {
 	entry, err := vlog.Db.Get([]byte(common.VlogFileDiscardStatsKey))
-	if err != nil {
-		return err
-	}
-	if entry.Meta == 0 && len(entry.Value) == 0 {
+	if err != nil || entry.Version == -1 {
 		return err
 	}
 	val := entry.Value

@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"trainKv/common"
 	"trainKv/model"
@@ -30,6 +29,7 @@ type targets struct {
 	levelTargetSSize []int64
 	fileSize         []int64
 }
+
 type compactDef struct {
 	compactorId int
 	prior       compactionPriority
@@ -46,6 +46,7 @@ type compactDef struct {
 
 	thisSize int64
 }
+
 type thisAndNextLevelRLocked struct{}
 
 func (cd *compactDef) lockLevel() {
@@ -59,12 +60,12 @@ func (cd *compactDef) unlockLevel() {
 }
 
 // 1. 启动压缩
-func (lm *levelsManger) runCompacter(compactorId int) {
-	defer lm.lsm.Closer.Done()
+func (lm *levelsManger) runCompacter(compactorId int, closer *utils.Closer) {
+	defer closer.Done()
 	randomDelay := time.NewTimer(time.Duration(rand.Intn(1000)) * time.Millisecond)
 	select {
 	case <-randomDelay.C:
-	case <-lm.lsm.Closer.CloseSignal:
+	case <-closer.CloseSignal:
 		randomDelay.Stop()
 		return
 	}
@@ -74,7 +75,7 @@ func (lm *levelsManger) runCompacter(compactorId int) {
 		select {
 		case <-ticker.C:
 			lm.runOnce(compactorId)
-		case <-lm.lsm.Closer.CloseSignal:
+		case <-closer.CloseSignal:
 			ticker.Stop()
 			return
 		}
@@ -98,6 +99,7 @@ func (lm *levelsManger) runOnce(compactorId int) bool {
 	}
 	return false
 }
+
 func moveL0toFront(prios []compactionPriority) []compactionPriority {
 	idx := -1
 	for i, prio := range prios {
@@ -114,6 +116,7 @@ func moveL0toFront(prios []compactionPriority) []compactionPriority {
 	}
 	return prios
 }
+
 func (lm *levelsManger) run(compactorId int, prio compactionPriority) bool {
 	// id是协程id, for:p 是将要参与合并的 X层源头层级, 此时 Y层也已经找好了;
 	err := lm.doCompact(compactorId, prio)
@@ -321,6 +324,7 @@ func (lm *levelsManger) findTablesL0ToDstLevel(cd *compactDef) bool {
 
 	return lm.compactIngStatus.compareAndAdd(thisAndNextLevelRLocked{}, *cd)
 }
+
 func (lm *levelsManger) findTablesL0ToL0(cd *compactDef) bool {
 	if cd.compactorId != 0 {
 		return false
@@ -420,6 +424,7 @@ func (lm *levelsManger) findTables(cd *compactDef) bool {
 	}
 	return false
 }
+
 func (lm *levelsManger) findMaxLevelTables(tables []*table, cd *compactDef) bool {
 	sortedTables := make([]*table, len(tables))
 	copy(sortedTables, tables)
@@ -452,7 +457,7 @@ func (lm *levelsManger) findMaxLevelTables(tables []*table, cd *compactDef) bool
 		if now.Sub(*t.GetCreatedAt()) < time.Hour {
 			continue
 		}
-		if t.getStaleDataSize() < common.MaxValueLogSize {
+		if t.getStaleDataSize() < uint32(lm.opt.ValueLogFileSize) {
 			continue
 		}
 		cd.thisSize = t.Size()
@@ -483,6 +488,7 @@ func (lm *levelsManger) findMaxLevelTables(tables []*table, cd *compactDef) bool
 	}
 	return lm.compactIngStatus.compareAndAdd(thisAndNextLevelRLocked{}, *cd)
 }
+
 func (lm *levelsManger) sortByStaleDataSize(tables []*table, cd *compactDef) {
 	if len(tables) == 0 || cd.nextLevel == nil {
 		return
@@ -508,6 +514,7 @@ func (lm *levelsManger) runCompactDef(id int, level int, cd compactDef) error {
 	if len(cd.splits) == 0 {
 		cd.splits = append(cd.splits, keyRange{})
 	}
+
 	buildTables, decrTables, err := lm.compactBuildTables(level, cd)
 	if err != nil {
 		return err
@@ -519,25 +526,34 @@ func (lm *levelsManger) runCompactDef(id int, level int, cd compactDef) error {
 	}()
 
 	manifestChangeSet := buildChangeSet(&cd, buildTables)
+
 	if err := lm.manifestFile.AddChanges(manifestChangeSet.Changes); err != nil {
 		return err
 	}
+
+	// bot层,目标层表;
 	if err = nextLevel.updateTable(cd.nextTables, buildTables); err != nil {
 		return err
 	}
+
+	// top层, X层的表
 	if err = thisLevel.deleteTable(cd.thisTables); err != nil {
 		return err
 	}
+
 	from := append(tablesToString(cd.thisTables), tablesToString(cd.nextTables)...)
 	to := tablesToString(buildTables)
+
 	if dur := time.Since(timeStart); dur > 2*time.Second {
 		fmt.Printf("[go_routeid %d]expensive LOG Compact %d->%d (%d, %d -> %d tables with %d splits)."+" [%s] -> [%s], took %v\n",
 			id, thisLevel.levelID, nextLevel.levelID, len(cd.thisTables), len(cd.nextTables),
 			len(buildTables), len(cd.splits), strings.Join(from, " "), strings.Join(to, " "),
 			dur.Round(time.Millisecond))
 	}
+
 	return nil
 }
+
 func (lm *levelsManger) compactBuildTables(level int, cd compactDef) ([]*table, func() error, error) {
 	thisTables := cd.thisTables
 	nextTables := cd.nextTables
@@ -553,24 +569,34 @@ func (lm *levelsManger) compactBuildTables(level int, cd compactDef) ([]*table, 
 		}
 		return append(iters, NewConcatIterator(nextTables, options))
 	}
+
 	res := make(chan *table, 3)
+
+	// 协程1
 	inflightBuilders := utils.NewThrottle(8 + len(cd.splits))
-	for _, split := range cd.splits {
+
+	for _, kr := range cd.splits {
 		if err := inflightBuilders.Do(); err != nil {
 			return nil, nil, fmt.Errorf("cannot start subcompaction: %+v", err)
 		}
+		// 协程2
 		go func(kr keyRange) {
 			defer inflightBuilders.Done(nil)
 			iterators := newIterator()
 			iterator := NewMergeIterator(iterators, false)
-			defer iterator.Close()
-			lm.subCompact(iterator, kr, cd, inflightBuilders, res)
-		}(split)
+			defer iterator.Close()                                 // 逐个解开 table 引用
+			lm.subCompact(iterator, kr, cd, inflightBuilders, res) //其中有阻塞操作,导致函数无法正常返回;
+			//inflightBuilders.Done(nil)
+			//iterator.Close()
+		}(kr)
 	}
 
+	// 协程1
 	var newTables []*table
 	var wg sync.WaitGroup
 	wg.Add(1)
+
+	// 协程3
 	go func() {
 		defer wg.Done()
 		for re := range res {
@@ -578,9 +604,12 @@ func (lm *levelsManger) compactBuildTables(level int, cd compactDef) ([]*table, 
 		}
 	}()
 
+	// 协程1
 	err := inflightBuilders.Finish()
+	close(res) // 通知 done()
+	// 协程1
 	wg.Wait()
-	close(res)
+
 	if err == nil {
 		err = utils.SyncDir(lm.opt.WorkDir)
 	}
@@ -600,7 +629,8 @@ func (lm *levelsManger) subCompact(iterator model.Iterator, kr keyRange, cd comp
 	inflightBuilders *utils.Throttle, res chan<- *table) {
 	discardStats := make(map[uint32]int64)
 	defer func() {
-		lm.updateDiscardStats(discardStats)
+		// lm.updateDiscardStats(discardStats) // 产生死锁-等待; 是非缓冲区, 必须 一收一发;
+		go lm.updateDiscardStats(discardStats) // 重新开一个go协程,让其去阻塞,不要耽搁函数返回;
 	}()
 	var lastKey []byte
 	var lastEntry model.Entry
@@ -637,12 +667,13 @@ func (lm *levelsManger) subCompact(iterator model.Iterator, kr keyRange, cd comp
 
 			if lastKey == nil {
 				lastKey = model.SafeCopy(lastKey, curKey)
-				item := iterator.Item().Item
-				lastEntry = item.SafeCopy()
+				//item := iterator.Item().Item
+				//lastEntry = item.SafeCopy()
+				lastEntry = iterator.Item().Item
 			}
 
 			if len(kr.right) > 0 && model.CompareKeyNoTs(curKey, kr.right) >= 0 {
-				lastEntry.Key = nil
+				//lastEntry.Key = nil
 				break
 			}
 			if builder.ReachedCapacity() {
@@ -658,16 +689,18 @@ func (lm *levelsManger) subCompact(iterator model.Iterator, kr keyRange, cd comp
 			if !model.SameKeyNoTs(curKey, lastKey) {
 				builderAdd(builder, lastEntry)
 				lastKey = model.SafeCopy(lastKey, curKey)
-				item := iterator.Item().Item
-				lastEntry = item.SafeCopy()
+				//item := iterator.Item().Item
+				//lastEntry = item.SafeCopy()
+				lastEntry = iterator.Item().Item
 			} else {
 				// lastKey: aaa:1  curKey: aaa:5  nextKey: aaa:9
 				if model.ParseTsVersion(curKey) > model.ParseTsVersion(lastKey) {
 					// skip lastKey
 					updateDiscardStats(lastEntry)
 					lastKey = model.SafeCopy(lastKey, curKey)
-					item := iterator.Item().Item
-					lastEntry = item.SafeCopy()
+					//item := iterator.Item().Item
+					//lastEntry = item.SafeCopy
+					lastEntry = iterator.Item().Item
 				} else {
 					// model.ParseTsVersion(curKey) <= model.ParseTsVersion(lastKey)
 					// don`t do anything; continue to next key;
@@ -695,7 +728,9 @@ func (lm *levelsManger) subCompact(iterator model.Iterator, kr keyRange, cd comp
 
 		builder := newSSTBuilderWithSSTableSize(lm.opt, cd.dst.fileSize[cd.nextLevel.levelID])
 		judgeKeys(builder)
+
 		if builder.empty() {
+			builder.Finish()
 			continue
 		}
 
@@ -705,17 +740,30 @@ func (lm *levelsManger) subCompact(iterator model.Iterator, kr keyRange, cd comp
 
 		go func(builder *sstBuilder) {
 			defer inflightBuilders.Done(nil)
-			newFID := atomic.AddUint64(&lm.maxFID, 1)
+			newFID := lm.nextFileID()
 			ssName := utils.FileNameSSTable(lm.opt.WorkDir, newFID)
-			ntl := openTable(lm, ssName, builder)
-			if ntl == nil {
-				return
+			ntl, err := openTable(lm, ssName, builder)
+			if err != nil {
+				common.Err(err)
+				panic(err)
 			}
 			res <- ntl
 		}(builder)
-	}
+	} // for over
 }
-
+func IsDeletedOrExpired(e model.Entry) bool {
+	if e.Meta&common.BitDelete > 0 {
+		return true
+	}
+	if e.Version == -1 {
+		return true
+	}
+	if e.ExpiresAt == 0 {
+		return false
+	}
+	return false
+	//return e.ExpiresAt <= uint64(time.Now().Unix())
+}
 func (lm *levelsManger) updateDiscardStats(discardStats map[uint32]int64) {
 	select {
 	case *lm.lsm.option.DiscardStatsCh <- discardStats:
@@ -866,17 +914,6 @@ func (cs *compactIngStatus) compareAndAdd(_ thisAndNextLevelRLocked, cd compactD
 		cs.tables[t.fid] = struct{}{}
 	}
 	return true
-}
-
-func IsDeletedOrExpired(e model.Entry) bool {
-	if e.Meta&common.BitDelete > 0 || e.Value == nil || len(e.Value) == 0 {
-		return true
-	}
-	if e.ExpiresAt == 0 {
-		return false
-	}
-	return false
-	//return e.ExpiresAt <= uint64(time.Now().Unix())
 }
 
 // levelCompactStatus 每一层的压缩状态信息

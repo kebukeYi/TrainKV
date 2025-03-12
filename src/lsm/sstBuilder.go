@@ -22,7 +22,7 @@ type sstBuilder struct {
 	curBlock      *block
 	keyCount      uint32
 	keyHashes     []uint32 // sst 为单位
-	maxVersion    uint64
+	maxVersion    int64
 	baseKey       []byte
 	staleDataSize int
 	estimateSize  int64
@@ -84,7 +84,6 @@ func newSSTBuilder(opt *Options) *sstBuilder {
 	}
 }
 
-// 1. 向当前block中 append kv数据
 func (ssb *sstBuilder) AddKey(e model.Entry) {
 	ssb.add(e, false)
 }
@@ -95,8 +94,6 @@ func (ssb *sstBuilder) AddStaleKey(e model.Entry) {
 }
 
 func (ssb *sstBuilder) add(e model.Entry, isStale bool) {
-	fmt.Printf("ssb add key: %s, val: %s, version:%d meta:%d ;\n",
-		string(e.Key), string(e.Value), e.Version, e.Meta)
 	key := e.Key
 	val := model.ValueExt{
 		Meta:      e.Meta,
@@ -263,7 +260,7 @@ func (ssb *sstBuilder) buildBlockIndex(bloom []byte) ([]byte, uint32) {
 		tableIndex.BloomFilter = bloom
 	}
 	tableIndex.KeyCount = ssb.keyCount
-	tableIndex.MaxVersion = ssb.maxVersion
+	tableIndex.MaxVersion = uint64(ssb.maxVersion)
 	tableIndex.Offsets = ssb.writeBlockList()
 	var dataBlockSize uint32
 	for i := 0; i < len(ssb.blockList); i++ {
@@ -370,19 +367,17 @@ func (itr *blockIterator) setBlock(b *block) {
 	itr.prevOverlap = 0
 	itr.key = itr.key[:0]
 	itr.val = itr.val[:0]
-	// 只截取data部分, 剩余的 索引部分 不需要;
+	// 截取data部分;
 	itr.data = b.data[:b.entriesIndexOff]
+	// 索引部分;
 	itr.entryOffsets = b.entryOffsets
 }
-
 func (itr *blockIterator) seekToFirst() {
 	itr.setIndex(0)
 }
-
 func (itr *blockIterator) seekToLast() {
 	itr.setIndex(len(itr.entryOffsets) - 1)
 }
-
 func (itr *blockIterator) Seek(key []byte) {
 	itr.err = nil
 	startIndex := 0
@@ -398,7 +393,6 @@ func (itr *blockIterator) Seek(key []byte) {
 	// idx = 0 有可能也是不存在值的;(例如寻找最小不存在的值)
 	itr.setIndex(findEntryIndex)
 }
-
 func (itr *blockIterator) setIndex(idx int) {
 	itr.idx = idx // v2.0
 	if idx >= len(itr.entryOffsets) || idx < 0 {
@@ -432,7 +426,8 @@ func (itr *blockIterator) setIndex(idx int) {
 	valueOffset := headerSize + header.dif
 	diffKey := entryData[headerSize:valueOffset]
 	itr.key = append(itr.key[:header.overlap], diffKey...)
-	eny := model.Entry{Key: itr.key}
+	eny := model.Entry{}
+	eny.Key = model.SafeCopy(eny.Key, itr.key)
 	val := &model.ValueExt{}
 	val.DecodeVal(entryData[valueOffset:])
 	itr.val = val.Value
@@ -442,31 +437,24 @@ func (itr *blockIterator) setIndex(idx int) {
 	eny.Version = model.ParseTsVersion(itr.key)
 	itr.it = model.Item{Item: eny}
 }
-
 func (itr *blockIterator) Next() {
 	itr.setIndex(itr.idx + 1)
 }
-
 func (itr *blockIterator) Prev() {
 	itr.setIndex(itr.idx - 1)
 }
-
 func (itr *blockIterator) Valid() bool {
 	return itr.err != io.EOF
 }
-
 func (itr *blockIterator) Rewind() {
 	itr.setIndex(0)
 }
-
 func (itr *blockIterator) Item() model.Item {
 	return itr.it
 }
-
 func (itr *blockIterator) Close() error {
 	return nil
 }
-
 func (itr *blockIterator) Error() error {
 	return itr.err
 }

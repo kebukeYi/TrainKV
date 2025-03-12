@@ -2,6 +2,7 @@ package lsm
 
 import (
 	"fmt"
+	"sync"
 	"trainKv/common"
 	"trainKv/model"
 	"trainKv/skl"
@@ -9,86 +10,79 @@ import (
 )
 
 type LSM struct {
+	sync.RWMutex
 	memoryTable    *memoryTable
 	immemoryTables []*memoryTable
 	levelManger    *levelsManger
 	option         *Options
 	maxMemFID      uint32
 
+	flushMemTable chan *memoryTable
+
 	ExpiredValPtrChan chan model.ValuePtr // compact`MergeIterator`fix() to lsm;
 	ExpiredValNum     int
 	ExpiredValSize    int64
-
-	Closer *utils.Closer
 }
 
-func NewLSM(opt *Options) *LSM {
+func NewLSM(opt *Options, closer *utils.Closer) *LSM {
 	lsm := &LSM{
-		option: opt,
+		option:        opt,
+		flushMemTable: make(chan *memoryTable, opt.NumFlushMemtables),
 	}
+	// 1. 更新 lm.maxID
 	lsm.levelManger = lsm.InitLevelManger(opt)
+
+	go lsm.StartFlushMemTable(closer) // lock
+
+	// 2. 更新 lm.maxID
 	lsm.memoryTable, lsm.immemoryTables = lsm.recovery()
-	lsm.Closer = utils.NewCloser()
+	for _, im := range lsm.immemoryTables {
+		lsm.flushMemTable <- im
+	}
 	return lsm
 }
 
 func (lsm *LSM) Put(entry model.Entry) (err error) {
-	if entry.Key == nil || len(entry.Key) == 0 {
+	if entry.Key == nil || len(entry.Key) == 0 || len(entry.Key) <= 8 {
 		return common.ErrEmptyKey
 	}
-	if int64(lsm.memoryTable.wal.Size())+int64(EstimateWalEncodeSize(&entry)) >
-		lsm.option.MemTableSize {
-		fmt.Printf("memtable is full, rotate memtable when entry key:%s | value: %s\n",
-			entry.Key, entry.Value)
+
+	if int64(lsm.memoryTable.wal.Size())+int64(EstimateWalEncodeSize(&entry)) > lsm.option.MemTableSize {
+		fmt.Printf("memtable is full, rotate memtable when entry key:%s | meta:%d |value: %s ;\n",
+			model.ParseKey(entry.Key), entry.Meta, entry.Value)
 		lsm.Rotate()
 	}
 
-	// 1. 跳表中进行对比时, key 去除掉 Ts 版本号, 原生key相同则更新;
-	// 2. 添加进跳表中的 key 是携带有 Ts版本号;
-	// 3. wal的 key 是携带有 Ts版本号
+	// 1. 跳表中进行对比时, key 去除掉 Ts 时间戳号, 原生key相同则更新;
+	// 2. 添加进跳表中的 key 是携带有 Ts时间戳;
+	// 3. wal文件持久化的的 key 是携带有 Ts时间错;
 	err = lsm.memoryTable.Put(entry)
 	if err != nil {
 		return err
 	}
 
-	// 检查是否存在immutable需要刷盘，
-	for _, immutable := range lsm.immemoryTables {
-		if err = lsm.levelManger.flush(immutable); err != nil {
-			return err
-		}
-		fmt.Printf("flush immutable table currKey:%s | Meta: %v\n",
-			immutable.currKey, immutable.currKeyMeta)
-		// TODO 这里问题很大，应该是用引用计数的方式回收
-		err = immutable.close(true)
-		common.Panic(err)
-	}
-	if len(lsm.immemoryTables) != 0 {
-		// TODO 将lsm的immutables队列置空，这里可以优化一下节省内存空间，还可以限制一下immut table的大小为固定值
-		lsm.immemoryTables = make([]*memoryTable, 0)
-	}
 	return err
 }
 
-func (lsm *LSM) Get(key []byte) (model.Entry, error) {
-	if len(key) == 0 {
-		return model.Entry{}, common.ErrEmptyKey
+func (lsm *LSM) Get(keyTs []byte) (model.Entry, error) {
+	if len(keyTs) <= 8 {
+		return model.Entry{Version: -1}, common.ErrEmptyKey
 	}
-	// 1. 跳表中进行对比时, key 去除掉 Ts 版本号, 假如key相同时,则比较谁的版本高;
-	entry, err := lsm.memoryTable.Get(key)
-	if entry.Value != nil {
-		//fmt.Printf("memtable[%d] orginKey:%s | Meta: %v | v:%s;\n", 0, model.ParseKey(key), entry.Meta, entry.Value)
+	var (
+		entry model.Entry
+		err   error
+	)
+	// 1. 跳表中进行对比, key 去除掉 Ts时间戳进行对比,相同直接返回到lsm,将不再继续向level层寻找;
+	entry, err = lsm.memoryTable.Get(keyTs)
+	if entry.Version != -1 {
 		return entry, err
 	}
-
 	for i := len(lsm.immemoryTables) - 1; i >= 0; i-- {
-		if entry, err = lsm.immemoryTables[i].Get(key); entry.Value != nil {
-			//fmt.Printf("immutables[%d] orginKey:%s | Meta: %v | v:%s;\n", 0,
-			//	model.ParseKey(key), entry.Meta, entry.Value)
+		if entry, err = lsm.immemoryTables[i].Get(keyTs); entry.Version != -1 {
 			return entry, err
 		}
 	}
-	// 从level manger查询
-	return lsm.levelManger.Get(key)
+	return lsm.levelManger.Get(keyTs)
 }
 
 func (lsm *LSM) MemSize() int64 {
@@ -104,18 +98,59 @@ func (lsm *LSM) GetSkipListFromMemTable() *skl.SkipList {
 }
 
 func (lsm *LSM) Rotate() {
+	lsm.Lock()
 	lsm.immemoryTables = append(lsm.immemoryTables, lsm.memoryTable)
+	im := lsm.memoryTable
 	lsm.memoryTable = lsm.NewMemoryTable()
+	lsm.Unlock()
+	fmt.Printf("#Rotate(): channle to im name:%s \n", im.name)
+	lsm.flushMemTable <- im
+
 }
-func (lsm *LSM) StartCompacter() {
-	n := lsm.option.NumCompactors
-	lsm.Closer.Add(n)
-	for i := 0; i < n; i++ {
-		go lsm.levelManger.runCompacter(i)
+
+func (lsm *LSM) StartFlushMemTable(closer *utils.Closer) {
+	defer closer.Done()
+	flushIMemoryTable := func(im *memoryTable) {
+		if im == nil {
+			return
+		}
+		fmt.Printf("#StartFlushMemTable(): channle get im name:%s \n", im.name)
+		if err := lsm.levelManger.flush(im); err != nil {
+			common.Panic(err)
+		}
+		lsm.Lock()
+		lsm.immemoryTables = lsm.immemoryTables[1:]
+		im.skipList.DecrRef()
+		lsm.Unlock()
+	}
+	for {
+		select {
+		case <-closer.CloseSignal:
+			fmt.Println("Waiting for flushMemTable...")
+			for im := range lsm.flushMemTable {
+				flushIMemoryTable(im)
+			}
+			fmt.Printf("#StartFlushMemTable(): exit. \n")
+			return
+		case im := <-lsm.flushMemTable:
+			flushIMemoryTable(im)
+		}
 	}
 }
+
+func (lsm *LSM) CloseFlushIMemChan() {
+	close(lsm.flushMemTable)
+}
+
+func (lsm *LSM) StartCompacter(closer *utils.Closer) {
+	n := lsm.option.NumCompactors
+	closer.Add(n - 1)
+	for coroutineID := 0; coroutineID < n; coroutineID++ {
+		go lsm.levelManger.runCompacter(coroutineID, closer)
+	}
+}
+
 func (lsm *LSM) Close() error {
-	lsm.Closer.Close()
 	if lsm.memoryTable != nil {
 		if err := lsm.memoryTable.close(false); err != nil {
 			return err

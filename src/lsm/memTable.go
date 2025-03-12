@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	errors "trainKv/common"
 	"trainKv/model"
 	. "trainKv/skl"
@@ -27,7 +26,7 @@ type memoryTable struct {
 }
 
 func (lsm *LSM) NewMemoryTable() *memoryTable {
-	newFid := atomic.AddUint64(&(lsm.levelManger.maxFID), 1)
+	newFid := lsm.levelManger.nextFileID()
 	walFileOpt := &utils.FileOptions{
 		Dir:      lsm.option.WorkDir,
 		Flag:     os.O_CREATE | os.O_RDWR,
@@ -35,24 +34,29 @@ func (lsm *LSM) NewMemoryTable() *memoryTable {
 		FID:      newFid,
 		FileName: mtFilePath(lsm.option.WorkDir, newFid),
 	}
-	return &memoryTable{
+	mt := &memoryTable{
 		lsm:      lsm,
 		skipList: NewSkipList(lsm.option.MemTableSize),
 		wal:      OpenWalFile(walFileOpt),
 		name:     strconv.FormatUint(newFid, 10) + MemTableName,
 	}
+	mt.skipList.OnClose = func() {
+		mt.close(true)
+	}
+	return mt
 }
 
-func (m *memoryTable) Get(key []byte) (model.Entry, error) {
-	if key == nil {
-		return model.Entry{}, errors.ErrNotFound
-	}
-	val := m.skipList.Get(key) // 没有找到就返回: model.ValueExt{}
-	if val.Meta == 0 && val.Value == nil {
-		return model.Entry{}, errors.ErrNotFound
+func (m *memoryTable) Get(keyTs []byte) (model.Entry, error) {
+	m.skipList.IncrRef()
+	defer m.skipList.DecrRef()
+	val := m.skipList.Get(keyTs) // 没有找到就返回: model.ValueExt{Version: -1}
+	// 1.没有找到; 满足: val.Version: == -1 && val.Value == nil;
+	// 2.delete标记的数据; val.Meta=delete; 仅满足: val.Value == nil;
+	if val.Version == -1 {
+		return model.Entry{Version: -1}, errors.ErrKeyNotFound
 	}
 	e := model.Entry{
-		Key:       key,
+		Key:       keyTs,
 		Value:     val.Value,
 		Meta:      val.Meta,
 		ExpiresAt: val.ExpiresAt,
@@ -96,16 +100,15 @@ func (lsm *LSM) recovery() (*memoryTable, []*memoryTable) {
 		return nil, nil
 	}
 	var fids []uint64
-	mixFid := lsm.levelManger.maxFID
+	var maxFid uint64
 	for _, file := range files {
-		//if !strings.HasPrefix(file.Name(), walFileExt) {
 		if !strings.HasSuffix(file.Name(), walFileExt) {
 			continue
 		}
 		fileNameSize := len(file.Name())
 		fid, err := strconv.ParseUint(file.Name()[:fileNameSize-len(walFileExt)], 10, 64)
-		if mixFid < fid {
-			mixFid = fid
+		if maxFid < fid {
+			maxFid = fid
 		}
 		if err != nil {
 			errors.Panic(err)
@@ -121,11 +124,14 @@ func (lsm *LSM) recovery() (*memoryTable, []*memoryTable) {
 		memTable, err := lsm.openMemTable(fid)
 		errors.CondPanic(err != nil, err)
 		if memTable.skipList.GetMemSize() == 0 {
+			memTable.skipList.DecrRef()
 			continue
 		}
 		immutable = append(immutable, memTable)
 	}
-	lsm.levelManger.maxFID = mixFid
+	if maxFid > lsm.levelManger.maxFID.Load() {
+		lsm.levelManger.maxFID.Store(maxFid)
+	}
 	return lsm.NewMemoryTable(), immutable
 }
 
@@ -144,6 +150,9 @@ func (lsm *LSM) openMemTable(walFid uint64) (*memoryTable, error) {
 		skipList: s,
 		wal:      walFile,
 		name:     strconv.FormatUint(walFid, 10) + MemTableName,
+	}
+	mem.skipList.OnClose = func() {
+		mem.close(true)
 	}
 	err := mem.recovery2SkipList()
 	errors.CondPanic(err != nil, err)

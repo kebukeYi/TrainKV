@@ -8,7 +8,7 @@ type ValueExt struct {
 	Value     []byte
 	ExpiresAt uint64
 
-	Version uint64 // This field is not serialized. Only for internal usage.
+	Version int64 // This field is not serialized. Only for internal usage.
 }
 
 func (val *ValueExt) EncodeValSize() uint32 {

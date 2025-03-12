@@ -96,6 +96,7 @@ func (m *MmapFile) NewReader(offset int) io.Reader {
 		offset: offset,
 	}
 }
+
 func (m *mmapReader) Read(buf []byte) (int, error) {
 	fmt.Printf("mmapReader Read %d\n", len(buf))
 	if m.offset > len(m.Data) {

@@ -27,19 +27,17 @@ type table struct {
 	Name string
 }
 
-func openTable(lm *levelsManger, tableName string, builder *sstBuilder) *table {
+func openTable(lm *levelsManger, tableName string, builder *sstBuilder) (*table, error) {
 	var (
 		t   *table
 		err error
 	)
 	fid := utils.FID(tableName)
-	if fid > lm.maxFID {
-		lm.maxFID = fid
-	}
+
 	if builder != nil {
 		if t, err = builder.flush(lm, tableName); err != nil {
 			common.Err(err)
-			return nil
+			return nil, err
 		}
 	} else {
 		t = &table{lm: lm, fid: fid, Name: strconv.FormatUint(fid, 10) + SSTableName}
@@ -54,7 +52,7 @@ func openTable(lm *levelsManger, tableName string, builder *sstBuilder) *table {
 	t.IncrRef()
 	if err = t.sst.Init(); err != nil {
 		common.Err(err)
-		return nil
+		return nil, err
 	}
 	// 获取sst的最大key 需要使用迭代器, 逆向获得;
 	itr := t.NewTableIterator(&model.Options{IsAsc: false})
@@ -64,31 +62,29 @@ func openTable(lm *levelsManger, tableName string, builder *sstBuilder) *table {
 
 	maxKey := itr.Item().Item.Key
 	t.sst.SetMaxKey(maxKey)
-	return t
+	return t, nil
 }
 
-func (t *table) Search(key []byte, maxVs *uint64) (entry model.Entry, err error) {
+func (t *table) Search(keyTs []byte) (entry model.Entry, err error) {
 	t.IncrRef()
 	defer t.DecrRef()
 	indexData := t.sst.Indexs()
 	bloomFilter := utils.Filter(indexData.BloomFilter)
-	if t.sst.HasBloomFilter() && !bloomFilter.MayContainKey(model.ParseKey(key)) {
-		return model.Entry{}, common.ErrNotFound
+	if t.sst.HasBloomFilter() && !bloomFilter.MayContainKey(model.ParseKey(keyTs)) {
+		return model.Entry{Version: -1}, common.ErrKeyNotFound
 	}
 	iterator := t.NewTableIterator(&model.Options{IsAsc: true})
 	defer iterator.Close()
-	iterator.Seek(key)
-	if !iterator.Valid() { // 有可能在有效的情况下,返回错误的数值;
-		return model.Entry{}, iterator.err
+	iterator.Seek(keyTs)
+	if !iterator.Valid() {
+		return model.Entry{Version: -1}, iterator.err
 	}
-	// todo 2. 判断key是否在sst中,也是祛除掉了 Key 的Ts版本号
-	if model.SameKeyNoTs(key, iterator.Item().Item.Key) {
-		if version := model.ParseTsVersion(iterator.Item().Item.Key); version > 0 {
-			*maxVs = version
-			return iterator.Item().Item, nil
-		}
+	// 额外:有可能在有效的情况下,返回和keyTs不相同的数值;
+	// 因此需要再判断一次;
+	if model.SameKeyNoTs(keyTs, iterator.Item().Item.Key) {
+		return iterator.Item().Item, nil
 	}
-	return model.Entry{}, common.ErrKeyNotFound
+	return model.Entry{Version: -1}, common.ErrKeyNotFound
 }
 
 func (t *table) getBlock(idx int) (*block, error) {
@@ -126,15 +122,14 @@ func (t *table) getBlock(idx int) (*block, error) {
 	if err = b.verifyCheckSum(); err != nil {
 		return nil, err
 	}
-
 	// restart point len
 	readPos -= 4
 	numEntries := int(binary.BigEndian.Uint32(b.data[readPos : readPos+4])) // 4. read numEntries
-	entriesIndexStart := readPos - (numEntries * 4)
-	entriesIndexEnd := entriesIndexStart + (numEntries * 4)
+	entriesStart := readPos - (numEntries * 4)
+	entriesEnd := entriesStart + (numEntries * 4)
 
-	b.entryOffsets = model.BytesToU32Slice(b.data[entriesIndexStart:entriesIndexEnd]) // 5. read entry[]
-	b.entriesIndexOff = entriesIndexStart
+	b.entryOffsets = model.BytesToU32Slice(b.data[entriesStart:entriesEnd]) // 5. read entry[]
+	b.entriesIndexOff = entriesStart
 	t.lm.cache.blockData.Set(blockCacheKey, b) // 6. cache block
 	return b, nil
 }
@@ -168,12 +163,15 @@ func (t *table) blockCacheKey(idx int) []byte {
 }
 
 func (t *table) Size() int64 { return t.sst.Size() }
+
 func (t *table) getStaleDataSize() uint32 {
 	return t.sst.Indexs().StaleDataSize
 }
+
 func (t *table) IncrRef() {
 	atomic.AddInt32(&t.ref, 1)
 }
+
 func (t *table) DecrRef() error {
 	atomic.AddInt32(&t.ref, -1)
 	if t.ref == 0 {
@@ -182,12 +180,12 @@ func (t *table) DecrRef() error {
 			t.lm.cache.blockData.Del(t.blockCacheKey(i))
 		}
 		if err := t.Delete(); err != nil {
-
 			return err
 		}
 	}
 	return nil
 }
+
 func decrRefs(tables []*table) error {
 	for _, t := range tables {
 		if err := t.DecrRef(); err != nil {
@@ -196,11 +194,13 @@ func decrRefs(tables []*table) error {
 	}
 	return nil
 }
+
 func (t *table) GetCreatedAt() *time.Time {
 	return t.sst.GetCreatedAt()
 }
+
 func (t *table) Delete() error {
-	fmt.Printf("delete sstTable: %d \n", t.sst.fid)
+	fmt.Printf("delete sstTable:  %d.sst;\n", t.sst.fid)
 	return t.sst.Detele()
 }
 
@@ -216,18 +216,16 @@ type tableIterator struct {
 
 func (t *table) NewTableIterator(opt *model.Options) *tableIterator {
 	t.IncrRef()
-	fmt.Printf("tableName:%s NewTableIterator()!\n", t.Name)
+	fmt.Printf("tableName: %s NewTableIterator!\n", t.Name)
 	return &tableIterator{opt: opt, t: t, biter: &blockIterator{}, name: t.Name}
 }
 func (tier *tableIterator) Name() string {
 	return tier.name
 }
-
 func (tier *tableIterator) Item() model.Item {
 	//return tier.it
 	return tier.biter.it
 }
-
 func (tier *tableIterator) Rewind() {
 	if tier.opt.IsAsc {
 		tier.SeekToFirst()
@@ -235,7 +233,6 @@ func (tier *tableIterator) Rewind() {
 		tier.SeekToLast()
 	}
 }
-
 func (tier *tableIterator) Next() {
 	if tier.opt.IsAsc {
 		tier.next()
@@ -243,7 +240,6 @@ func (tier *tableIterator) Next() {
 		tier.prev()
 	}
 }
-
 func (tier *tableIterator) next() {
 	tier.err = nil
 	if tier.blockIterPos >= len(tier.t.sst.Indexs().GetOffsets()) {
@@ -275,7 +271,6 @@ func (tier *tableIterator) next() {
 	}
 	tier.it = tier.biter.Item()
 }
-
 func (tier *tableIterator) prev() {
 	tier.err = nil
 	if tier.blockIterPos < 0 {
@@ -305,13 +300,12 @@ func (tier *tableIterator) prev() {
 		return
 	}
 }
-
 func (tier *tableIterator) Valid() bool {
 	//return tier.err != io.EOF // 如果没有的时候 则是EOF
 	return tier.err == nil // 如果没有的时候 则是EOF;
 }
 
-// Seek 在 sst 中扫描 index 索引数据来寻找 合适的 block;
+// Seek 在 sst 中扫描 block 索引数据来寻找 合适的 block;
 func (tier *tableIterator) Seek(key []byte) {
 	if tier.opt.IsAsc {
 		tier.seek(key)
@@ -319,11 +313,9 @@ func (tier *tableIterator) Seek(key []byte) {
 		tier.seekPrev(key)
 	}
 }
-
 func (tier *tableIterator) seek(key []byte) {
 	tier.seekFrom(key)
 }
-
 func (tier *tableIterator) seekFrom(key []byte) {
 	var blo pb.BlockOffset
 	blockOffsetLen := len(tier.t.sst.Indexs().GetOffsets())
@@ -333,24 +325,17 @@ func (tier *tableIterator) seekFrom(key []byte) {
 		if index == blockOffsetLen {
 			return true
 		}
-		blockBaseKey := blo.GetKey()
+		blockBaseKey := blo.GetKey() // block.baseKey, 每个block中的第一个key;
 		compareKeyNoTs := model.CompareKeyNoTs(blockBaseKey, key)
 		return compareKeyNoTs > 0
 	})
-	// todo table 寻找key
-	if idx == 0 { // 应该说明 没有这个 key 啊,找不到此key啊;
-		// 这个 sst 中没有这个 key
+	// todo table 寻找相关 block;
+	if idx == 0 { // 说明库中没有这个key;但是依然选择返回库中最小的值;
 		tier.SeekHelper(0, key)
 		return
 	}
-	// 1. 没有找到,返回n; 应该直接返回没有找到;
-	// 2. 找到了,找到了也返回n
-	// 只能碰碰运气
-	//if idx == blockOffsetLen {
-	//	tier.SeekHelper(idx, key)
-	//	return
-	//}
-	// idx in (0,n) 区间, 那就取前一个 block 进行查询;
+	// 没有找到大于key的block,因此返回n,返回库中存在的最大值;
+	// idx in [0,n) 区间, 那就取前一个 block 进行查询;
 	tier.SeekHelper(idx-1, key)
 }
 func (tier *tableIterator) seekPrev(key []byte) {
@@ -373,7 +358,6 @@ func (tier *tableIterator) SeekHelper(blockIdx int, key []byte) {
 	tier.biter.setBlock(block)
 	// 从 block 中 加载 entry
 	tier.biter.Seek(key)
-	//tier.it = tier.biter.Item()
 	tier.err = tier.biter.Error()
 }
 func (tier *tableIterator) SeekToFirst() {
@@ -393,7 +377,6 @@ func (tier *tableIterator) SeekToFirst() {
 	tier.biter.tableID = tier.t.fid
 	tier.biter.setBlock(Block)
 	tier.biter.seekToFirst()
-	//tier.it = tier.biter.Item()
 	tier.err = tier.biter.Error()
 }
 func (tier *tableIterator) SeekToLast() {
@@ -413,7 +396,6 @@ func (tier *tableIterator) SeekToLast() {
 	tier.biter.tableID = tier.t.fid
 	tier.biter.setBlock(Block)
 	tier.biter.seekToLast()
-	// tier.it = tier.biter.Item() // 指针赋值?
 	tier.err = tier.biter.Error()
 }
 func (tier *tableIterator) Close() error {

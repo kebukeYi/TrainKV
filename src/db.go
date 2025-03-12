@@ -1,6 +1,7 @@
 package src
 
 import (
+	"fmt"
 	"github.com/pkg/errors"
 	"sync"
 	"trainKv/common"
@@ -18,46 +19,54 @@ type TrainKVDB struct {
 	blockWrites    int32
 	VlogReplayHead model.ValuePtr
 	logRotates     int32
-	Closer         *utils.Closer
+	Closer         closer
 }
 
-func Open(opt *lsm.Options) (*TrainKVDB, error) {
-	db := &TrainKVDB{Opt: opt}
-	db.initVlog()
-	db.Lsm = lsm.NewLSM(&lsm.Options{
-		WorkDir:             opt.WorkDir,
-		MemTableSize:        opt.MemTableSize,
-		SSTableMaxSz:        opt.SSTableMaxSz,
-		BlockSize:           opt.BlockSize,
-		BloomFalsePositive:  opt.BloomFalsePositive,
-		CacheNums:           opt.CacheNums,
-		NumCompactors:       2,
-		BaseLevelSize:       10 << 20,
-		LevelSizeMultiplier: 10,
-		TableSizeMultiplier: 2,
-		BaseTableSize:       5 << 20,
-		NumLevelZeroTables:  15,
-		MaxLevelNum:         common.MaxLevelNum,
-		DiscardStatsCh:      &(db.vlog.VLogFileDisCardStaInfo.FlushCh),
-	})
+type closer struct {
+	memtable   *utils.Closer
+	compactors *utils.Closer
+	writes     *utils.Closer
+	valueGC    *utils.Closer
+}
 
-	// .vlog 遍历maxID文件, 仅仅是获得,可写offset;
+func Open(opt *lsm.Options) (*TrainKVDB, error, func() error) {
+	if opt == nil {
+		opt = lsm.GetLSMDefaultOpt("")
+	}
+	callBack, _ := lsm.CheckLSMOpt(opt)
+	db := &TrainKVDB{Opt: opt}
+
+	db.initVlog()
+	opt.DiscardStatsCh = &db.vlog.VLogFileDisCardStaInfo.FlushCh
+
+	db.Closer.memtable = utils.NewCloser(1)
+	db.Lsm = lsm.NewLSM(opt, db.Closer.memtable)
+
+	db.Closer.valueGC = utils.NewCloser(1)
+	go db.vlog.waitOnGC(db.Closer.valueGC)
+
+	// 3. 更新 lm.maxID
 	if err := db.vlog.Open(func(e *model.Entry, vp *model.ValuePtr) error {
 		return nil
 	}); err != nil {
 		common.Panic(err)
 	}
-	// 启动 sstable 的合并压缩过程
-	//go db.Lsm.StartCompacter()
-	db.writeCh = make(chan *Request)
-	// 接收 vlog GC 重新写大量entry的请求
-	go db.handleWriteCh()
-	return db, nil
+
+	db.Closer.compactors = utils.NewCloser(1)
+	go db.Lsm.StartCompacter(db.Closer.compactors)
+
+	// 1.接收 vlog GC 重写大量entry的写请求;
+	// 2.接收db.set(entry)的请求,使用通道的话,就不用加锁执行vlog.write();
+	db.writeCh = make(chan *Request, lsm.KvWriteChCapacity)
+	db.Closer.writes = utils.NewCloser(1)
+	go db.handleWriteCh(db.Closer.writes)
+
+	return db, nil, callBack
 }
 
 func (db *TrainKVDB) Get(key []byte) (model.Entry, error) {
-	if key == nil {
-		return model.Entry{}, common.ErrEmptyKey
+	if key == nil || len(key) == 0 {
+		return model.Entry{Version: -1}, common.ErrEmptyKey
 	}
 	internalKey := model.KeyWithTs(key)
 	var (
@@ -65,11 +74,14 @@ func (db *TrainKVDB) Get(key []byte) (model.Entry, error) {
 		err   error
 	)
 	if entry, err = db.Lsm.Get(internalKey); err != nil {
-		return model.Entry{}, err
+		return model.Entry{Version: -1}, err
 	}
-
+	// 1. 返回正常key-val
+	// 2. 返回非正常key-val
+	// 3. 返回大于key-val
+	// 4. 返回小于key-val
 	if lsm.IsDeletedOrExpired(entry) {
-		return model.Entry{}, common.ErrKeyNotFound
+		return model.Entry{Version: -1}, common.ErrKeyNotFound
 	}
 
 	if entry.Value != nil && model.IsValPtr(entry) {
@@ -78,7 +90,7 @@ func (db *TrainKVDB) Get(key []byte) (model.Entry, error) {
 		read, callBack, err := db.vlog.Read(&vp)
 		defer model.RunCallback(callBack)
 		if err != nil {
-			return model.Entry{}, err
+			return model.Entry{Version: -1}, err
 		}
 		entry.Value = model.SafeCopy(nil, read)
 	}
@@ -90,25 +102,17 @@ func (db *TrainKVDB) Set(entry model.Entry) error {
 	if entry.Key == nil || len(entry.Key) == 0 {
 		return common.ErrEmptyKey
 	}
-	var (
-		vp  *model.ValuePtr
-		err error
-	)
-	entry.Key = model.KeyWithTs(entry.Key)
+	entry.Key = model.KeyWithTestTs(entry.Key, uint64(entry.Version))
+	//entry.Key = model.KeyWithTs(entry.Key)
 	entry.Version = model.ParseTsVersion(entry.Key)
-	if !db.ShouldWriteValueToLSM(entry) {
-		if vp, err = db.vlog.NewValuePtr(&entry); err != nil {
-			return err
-		}
-		entry.Meta |= common.BitValuePointer
-		entry.Value = vp.Encode()
-	}
-	return db.Lsm.Put(entry)
+	err := db.BatchSet([]*model.Entry{&entry})
+	return err
 }
 
-func (db *TrainKVDB) Del(key []byte, id uint64) error {
+func (db *TrainKVDB) Del(key []byte, version int64) error {
 	return db.Set(model.Entry{
 		Key:       key,
+		Version:   version,
 		Value:     nil,
 		Meta:      common.BitDelete,
 		ExpiresAt: 0,
@@ -133,7 +137,6 @@ func (db *TrainKVDB) BatchSet(entries []*model.Entry) error {
 	if err != nil {
 		return err
 	}
-	// 同步等待
 	return request.Wait()
 }
 
@@ -143,10 +146,10 @@ func (db *TrainKVDB) BatchSet(entries []*model.Entry) error {
 func (db *TrainKVDB) SendToWriteCh(entries []*model.Entry) (*Request, error) {
 	var count, size int64
 	for _, entry := range entries {
-		size += int64(entry.EstimateSize(int(db.Opt.ValueThreshold)))
+		size += int64(entry.EstimateSize(db.Opt.ValueThreshold))
 		count++
 	}
-	if count > db.Opt.MaxBatchCount || size > db.Opt.MaxBatchSize {
+	if count >= db.Opt.MaxBatchCount || size >= db.Opt.MaxBatchSize {
 		return nil, common.ErrBatchTooLarge
 	}
 	request := RequestPool.Get().(*Request)
@@ -158,18 +161,32 @@ func (db *TrainKVDB) SendToWriteCh(entries []*model.Entry) (*Request, error) {
 	return request, nil
 }
 
-func (db *TrainKVDB) handleWriteCh() {
+func (db *TrainKVDB) handleWriteCh(closer *utils.Closer) {
+	defer closer.Done()
 	var reqLen int64
-	reqs := make([]*Request, 0)
+	reqs := make([]*Request, 0, 10)
 	for {
 		var r *Request
 		select {
+		case <-closer.CloseSignal:
+			for {
+				select {
+				case r = <-db.writeCh:
+					reqs = append(reqs, r)
+				default: // b.writeCh 中没有更多数据, 执行 default 分支;
+					db.writeRequest(reqs)
+					fmt.Println("handleWriteCh exit.")
+					return
+				}
+			}
 		case r = <-db.writeCh:
+			//fmt.Printf("handleWriteCh: key:%s ;\n", model.ParseKey(r.Entries[0].Key))
 			reqs = append(reqs, r)
-			reqLen += int64(len(reqs))
-			if reqLen >= 3*common.KVWriteChCapacity {
+			reqLen = int64(len(reqs))
+			if reqLen >= 3*common.KVWriteChRequestCapacity {
+				// fmt.Println("handleWriteCh: reqLen >= 3*common.KVWriteChRequestCapacity")
 				go db.writeRequest(reqs)
-				reqs = reqs[:0]
+				reqs = make([]*Request, 0, 1)
 				reqLen = 0
 			}
 		}
@@ -191,10 +208,12 @@ func (db *TrainKVDB) writeRequest(reqs []*Request) error {
 			req.Wg.Done()
 		}
 	}
+
 	if err := db.vlog.Write(reqs); err != nil {
 		done(err)
 		return err
 	}
+
 	var count int
 	for _, req := range reqs {
 		if len(req.Entries) == 0 {
@@ -206,6 +225,7 @@ func (db *TrainKVDB) writeRequest(reqs []*Request) error {
 			return errors.Wrap(err, "writeRequests")
 		}
 	}
+
 	done(nil)
 	return nil
 }
@@ -216,11 +236,12 @@ func (db *TrainKVDB) writeToLSM(req *Request) error {
 	}
 	for i, entry := range req.Entries {
 		if db.ShouldWriteValueToLSM(*entry) {
-			entry.Meta &= ^common.BitValuePointer
+			// entry.Meta &= ^common.BitValuePointer
 		} else {
 			entry.Meta |= common.BitValuePointer
 			entry.Value = req.ValPtr[i].Encode()
 		}
+
 		if err := db.Lsm.Put(*entry); err != nil {
 			return err
 		}
@@ -240,22 +261,29 @@ func (db *TrainKVDB) initVlog() {
 		VLogFileDisCardStaInfo: &VLogFileDisCardStaInfo{
 			FileMap: make(map[uint32]int64),
 			FlushCh: make(chan map[uint32]int64, 16),
-			Closer:  utils.NewCloser(),
 		},
 	}
 	vlog.Db = db
 	vlog.Opt = db.Opt
-	vlog.GarbageCh = make(chan struct{}, 1)
 	db.vlog = vlog
+	vlog.GarbageCh = make(chan struct{}, 1) //一次只允许运行一个vlogGC协程
 }
 
 func (db *TrainKVDB) Close() error {
-	db.vlog.VLogFileDisCardStaInfo.Closer.Close()
+	db.Closer.valueGC.CloseAndWait()
+	db.Closer.writes.CloseAndWait()
+	close(db.writeCh)
+	db.Lsm.CloseFlushIMemChan()
+	db.Closer.memtable.CloseAndWait()
+	db.Closer.compactors.CloseAndWait()
+
 	if err := db.Lsm.Close(); err != nil {
 		return err
 	}
+
 	if err := db.vlog.Close(); err != nil {
 		return err
 	}
+	fmt.Println("db.Close exit.")
 	return nil
 }

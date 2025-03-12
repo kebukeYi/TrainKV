@@ -73,7 +73,6 @@ type WAL struct {
 
 func OpenWalFile(opt *utils.FileOptions) *WAL {
 	fmt.Printf("#OpenWalFile(), wal open file %s with flag: %v\n", opt.FileName, opt.Flag)
-
 	mmapFile, err := file.OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
 	if err != nil {
 		return nil
@@ -129,7 +128,7 @@ func (w *WAL) WalEncode(e model.Entry) ([]byte, int) {
 	var headerEnc [WalHeaderSize]byte
 	sz := header.encode(headerEnc[:])
 
-	hash := crc32.New(errors.CastagnoliCrcTable)
+	hash := crc32.New(errors.CastigationCryTable)
 	writer := io.MultiWriter(buf, hash)
 
 	writer.Write(headerEnc[:sz])
@@ -194,6 +193,7 @@ func (w *WAL) Size() uint32 {
 func (w *WAL) SetSize(offset uint32) {
 	w.writeAt = offset
 }
+
 func (w *WAL) Fid() uint64 {
 	return w.opt.FID
 }

@@ -102,6 +102,7 @@ func ReplyManifestFile(file *os.File) (m *Manifest, truncOffset int64, err error
 		return &Manifest{}, 0,
 			fmt.Errorf("manifest has unsupported version: %d (we support %d)", version, common.MagicVersion)
 	}
+
 	manifest := NewManifest()
 	var offset = readHeaderNum
 	for {
@@ -123,8 +124,9 @@ func ReplyManifestFile(file *os.File) (m *Manifest, truncOffset int64, err error
 			return &Manifest{}, 0, err
 		}
 
-		if crc32.Checksum(dataBuf, common.CastagnoliCrcTable) !=
-			binary.BigEndian.Uint32(crcBuf[4:8]) {
+		checksum := crc32.Checksum(dataBuf, common.CastigationCryTable)
+		u := binary.BigEndian.Uint32(crcBuf[4:8])
+		if checksum != u {
 			return &Manifest{}, 0, common.ErrBadChecksum
 		}
 
@@ -153,7 +155,7 @@ func applyManifestChange(manifest *Manifest, change *pb.ManifestChange) error {
 	switch change.Type {
 	case pb.ManifestChange_Create:
 		if _, ok := manifest.Tables[change.Id]; ok {
-			return fmt.Errorf("MANIFEST invalid, table %d exists", change.Id)
+			return fmt.Errorf("MANIFEST invalid, %d.sst exists", change.Id)
 		}
 		manifest.Tables[change.Id] = TableManifest{
 			ID:       change.Id,
@@ -236,7 +238,7 @@ func (mf *ManifestFile) addChanges(changes []*pb.ManifestChange) error {
 	} else {
 		crcBuf := make([]byte, common.ManifestFileCrcLen)
 		binary.BigEndian.PutUint32(crcBuf[0:4], uint32(len(buf)))
-		binary.BigEndian.PutUint32(crcBuf[4:8], crc32.Checksum(buf, common.CastagnoliCrcTable))
+		binary.BigEndian.PutUint32(crcBuf[4:8], crc32.Checksum(buf, common.CastigationCryTable))
 		crcBuf = append(crcBuf, buf...)
 		if _, err := mf.f.Write(crcBuf); err != nil {
 			return err
@@ -254,7 +256,7 @@ func doRewrite(dir string, manifest *Manifest) (*os.File, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	// HEAD:4 version:4
+	// Text:4B version:4B
 	headerBuf := make([]byte, common.ManifestFileHeaderLen)
 	copy(headerBuf[0:4], common.MagicText[:])
 	binary.BigEndian.PutUint32(headerBuf[4:8], common.MagicVersion)
@@ -262,7 +264,7 @@ func doRewrite(dir string, manifest *Manifest) (*os.File, int, error) {
 	creations := len(manifest.Tables)
 	asChanges := manifest.asChanges()
 	changeSet := pb.ManifestChangeSet{Changes: asChanges}
-
+	// |text:4B|version:4B|bufLen:4B|crcBuf:4B|changeBuf|
 	changeBuf, err := changeSet.Marshal()
 	if err != nil {
 		file.Close()
@@ -270,7 +272,8 @@ func doRewrite(dir string, manifest *Manifest) (*os.File, int, error) {
 	}
 	crcBuf := make([]byte, common.ManifestFileCrcLen)
 	binary.BigEndian.PutUint32(crcBuf[0:4], uint32(len(changeBuf)))
-	binary.BigEndian.PutUint32(crcBuf[4:8], crc32.Checksum(changeBuf, common.CastagnoliCrcTable))
+	checksum := crc32.Checksum(changeBuf, common.CastigationCryTable)
+	binary.BigEndian.PutUint32(crcBuf[4:8], checksum)
 	headerBuf = append(headerBuf, crcBuf[:]...)
 	headerBuf = append(headerBuf, changeBuf...)
 	if _, err := file.Write(headerBuf); err != nil {
@@ -306,6 +309,7 @@ func doRewrite(dir string, manifest *Manifest) (*os.File, int, error) {
 	}
 	return openFile, creations, nil
 }
+
 func (m *Manifest) asChanges() []*pb.ManifestChange {
 	manifestChanges := make([]*pb.ManifestChange, 0, len(m.Tables))
 	for id, tm := range m.Tables {

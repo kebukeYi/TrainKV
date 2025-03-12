@@ -16,6 +16,32 @@
           </config>
         </ContributedStateBase>
       </target>
+      <target name="root@1.94.19.238:222" type="ssh/sftp" uuid="2e9c164e-3b36-4b22-8618-158564c842b9">
+        <config>
+          <option name="projectRootOnTarget" value="/root/TrainKV" />
+          <option name="serverName" value="root@1.94.19.238:22 password" />
+        </config>
+        <ContributedStateBase type="GoLanguageRuntime">
+          <config>
+            <option name="goPath" value="/root/go" />
+            <option name="goRoot" value="/snap/bin/go" />
+            <option name="goVersion" value="go1.23.2 linux/amd64" />
+          </config>
+        </ContributedStateBase>
+      </target>
+      <target name="root@1.94.19.238:2222" type="ssh/sftp" uuid="c1d151ca-302c-4f94-88e0-aa7c5f208491">
+        <config>
+          <option name="projectRootOnTarget" value="/root/TrainKV" />
+          <option name="serverName" value="root@1.94.19.238:22 password" />
+        </config>
+        <ContributedStateBase type="GoLanguageRuntime">
+          <config>
+            <option name="goPath" value="/root/go" />
+            <option name="goRoot" value="/snap/bin/go" />
+            <option name="goVersion" value="go1.23.2 linux/amd64" />
+          </config>
+        </ContributedStateBase>
+      </target>
     </targets>
   </component>
 </project>

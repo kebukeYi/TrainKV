@@ -101,8 +101,8 @@ func (sst *SSTable) Indexs() *pb.TableIndex {
 }
 
 // SetMaxKey max 需要使用table的迭代器，来获取最后一个block的最后一个key
-func (ss *SSTable) SetMaxKey(maxKey []byte) {
-	ss.maxKey = maxKey
+func (sst *SSTable) SetMaxKey(maxKey []byte) {
+	sst.maxKey = maxKey
 }
 
 func (sst *SSTable) MaxKey() []byte {

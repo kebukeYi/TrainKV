@@ -9,18 +9,31 @@ import (
 	"trainKv/model"
 )
 
+var dbTestPath = "/usr/projects_gen_data/goprogendata/trainkvdata/test/db"
+
 var dbTestOpt = &lsm.Options{
-	WorkDir:            "/usr/projects_gen_data/goprogendata/trainkvdata/test/vlog",
-	MemTableSize:       1 << 10,
-	SSTableMaxSz:       1 << 10,
-	ValueLogFileSize:   1 << 11,
-	ValueThreshold:     1,
-	MaxBatchCount:      10,
-	MaxBatchSize:       1 << 20,
-	ValueLogMaxEntries: 100,
-	BloomFalsePositive: 0.1,
-	CacheNums:          10240,
-	BlockSize:          200,
+	WorkDir:             dbTestPath,
+	MemTableSize:        1 << 10,  // 1KB; 64 << 20(64MB)
+	NumFlushMemtables:   10,       // 默认:15;
+	SSTableMaxSz:        1 << 10,  // 同上
+	BlockSize:           3 * 1024, // 4 * 1024;
+	BloomFalsePositive:  0.01,     // 误差率;
+	CacheNums:           1 * 1024, // 10240个
+	ValueThreshold:      1,        // 1B; 1 << 20(1MB)
+	ValueLogMaxEntries:  100,      // 1000000
+	ValueLogFileSize:    1 << 29,  // 512MB; 1<<30-1(1GB);
+	VerifyValueChecksum: false,    // false
+
+	MaxBatchCount: 100,
+	MaxBatchSize:  10 << 20, // 10 << 20(10MB)
+
+	NumCompactors:       2,       // 4
+	BaseLevelSize:       8 << 20, //8MB; 10 << 20(10MB)
+	LevelSizeMultiplier: 10,
+	TableSizeMultiplier: 2,
+	BaseTableSize:       2 << 20, // 2 << 20(2MB)
+	NumLevelZeroTables:  5,
+	MaxLevelNum:         common.MaxLevelNum,
 }
 
 func clearDir() {
@@ -36,206 +49,138 @@ func clearDir() {
 	}
 }
 
+func TestOpenTrainDBNoOpt(t *testing.T) {
+	//db, err, callBack := Open(nil)
+	//db.Close()
+	//err = callBack()
+	//if err != nil {
+	//	return
+	//}
+	//fmt.Printf("open db err:%v \n", err)
+
+	db, err, callBack := Open(dbTestOpt)
+	defer func() {
+		db.Close()
+		err = callBack()
+		if err != nil {
+			return
+		}
+	}()
+	fmt.Printf("err:%v \n", err)
+}
+
 func TestAPI(t *testing.T) {
 	clearDir()
-	db, _ := Open(dbTestOpt)
-	defer func() { _ = db.Close() }()
+	db, _, callBack := Open(dbTestOpt)
+	defer func() {
+		_ = db.Close()
+		_ = callBack()
+	}()
 	putStart := 0
 	putEnd := 60
 	putStart1 := 70
 	putEnd1 := 90
 	delStart := 0
 	delEnd := 40
-	fmt.Println("========================put(0-60)==================================")
+	fmt.Println("========================put1(0-60)==================================")
 	// 写入 0-60
 	for i := putStart; i <= putEnd; i++ {
 		key := fmt.Sprintf("key%d", i)
 		val := fmt.Sprintf("val%d", i)
 		e := model.NewEntry([]byte(key), []byte(val))
-		e.ExpiresAt = uint64(i)
-		if i == 60 {
-			e.ExpiresAt = 60000000000
-		} else if i == 6 {
-			e.ExpiresAt = 66666666666
-		} else if i == 2 {
-			e.ExpiresAt = 2222222222
-		} else if i == 20 {
-			e.ExpiresAt = 2000000000
-		}
+		e.Version = 1
 		if err := db.Set(e); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	fmt.Println("========================get(0-60)==================================")
-	// 读取
+	fmt.Println("========================get1(0-60)==================================")
 	for i := putStart; i <= putEnd; i++ {
 		key := fmt.Sprintf("key%d", i)
-		// 查询
 		if entry, err := db.Get([]byte(key)); err != nil {
-			//t.Fatal(err)
-			fmt.Printf("db.Get key=%s, err: %v \n", key, err)
+			fmt.Printf("err: %v; db.Get key=%s ,version:%d \n", err, key, entry.Version)
 		} else {
-			//t.Logf("db.Get key=%s, value=%s, expiresAt=%d", entry.Key, entry.Value, entry.ExpiresAt)
-			fmt.Printf("db.Get key=%s, value=%s, meta:%d, expiresAt=%d \n",
-				entry.Key, entry.Value, entry.Meta, entry.ExpiresAt)
+			//fmt.Printf("db.Get key=%s, value=%s, meta:%d,version=%d \n", model.ParseKey(entry.Key), entry.Value, entry.Meta, entry.Version)
 		}
 	}
 
 	fmt.Println("========================del(0-40)==================================")
-	// 写入删除 0-40 剩余 41-60
+	// 写入删除 0-40, 剩余 41-60;
 	for i := delStart; i <= delEnd; i++ {
 		key := fmt.Sprintf("key%d", i)
-		if err := db.Del([]byte(key), uint64(i)); err != nil {
+		if err := db.Del([]byte(key), int64(2)); err != nil {
 			t.Fatal(err)
 		}
-
-		//if entry, err := db.Get([]byte(key)); err != nil {
-		//	//t.Fatal(err)
-		//	fmt.Printf("err db.Get key=%s, err: %v \n", key, err)
-		//} else {
-		//	//t.Logf("db.Get key=%s, value=%s, expiresAt=%d", entry.Key, entry.Value, entry.ExpiresAt)
-		//	fmt.Printf("db.Get key=%s, value=%s, expiresAt=%d \n", entry.Key, entry.Value, entry.ExpiresAt)
-		//}
 	}
 
-	fmt.Println("========================put(70-90)=================================")
+	fmt.Println("========================put2(70-90)=================================")
 	// 写入 70-90
 	for i := putStart1; i <= putEnd1; i++ {
 		key := fmt.Sprintf("key%d", i)
 		val := fmt.Sprintf("val%d", i)
 		e := model.NewEntry([]byte(key), []byte(val))
-		e.ExpiresAt = uint64(i)
+		e.Version = 3
 		if err := db.Set(e); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	fmt.Println("========================get(0-90)==================================")
-	// 读取
+	fmt.Println("========================get2(0-90)==================================")
 	for i := putStart; i <= putEnd1; i++ {
 		key := fmt.Sprintf("key%d", i)
 		if entry, err := db.Get([]byte(key)); err != nil {
-			//t.Fatal(err)
-			fmt.Printf("err db.Get key=%s, err: %v \n", key, err)
+			fmt.Printf("err: %v; db.Get key=%s \n", err, key)
 		} else {
-			//t.Logf("db.Get key=%s, value=%s, expiresAt=%d", entry.Key, entry.Value, entry.ExpiresAt)
-			fmt.Printf("db.Get key=%s, value=%s, meta:%d, expiresAt=%d \n",
-				entry.Key, entry.Value, entry.Meta, entry.ExpiresAt)
+			fmt.Printf("db.Get key=%s, value=%s, meta:%d, version=%d \n",
+				model.ParseKey(entry.Key), entry.Value, entry.Meta, entry.Version)
 		}
 	}
 
 	fmt.Println("=========================iter(41-60 70-90)===========================")
-	// 迭代器 正确的应该是 41-60 70-90
+	// 注意:迭代器 会把全量数据迭代出来,包括已经失效的数据;失效的数据只能等待后台自动compact合并剔除;
 	iter := db.NewDBIterator(&model.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
 	iter.Rewind()
 	for iter.Valid() {
 		it := iter.Item()
-		//t.Logf("db.NewIterator key=%s, value=%s, expiresAt=%d", utils.ParseKey(it.Entry().Key), it.Entry().Value, it.Entry().ExpiresAt)
-		fmt.Printf("db.Iterator key=%s, value=%s,meta:%d, expiresAt=%d \n",
-			model.ParseKey(it.Item.Key), it.Item.Value, it.Item.Meta, it.Item.ExpiresAt)
+		if it.Item.Version != -1 {
+			fmt.Printf("db.Iterator key=%s, value=%s, meta:%d, version=%d \n",
+				model.ParseKey(it.Item.Key), it.Item.Value, it.Item.Meta, it.Item.Version)
+		}
 		iter.Next()
 	}
 }
 
-func TestMultiPutDelGet(t *testing.T) {
-	clearDir()
-	db, _ := Open(dbTestOpt)
-	defer func() { _ = db.Close() }()
-	putStart := 0
-	putEnd := 10
-	fmt.Println("========================put(0-60)==================================")
-	// 写入 0-60
-	for i := putStart; i <= putEnd; i++ {
-		key := fmt.Sprintf("key%d", i)
-		val := fmt.Sprintf("putVal%d", i)
-		e := model.NewEntry([]byte(key), []byte(val))
-		e.ExpiresAt = uint64(i)
-		if i == 60 {
-			e.ExpiresAt = 60000000000
-		} else if i == 6 {
-			e.ExpiresAt = 66666666666
-		} else if i == 2 {
-			e.ExpiresAt = 2222222222
-		} else if i == 20 {
-			e.ExpiresAt = 2000000000
-		}
-		if err := db.Set(e); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	fmt.Println("========================update1(0-60)==================================")
-	for i := putStart; i <= putEnd; i++ {
-		key := fmt.Sprintf("key%d", i)
-		val := fmt.Sprintf("update1Val%d", i)
-		e := model.NewEntry([]byte(key), []byte(val))
-		e.ExpiresAt = uint64(i)
-		if i == 60 {
-			e.ExpiresAt = 60000000000
-		} else if i == 6 {
-			e.ExpiresAt = 66666666666
-		} else if i == 2 {
-			e.ExpiresAt = 2222222222
-		} else if i == 20 {
-			e.ExpiresAt = 2000000000
-		}
-		if err := db.Set(e); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	fmt.Println("========================update2(0-60)==================================")
-	for i := putStart; i <= putEnd; i++ {
-		key := fmt.Sprintf("key%d", i)
-		val := fmt.Sprintf("update2Val%d", i)
-		e := model.NewEntry([]byte(key), []byte(val))
-		e.ExpiresAt = uint64(i)
-		if i == 60 {
-			e.ExpiresAt = 60000000000
-		} else if i == 6 {
-			e.ExpiresAt = 66666666666
-		} else if i == 2 {
-			e.ExpiresAt = 2222222222
-		} else if i == 20 {
-			e.ExpiresAt = 2000000000
-		}
-		if err := db.Set(e); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
 func TestReStart(t *testing.T) {
-	db, _ := Open(dbTestOpt)
-	defer func() { _ = db.Close() }()
-	putStart := 0
-	putEnd := 90
-	// 读取
-	fmt.Println("=============db.get=========================================")
-	for i := putStart; i <= putEnd; i++ {
-		key := fmt.Sprintf("key%d", i)
-		// 查询
-		if entry, err := db.Get([]byte(key)); err != nil {
-			//t.Fatal(err)
-			fmt.Printf("err db.Get key=%s, err: %v \n", key, err)
-		} else {
-			//t.Logf("db.Get key=%s, value=%s, expiresAt=%d", entry.Key, entry.Value, entry.ExpiresAt)
-			fmt.Printf("db.Get key=%s, value=%s, expiresAt=%d \n", entry.Key, entry.Value, entry.ExpiresAt)
-		}
-	}
+	db, _, callBack := Open(dbTestOpt)
+	defer func() {
+		_ = db.Close()
+		_ = callBack()
+	}()
+	//putStart := 0
+	//putEnd := 90
+	//// 读取
+	//fmt.Println("=============db.get=========================================")
+	//for i := putStart; i <= putEnd; i++ {
+	//	key := fmt.Sprintf("key%d", i)
+	//	if entry, err := db.Get([]byte(key)); err != nil {
+	//		fmt.Printf("err db.Get key=%s, version:%d, err: %v \n", key, entry.Version, err)
+	//	} else {
+	//		fmt.Printf("ok  db.Get key=%s, value=%s,meta:%d, version=%d \n",
+	//			model.ParseKey(entry.Key), entry.Value, entry.Meta, entry.Version)
+	//	}
+	//}
 	fmt.Println("=============db.Iterator=========================================")
-	// 迭代器
+	// 注意:迭代器 会把全量数据迭代出来,包括已经失效的数据;失效的数据只能等待后台自动compact合并剔除;
 	iter := db.NewDBIterator(&model.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
 	iter.Rewind()
 	for iter.Valid() {
 		it := iter.Item()
-		//t.Logf("db.NewIterator key=%s, value=%s, expiresAt=%d", utils.ParseKey(it.Entry().Key), it.Entry().Value, it.Entry().ExpiresAt)
-		//fmt.Printf("db.NewIterator key=%s, value=%s, expiresAt=%d", utils.ParseKey(it.Entry().Key), it.Entry().Value, it.Entry().ExpiresAt)
-		fmt.Printf("db.Iterator key=%s, len(value)=%d, Meta=%d, expiresAt=%d \n",
-			it.Item.Key, len(it.Item.Value), it.Item.Meta, it.Item.ExpiresAt)
+		if it.Item.Version != -1 {
+			fmt.Printf("db.Iterator key=%s, value=%s, Meta=%d, versioin=%d \n",
+				model.ParseKey(it.Item.Key), it.Item.Value, it.Item.Meta, it.Item.Version)
+		}
 		iter.Next()
 	}
 	fmt.Println("======================over====================================")

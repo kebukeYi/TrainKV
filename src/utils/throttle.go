@@ -30,7 +30,6 @@ func (t *Throttle) Do() error {
 			if err != nil {
 				return err
 			}
-
 		}
 	}
 }
