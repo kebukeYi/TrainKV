@@ -72,7 +72,6 @@ type WAL struct {
 }
 
 func OpenWalFile(opt *utils.FileOptions) *WAL {
-	fmt.Printf("#OpenWalFile(), wal open file %s with flag: %v\n", opt.FileName, opt.Flag)
 	mmapFile, err := file.OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
 	if err != nil {
 		return nil
@@ -203,7 +202,6 @@ func (w *WAL) CloseAndRemove() error {
 	if err := w.file.Close(); err != nil {
 		return err
 	}
-	fmt.Printf("wal remove file %s \n", fileName)
 	return os.Remove(fileName)
 }
 

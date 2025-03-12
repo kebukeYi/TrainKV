@@ -215,7 +215,6 @@ type tableIterator struct {
 
 func (t *table) NewTableIterator(opt *model.Options) *tableIterator {
 	t.IncrRef()
-	fmt.Printf("tableName: %s NewTableIterator!\n", t.Name)
 	return &tableIterator{opt: opt, t: t, biter: &blockIterator{}, name: t.Name}
 }
 func (tier *tableIterator) Name() string {

@@ -157,7 +157,6 @@ func (m *MmapFile) Close() error {
 	if m.Fd == nil {
 		return nil
 	}
-	fmt.Printf("closing mmap file %s\n", m.Fd.Name())
 	if err := m.Sync(); err != nil {
 		//fmt.Printf("while sync file: %s, error: %v\n", m.Fd.Name(), err)
 		//return nil

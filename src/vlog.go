@@ -432,7 +432,6 @@ func (vlog *ValueLog) waitOnGC(closer *utils.Closer) {
 		// the channel of size 1.
 		// 装满通道, 禁止vlogGC再启动;
 		vlog.GarbageCh <- struct{}{}
-		fmt.Println("vlog GC waitOnGC exit.")
 	}
 }
 

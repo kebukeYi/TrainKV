@@ -103,7 +103,6 @@ func (lsm *LSM) Rotate() {
 	im := lsm.memoryTable
 	lsm.memoryTable = lsm.NewMemoryTable()
 	lsm.Unlock()
-	fmt.Printf("#Rotate(): channle to im name:%s \n", im.name)
 	lsm.flushMemTable <- im
 
 }
@@ -114,7 +113,6 @@ func (lsm *LSM) StartFlushMemTable(closer *utils.Closer) {
 		if im == nil {
 			return
 		}
-		fmt.Printf("#StartFlushMemTable(): channle get im name:%s \n", im.name)
 		if err := lsm.levelManger.flush(im); err != nil {
 			common.Panic(err)
 		}
@@ -126,11 +124,9 @@ func (lsm *LSM) StartFlushMemTable(closer *utils.Closer) {
 	for {
 		select {
 		case <-closer.CloseSignal:
-			fmt.Println("Waiting for flushMemTable...")
 			for im := range lsm.flushMemTable {
 				flushIMemoryTable(im)
 			}
-			fmt.Printf("#StartFlushMemTable(): exit. \n")
 			return
 		case im := <-lsm.flushMemTable:
 			flushIMemoryTable(im)

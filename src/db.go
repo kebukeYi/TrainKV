@@ -175,7 +175,6 @@ func (db *TrainKVDB) handleWriteCh(closer *utils.Closer) {
 					reqs = append(reqs, r)
 				default: // b.writeCh 中没有更多数据, 执行 default 分支;
 					db.writeRequest(reqs)
-					fmt.Println("handleWriteCh exit.")
 					return
 				}
 			}
