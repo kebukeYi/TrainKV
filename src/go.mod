@@ -9,7 +9,7 @@ require (
 	github.com/golang/protobuf v1.5.0
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.9.0
-	golang.org/x/sys v0.0.0-20210910150752-751e447fb3d0
+	golang.org/x/sys v0.1.0
 )
 
 require (
