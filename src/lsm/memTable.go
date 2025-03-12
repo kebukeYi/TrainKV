@@ -164,8 +164,6 @@ func (m *memoryTable) recovery2SkipList() error {
 		return nil
 	}
 	var readAt uint32 = 0
-	//reader := bufio.NewReader(m.wal.file.NewReader(int(0))) // error
-	//reader := model.NewHashReader(m.wal.file.Fd) // ok
 	for {
 		var e model.Entry
 		e, readAt = m.wal.Read(m.wal.file.Fd)

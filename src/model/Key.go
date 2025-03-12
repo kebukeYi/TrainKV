@@ -31,7 +31,7 @@ func ParseTsVersion(key []byte) int64 {
 	return int64(timestamp)
 }
 
-// ParseKey parses the actual key from the key bytes.
+// ParseKey 祛除掉版本信息之后的key;
 func ParseKey(key []byte) []byte {
 	if len(key) < 8 {
 		return key

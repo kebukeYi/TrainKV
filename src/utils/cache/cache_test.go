@@ -31,7 +31,6 @@ func TestCacheLRUCRUD(t *testing.T) {
 		} else {
 			fmt.Printf("get key:%s; not found!", key)
 		}
-		// assert.Equal(t, res, nil)
 	}
 	fmt.Printf("at last cache: %s\n", cache)
 }

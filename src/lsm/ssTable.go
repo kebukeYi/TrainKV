@@ -44,11 +44,9 @@ func (sst *SSTable) Init() error {
 	if ko, err = sst.initTable(); err != nil {
 		return err
 	}
-	// 从文件中获取创建时间
 	stat, _ := sst.file.Fd.Stat()
 	statType := stat.Sys().(*syscall.Stat_t)
 	sst.creationTime = time.Unix(statType.Ctim.Sec, statType.Ctim.Nsec)
-	// init min key of first block to table.
 	keyBytes := ko.GetKey()
 	minKey := make([]byte, len(keyBytes))
 	copy(minKey, keyBytes)
@@ -67,11 +65,9 @@ func (sst *SSTable) initTable() (firstBlock *pb.BlockOffset, err error) {
 		return nil, errors.New("checksum length less than zero. Data corrupted")
 	}
 
-	// Read checksum.
 	readPos -= checksumLen
 	expectedChk := sst.readCheckError(readPos, checksumLen)
 
-	// Read index size from the footer.
 	readPos -= 4
 	buf := sst.readCheckError(readPos, 4)
 	sst.idxLen = int(model.BytesToU32(buf))
@@ -81,8 +77,7 @@ func (sst *SSTable) initTable() (firstBlock *pb.BlockOffset, err error) {
 	indexData := sst.readCheckError(readPos, sst.idxLen)
 
 	if err := utils.VerifyChecksum(indexData, expectedChk); err != nil {
-		return nil, errors.Wrapf(err,
-			"failed to verify checksum for table: %s", sst.file.Fd.Name())
+		return nil, errors.Wrapf(err, "failed to verify checksum for table: %s", sst.file.Fd.Name())
 	}
 	indexTable := &pb.TableIndex{}
 	if err := proto.UnmarshalMerge(indexData, indexTable); err != nil {
@@ -100,7 +95,7 @@ func (sst *SSTable) Indexs() *pb.TableIndex {
 	return sst.tableIndex
 }
 
-// SetMaxKey max 需要使用table的迭代器，来获取最后一个block的最后一个key
+// SetMaxKey max 需要使用table的迭代器,来获取最后一个block的最后一个key;
 func (sst *SSTable) SetMaxKey(maxKey []byte) {
 	sst.maxKey = maxKey
 }
@@ -113,7 +108,6 @@ func (sst *SSTable) MinKey() []byte {
 	return sst.minKey
 }
 
-// FID 获取fid
 func (sst *SSTable) FID() uint64 {
 	return sst.fid
 }
@@ -139,34 +133,28 @@ func (sst *SSTable) Bytes(off, sz int) ([]byte, error) {
 	return sst.file.Bytes(off, sz)
 }
 
-// Size 返回底层文件的尺寸
+// Size 返回底层文件的尺寸;
 func (sst *SSTable) Size() int64 {
 	fileStats, err := sst.file.Fd.Stat()
 	common.Panic(err)
 	return fileStats.Size()
 }
 
-// GetCreatedAt _
 func (sst *SSTable) GetCreatedAt() *time.Time {
 	return &sst.creationTime
 }
 
-// SetCreatedAt _
 func (sst *SSTable) SetCreatedAt(t *time.Time) {
 	sst.creationTime = *t
 }
 
-// HasBloomFilter _
 func (sst *SSTable) HasBloomFilter() bool {
 	return sst.hasBloomFilter
 }
 
-// Detele _
 func (sst *SSTable) Detele() error {
 	return sst.file.Delete()
 }
-
-// Truncature _
 func (sst *SSTable) Truncature(size int64) error {
 	return sst.file.Truncature(size)
 }

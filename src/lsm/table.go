@@ -43,10 +43,9 @@ func openTable(lm *levelsManger, tableName string, builder *sstBuilder) (*table,
 		t = &table{lm: lm, fid: fid, Name: strconv.FormatUint(fid, 10) + SSTableName}
 		t.sst = OpenSStable(&utils.FileOptions{
 			FileName: tableName,
-			//Dir:      lm.opt.WorkDir,
-			Flag:  os.O_CREATE | os.O_RDWR,
-			MaxSz: int32(lm.opt.SSTableMaxSz),
-			FID:   fid,
+			Flag:     os.O_CREATE | os.O_RDWR,
+			MaxSz:    int32(lm.opt.SSTableMaxSz),
+			FID:      fid,
 		})
 	}
 	t.IncrRef()
@@ -223,7 +222,6 @@ func (tier *tableIterator) Name() string {
 	return tier.name
 }
 func (tier *tableIterator) Item() model.Item {
-	//return tier.it
 	return tier.biter.it
 }
 func (tier *tableIterator) Rewind() {
@@ -257,13 +255,12 @@ func (tier *tableIterator) next() {
 		tier.biter.blockID = tier.blockIterPos
 		tier.biter.setBlock(Block)
 		tier.biter.seekToFirst()
-		//tier.it = tier.biter.Item()
 		tier.err = tier.biter.Error()
 		return
 	}
 
 	tier.biter.Next()
-	if !tier.biter.Valid() { // 当前block已经遍历完了, 换下一个block
+	if !tier.biter.Valid() { // 当前block已经遍历完了, 换下一个block;
 		tier.blockIterPos++
 		tier.biter.data = nil
 		tier.Next()
@@ -346,7 +343,6 @@ func (tier *tableIterator) seekPrev(key []byte) {
 }
 func (tier *tableIterator) SeekHelper(blockIdx int, key []byte) {
 	tier.blockIterPos = blockIdx
-	// 加载 block
 	block, err := tier.t.getBlock(blockIdx)
 	if err != nil {
 		tier.err = err
@@ -355,7 +351,7 @@ func (tier *tableIterator) SeekHelper(blockIdx int, key []byte) {
 	tier.biter.tableID = tier.t.fid
 	tier.biter.blockID = tier.blockIterPos
 	tier.biter.setBlock(block)
-	// 从 block 中 加载 entry
+	// 从 block 中 加载 entry;
 	tier.biter.Seek(key)
 	tier.err = tier.biter.Error()
 }

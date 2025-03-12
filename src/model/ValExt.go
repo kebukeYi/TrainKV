@@ -2,13 +2,13 @@ package model
 
 import "encoding/binary"
 
-// ValueExt is the value with meta and expiresAt for skipList`s node;
+// ValueExt 把有关value的扩展信息,再封装一次; 使其方便一次性编码在 arena空间中, 返回len和offset;
 type ValueExt struct {
-	Meta      byte // delete or normal
+	Meta      byte // delete:1 or normal:0  or BitValuePointer:2
 	Value     []byte
 	ExpiresAt uint64
 
-	Version int64 // This field is not serialized. Only for internal usage.
+	Version int64
 }
 
 func (val *ValueExt) EncodeValSize() uint32 {

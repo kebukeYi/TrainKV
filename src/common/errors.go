@@ -33,8 +33,8 @@ var (
 
 	ErrTruncate      = errors.New("err do truncate")
 	ErrEmptyVlogFile = errors.New("empty vlogFile when Entry()")
-	ErrStop          = errors.New("Stop")
-	ErrfillTables    = errors.New("Unable to fill tables")
+
+	ErrfillTables = errors.New("Unable to fill tables")
 
 	ErrTxnTooBig     = errors.New("Txn is too big to fit into one request")
 	ErrBatchTooLarge = errors.New("Batch is too big to fit into one request")
@@ -68,11 +68,6 @@ func Err(err error) error {
 		fmt.Printf("%s %s\n", location(2, true), err)
 	}
 	return err
-}
-func PrintErr(err error, str string) {
-	if err != nil {
-		fmt.Printf("%s: %s\n", str, err)
-	}
 }
 func Panic(err error) {
 	if err != nil {

@@ -65,7 +65,6 @@ func (h *entryHeader) encode() []byte {
 }
 
 func (h *entryHeader) decode(buf []byte) {
-	//arrPtr := (*[headerSize]byte)(unsafe.Pointer(&h))
 	arrPtr := (*[headerSize]byte)(unsafe.Pointer(h))
 	copy(arrPtr[:], buf[:headerSize])
 }
@@ -100,7 +99,7 @@ func (ssb *sstBuilder) add(e model.Entry, isStale bool) {
 		Value:     e.Value,
 		ExpiresAt: e.ExpiresAt,
 	}
-	// 检查是否需要分配一个新的 block
+	// 检查是否需要分配一个新的 block;
 	if ssb.tryNewBlock(e) {
 		if isStale {
 			ssb.staleDataSize += len(key) + 4 /* len */ + 4 /* offset */
@@ -122,8 +121,6 @@ func (ssb *sstBuilder) add(e model.Entry, isStale bool) {
 	var diffKey []byte
 	if len(ssb.curBlock.baseKey) == 0 {
 		ssb.curBlock.baseKey = append(ssb.curBlock.baseKey, key...)
-		//ssb.curBlock.baseKey = append(ssb.curBlock.baseKey[:0], key...)
-		//ssb.curBlock.baseKey = append(ssb.curBlock.baseKey[:0], key[:len(key)-8]...)
 		diffKey = key
 	} else {
 		diffKey = ssb.keyDiff(key)
@@ -155,7 +152,6 @@ func (ssb *sstBuilder) allocate(need int) []byte {
 		if curb.endOffset+need > sz {
 			sz = curb.endOffset + need
 		}
-		// todo sstBuilder 简单扩容
 		tmp := make([]byte, sz)
 		copy(tmp, curb.data)
 		curb.data = tmp
@@ -176,7 +172,7 @@ func (ssb *sstBuilder) tryNewBlock(e model.Entry) bool {
 	common.CondPanic(!(sz < math.MaxUint32),
 		errors.New("block size too large,integer overflow!"))
 
-	// |  endOffset 4+ len(key)+len(value)
+	// (endOffset+1)*4+ len(key)+len(value)
 	entriesOffsetsSize := int64((len(ssb.curBlock.entryOffsets)+1)*4 +
 		4 + // size of list
 		8 + // Sum64 in checksum proto
@@ -184,7 +180,6 @@ func (ssb *sstBuilder) tryNewBlock(e model.Entry) bool {
 
 	ssb.curBlock.estimateSize = int64(ssb.curBlock.endOffset) + int64(6 /*header size for entry*/) +
 		int64(len(e.Key)) + int64(e.EncodeSize()) + entriesOffsetsSize
-	// Integer overflow check for table size.
 	common.CondPanic(!(uint64(ssb.curBlock.endOffset)+uint64(ssb.curBlock.estimateSize) <
 		math.MaxUint32), errors.New("Integer overflow"))
 
@@ -208,10 +203,9 @@ func (ssb *sstBuilder) flush(lm *levelsManger, tableName string) (t *table, err 
 	t = &table{lm: lm, fid: fid, Name: strconv.FormatUint(fid, 10) + SSTableName}
 	t.sst = OpenSStable(&utils.FileOptions{
 		FileName: tableName,
-		//Dir:      lm.opt.WorkDir,
-		Flag:  os.O_CREATE | os.O_RDWR,
-		MaxSz: int32(bd.size),
-		FID:   t.fid,
+		Flag:     os.O_CREATE | os.O_RDWR,
+		MaxSz:    int32(bd.size),
+		FID:      t.fid,
 	})
 	buf := make([]byte, bd.size)
 	written := bd.copy(buf)
@@ -299,7 +293,6 @@ func (ssb *sstBuilder) finishBlock() {
 	// crc 8B
 	checksum := ssb.calculateChecksum(ssb.curBlock.data[:ssb.curBlock.endOffset])
 
-	// Append the block checksum and its length.
 	ssb.append(checksum)
 	ssb.append(model.U32ToBytes(uint32(len(checksum))))
 
@@ -400,7 +393,6 @@ func (itr *blockIterator) setIndex(idx int) {
 		return
 	}
 	itr.err = nil
-	//itr.idx = idx// v1.0
 	// 找到entry data区域
 	startOffset := int(itr.entryOffsets[idx])
 	if len(itr.baseKey) == 0 { // 说明当前 block 没有重叠key, 因此直接获得不同的key区间
@@ -418,7 +410,7 @@ func (itr *blockIterator) setIndex(idx int) {
 	entryData := itr.data[startOffset:endOffset]
 	var header entryHeader
 	header.decode(entryData)
-	// 设置 key 重叠区间
+	// 设置 key 重叠区间;
 	if header.overlap > itr.prevOverlap {
 		itr.key = append(itr.key[0:itr.prevOverlap], itr.baseKey[itr.prevOverlap:header.overlap]...)
 	}

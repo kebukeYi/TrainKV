@@ -3,27 +3,27 @@ package lsm
 import (
 	"os"
 	"trainKv/common"
+	"trainKv/skl"
 )
 
 type Options struct {
-	WorkDir           string // 工作数据目录
-	MemTableSize      int64  // 内存表最大限制
+	WorkDir           string // 工作数据目录;
+	MemTableSize      int64  // 内存表最大限制;
+	SSTableMaxSz      int64  // SSSTable 最大限制,同上;
 	NumFlushMemtables int    // 刷盘队列大小;
-	SSTableMaxSz      int64  // SSSTable 最大限制
-	// BlockSize is the size of each block inside SSTable in bytes.
-	BlockSize uint32 // 数据持久化时的大小
-	// BloomFalsePositive is the false positive probability of bloom filter.
+	BlockSize         uint32 // 数据块持久化时的大小;
+
 	BloomFalsePositive float64 // 布隆过滤器的容错率;
 
 	CacheNums int // 缓存元素个数, 缺省值默认 1024*10个;
 
-	ValueThreshold      int
-	ValueLogMaxEntries  int32
-	ValueLogFileSize    int32
-	VerifyValueChecksum bool
+	ValueThreshold      int   // 进入vlog的value阈值;
+	ValueLogMaxEntries  int32 // vlogFile文件保存的entry最大数量;
+	ValueLogFileSize    int32 // vlogFile的文件大小;
+	VerifyValueChecksum bool  // 是否开启vlogFile的crc检查;
 
-	MaxBatchCount int64
-	MaxBatchSize  int64
+	MaxBatchCount int64 // 批处理entry数量;
+	MaxBatchSize  int64 // 批处理entry总量大小;
 
 	// compact 合并相关
 	NumCompactors       int   // 合并协程数量;默认2;
@@ -52,7 +52,7 @@ func GetLSMDefaultOpt(dirPath string) *Options {
 		LevelSizeMultiplier: 10,
 		TableSizeMultiplier: 2,
 		MaxLevelNum:         7,
-		NumCompactors:       4, // Run at least 2 compactors. Zero-th compactor prioritizes L0.
+		NumCompactors:       4,
 		NumLevelZeroTables:  5,
 
 		BloomFalsePositive: 0.01,
@@ -60,9 +60,8 @@ func GetLSMDefaultOpt(dirPath string) *Options {
 		CacheNums:          0,
 
 		ValueThreshold:     maxValueThreshold,
-		ValueLogMaxEntries: 1000000,
-		// (2^30 - 1)*2 when mmapping < 2^31 - 1, max int32.
-		// -1 so 2*ValueLogFileSize won't overflow on 32-bit systems.
+		ValueLogMaxEntries: 1000,
+
 		ValueLogFileSize: 1<<30 - 1,
 
 		VerifyValueChecksum: false,
@@ -74,8 +73,8 @@ func GetLSMDefaultOpt(dirPath string) *Options {
 }
 
 func CheckLSMOpt(opt *Options) (func() error, error) {
-	//opt.MaxBatchSize = (15 * opt.MemTableSize) / 100
-	//opt.MaxBatchCount = opt.MaxBatchSize / int64(skl.MaxSkipNodeSize)
+	opt.MaxBatchSize = (15 * opt.MemTableSize) / 100
+	opt.MaxBatchCount = opt.MaxBatchSize / int64(skl.MaxSkipNodeSize)
 	var err error
 	var tempDir string
 	if opt.WorkDir == "" {

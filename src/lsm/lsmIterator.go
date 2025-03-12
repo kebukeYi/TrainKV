@@ -54,12 +54,11 @@ func (conIter *ConcatIterator) Key() []byte {
 	return conIter.Item().Item.Key
 }
 func (conIter *ConcatIterator) setIdx(inx int) {
-	conIter.idx = inx // v2.0
+	conIter.idx = inx
 	if inx < 0 || inx >= len(conIter.tables) {
 		conIter.curIer = nil
 		return
 	}
-	//conIter.idx = inx // v1.0
 	if conIter.iters[inx] == nil {
 		conIter.iters[inx] = conIter.tables[inx].NewTableIterator(conIter.opt)
 	}
@@ -247,7 +246,6 @@ func (m *MergeIterator) fix() {
 		m.swapSmall()
 		return
 	}
-	// cmp := model.CompareKeyNoTs(m.small.entry.Key, m.otherNode().entry.Key)
 	// 这里应该全量对比, 具体去留让 compact组件 定夺;
 	cmp := model.CompareKeyWithTs(m.small.entry.Key, m.otherNode().entry.Key)
 	switch {
@@ -285,7 +283,7 @@ func (m *MergeIterator) Next() {
 		if !bytes.Equal(m.small.entry.Key, m.curKey) {
 			break
 		}
-		m.small.next() // n.setEntry()
+		m.small.next() // n.setEntry();
 		m.fix()        // small 和 otherNode 相比较;
 	}
 	m.setCurrentKey()
@@ -306,8 +304,8 @@ func (m *MergeIterator) Value() []byte {
 	return m.Item().Item.Value
 }
 func (m *MergeIterator) Rewind() {
-	m.left.Rewind()   // n.setEntry()
-	m.right.Rewind()  // n.setEntry()
+	m.left.Rewind()   // n.setEntry();
+	m.right.Rewind()  // n.setEntry();
 	m.fix()           // 挑选最小值, 另外一个可能 next();
 	m.setCurrentKey() // 赋值最小值;
 }

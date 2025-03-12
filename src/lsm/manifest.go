@@ -256,7 +256,7 @@ func doRewrite(dir string, manifest *Manifest) (*os.File, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	// Text:4B version:4B
+	// |Text:4B|version:4B|
 	headerBuf := make([]byte, common.ManifestFileHeaderLen)
 	copy(headerBuf[0:4], common.MagicText[:])
 	binary.BigEndian.PutUint32(headerBuf[4:8], common.MagicVersion)
@@ -285,7 +285,6 @@ func doRewrite(dir string, manifest *Manifest) (*os.File, int, error) {
 		return nil, 0, err
 	}
 
-	// In Windows the files should be closed before doing a Rename.
 	if err = file.Close(); err != nil {
 		return nil, 0, err
 	}
@@ -339,14 +338,12 @@ func (mf *ManifestFile) Close() error {
 }
 
 func (mf *ManifestFile) checkSSTable(ids map[uint64]struct{}) error {
-	// 1. Check all files in manifest exist.
 	for _, table := range mf.manifest.Tables {
 		if _, ok := ids[table.ID]; !ok {
 			// manifest 中存在, 实际目录中却不存在;
 			return fmt.Errorf("#checkSSTable(): can`t does not exist for sstable %d", table.ID)
 		}
 	}
-	// 2. Delete files that shouldn't exist.
 	for id := range ids {
 		if _, ok := mf.manifest.Tables[id]; !ok {
 			fmt.Printf("#checkSSTable(): Table file %d  not referenced in MANIFEST.\n", id)

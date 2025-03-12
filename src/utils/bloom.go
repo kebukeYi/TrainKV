@@ -2,10 +2,8 @@ package utils
 
 import "math"
 
-// Filter is an encoded set of []byte keys.
 type Filter []byte
 
-// MayContainKey _
 func (f Filter) MayContainKey(k []byte) bool {
 	return f.MayContain(Hash(k))
 }
@@ -89,7 +87,6 @@ func appendFilter(keys []uint32, bitsPerKey int) []byte {
 	return filter
 }
 
-// Hash implements a hashing algorithm similar to the Murmur hash.
 func Hash(b []byte) uint32 {
 	const (
 		seed = 0xbc9f1d34

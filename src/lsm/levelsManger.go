@@ -11,11 +11,10 @@ import (
 )
 
 type levelsManger struct {
-	maxFID        atomic.Uint64   // sst 已经分配出去的最大fid,只要创建了 memoryTable 就算已分配;
-	levelHandlers []*levelHandler // 每层的处理器
-	opt           *Options
-	lsm           *LSM // 上层引用
-	//cache            *cache.Cache  // 缓存 block 和 sst.index() 数据
+	maxFID           atomic.Uint64   // sst 已经分配出去的最大fid,只要创建了 memoryTable 就算已分配;
+	levelHandlers    []*levelHandler // 每层的处理器
+	opt              *Options
+	lsm              *LSM          // 上层引用
 	cache            *LevelsCache  // 缓存 block 和 sst.index() 数据
 	manifestFile     *ManifestFile // 增删 sst 元信息
 	compactIngStatus *compactIngStatus
@@ -42,7 +41,6 @@ func (lsm *LSM) InitLevelManger(opt *Options) *levelsManger {
 }
 
 func (lm *levelsManger) loadManifestFile() (err error) {
-	// 打开的同时, 并做好了内存数据结构;
 	lm.manifestFile, err = OpenManifestFile(&utils.FileOptions{Dir: lm.opt.WorkDir})
 	return err
 }
@@ -107,7 +105,6 @@ func (lm *levelsManger) Get(keyTs []byte) (model.Entry, error) {
 		err   error
 	)
 	entry.Version = -1
-	// L0层查询
 	if entry, err = lm.levelHandlers[0].Get(keyTs); entry.Version != -1 {
 		return entry, err
 	}
@@ -119,11 +116,10 @@ func (lm *levelsManger) Get(keyTs []byte) (model.Entry, error) {
 	return entry, common.ErrKeyNotFound
 }
 
-// checkOverlap checks if the given tables overlap with any level from the given "lev" onwards.
 func (lm *levelsManger) checkOverlap(tables []*table, lev int) bool {
 	kr := getKeyRange(tables...) // 给定的 table 区间
 	for i, lh := range lm.levelHandlers {
-		if i < lev { // Skip upper levels.  跳过 低于本层的;
+		if i < lev { // 跳过 低于本层的;
 			continue
 		}
 		lh.mux.RLock()

@@ -13,7 +13,7 @@ import (
 
 type LogEntry func(e *Entry, vp *ValuePtr) error
 
-// Entry _ 最外层写入的结构体
+// Entry  db写入的结构体;
 type Entry struct {
 	Key       []byte
 	Value     []byte

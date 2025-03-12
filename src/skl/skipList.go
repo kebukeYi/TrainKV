@@ -220,7 +220,7 @@ func (skipList *SkipList) findSpliceForLevel(key []byte, before uint32, level in
 			return before, nextOffset
 		}
 		nextKey := nextNode.getKey(skipList.arena)
-		// todo 跳表对比key时, 祛除掉 ts版本号
+		// todo 跳表对比key时, 祛除掉 ts版本号;
 		cmp := model.CompareKeyNoTs(key, nextKey)
 		if cmp == 0 {
 			return nextOffset, nextOffset
@@ -279,7 +279,6 @@ func (skipList *SkipList) Put(e model.Entry) {
 	listHeight = skipList.getHeight()
 	for height > int(listHeight) {
 		if atomic.CompareAndSwapInt32(&skipList.height, listHeight, int32(height)) {
-			// Successfully increased skiplist.height.
 			break
 		}
 		listHeight = skipList.getHeight()
@@ -336,7 +335,6 @@ func (skipList *SkipList) Draw(align bool) {
 		}
 	}
 
-	// align
 	if align && skipList.getHeight() > 1 {
 		baseFloor := reverseTree[0]
 		for level := 1; level < int(skipList.getHeight()); level++ {
@@ -355,7 +353,6 @@ func (skipList *SkipList) Draw(align bool) {
 		}
 	}
 
-	// plot
 	for level := int(skipList.getHeight()) - 1; level >= 0; level-- {
 		fmt.Printf("%d: ", level)
 		for pos, ele := range reverseTree[level] {

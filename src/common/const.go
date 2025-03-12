@@ -6,16 +6,8 @@ import (
 )
 
 const (
-	// MaxLevelNum _
-	MaxLevelNum = 7
-)
-
-const (
-	VlogFileDiscardStatsKey = "VlogFileDiscard" // For storing lfDiscardStats
-)
-
-// file
-const (
+	MaxLevelNum                       = 7
+	VlogFileDiscardStatsKey           = "VlogFileDiscard" // For storing lfDiscardStats
 	ManifestFilename                  = "MANIFEST"
 	ManifestRewriteFilename           = "REWRITEMANIFEST"
 	ManifestDeletionsRewriteThreshold = 10000
@@ -26,14 +18,14 @@ const (
 	DefaultFileMode                   = 0666
 	MaxHeaderSize                     = 21 // 基于可变长编码,vlogFile其最可能的编码
 	VlogHeaderSize                    = 0
-	//KVWriteChRequestCapacity                 = 1000
+	// KVWriteChRequestCapacity                 = 1000
 	KVWriteChRequestCapacity = 0
 )
 
 // meta
 const (
-	BitDelete       byte = 1 << 0 // Set if the key has been deleted.
-	BitValuePointer byte = 1 << 1 // Set if the value is NOT stored directly next to key.
+	BitDelete       byte = 1 << 0 //1 Set if the key has been deleted.
+	BitValuePointer byte = 1 << 1 //2 Set if the value is NOT stored directly next to key.
 )
 
 var (

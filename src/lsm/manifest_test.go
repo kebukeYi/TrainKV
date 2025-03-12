@@ -11,7 +11,6 @@ func TestOpenManifestFile(t *testing.T) {
 	clearDir(manifestTestPath)
 	tempDir := manifestTestPath
 
-	// Test case 1: File does not exist, should create a new file and manifest.
 	t.Run("FileDoesNotExist", func(t *testing.T) {
 		opt := &utils.FileOptions{Dir: tempDir}
 		manifestFile, err := OpenManifestFile(opt)
@@ -30,7 +29,6 @@ func TestOpenManifestFile(t *testing.T) {
 		}
 	})
 
-	// Test case 2: File exists, should open the existing file and manifest.
 	t.Run("FileExists", func(t *testing.T) {
 		opt := &utils.FileOptions{Dir: tempDir}
 		// Open the existing file

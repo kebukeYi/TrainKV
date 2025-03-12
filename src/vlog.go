@@ -75,8 +75,6 @@ func (vlog *ValueLog) Open(replayFn model.LogEntry) error {
 		}
 		// 如果当前文件不是 最后一个文件, 执行属性赋值操作;
 		if fid < vlog.maxFid {
-			// This file has been replayed. It can now be mmapped.
-			// For maxFid, the mmap would be done by the specially written code below. 对于 maxFid，mmap 将由下面专门编写的代码完成
 			if err = lf.Init(); err != nil {
 				return err
 			}

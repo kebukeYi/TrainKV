@@ -22,18 +22,15 @@ func (db *TrainKVDB) NewDBIterator(opt *model.Options) *DBIterator {
 	}
 	return res
 }
-
 func (dbIter *DBIterator) Next() {
 	dbIter.iter.Next()
 }
 func (dbIter *DBIterator) Seek(key []byte) {
 	dbIter.iter.Seek(key)
 }
-
 func (dbIter *DBIterator) Rewind() {
 	dbIter.iter.Rewind()
 }
-
 func (dbIter *DBIterator) Valid() bool {
 	return dbIter.iter.Valid() || dbIter.lastEntry.Key != nil
 }
@@ -94,7 +91,6 @@ func (dbIter *DBIterator) Item() model.Item {
 	}
 	return model.Item{Item: model.Entry{Version: -1}}
 }
-
 func (dbIter *DBIterator) Close() error {
 	return dbIter.iter.Close()
 }

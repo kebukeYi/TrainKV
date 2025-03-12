@@ -123,7 +123,7 @@ func (db *TrainKVDB) RunValueLogGC(discardRatio float64) error {
 	if discardRatio >= 1.0 || discardRatio <= 0.0 {
 		return nil
 	}
-	// Pick a log file and run GC. 寻找合适的 vlog 文件 进行 gc;
+	// 寻找合适的 vlog 文件 进行 gc;
 	return db.vlog.runGC(discardRatio)
 }
 
@@ -180,11 +180,9 @@ func (db *TrainKVDB) handleWriteCh(closer *utils.Closer) {
 				}
 			}
 		case r = <-db.writeCh:
-			//fmt.Printf("handleWriteCh: key:%s ;\n", model.ParseKey(r.Entries[0].Key))
 			reqs = append(reqs, r)
 			reqLen = int64(len(reqs))
 			if reqLen >= 3*common.KVWriteChRequestCapacity {
-				// fmt.Println("handleWriteCh: reqLen >= 3*common.KVWriteChRequestCapacity")
 				go db.writeRequest(reqs)
 				reqs = make([]*Request, 0, 1)
 				reqLen = 0
@@ -236,12 +234,11 @@ func (db *TrainKVDB) writeToLSM(req *Request) error {
 	}
 	for i, entry := range req.Entries {
 		if db.ShouldWriteValueToLSM(*entry) {
-			// entry.Meta &= ^common.BitValuePointer
+			entry.Meta = 0
 		} else {
 			entry.Meta |= common.BitValuePointer
 			entry.Value = req.ValPtr[i].Encode()
 		}
-
 		if err := db.Lsm.Put(*entry); err != nil {
 			return err
 		}

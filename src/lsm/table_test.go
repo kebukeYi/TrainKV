@@ -134,8 +134,6 @@ func TestTableIterator(t *testing.T) {
 				k := model.KeyWithTs([]byte(key("key", count)))
 				fmt.Printf("seekKey: %v, val: %v,version:%d, count: %v; \n",
 					string(model.ParseKey(k)), v.Value, v.Version, count)
-				//require.EqualValues(t, k, it.Key())
-				//require.EqualValues(t, fmt.Sprintf("%d", count), string(v.Value))
 				count++
 			}
 			require.Equal(t, count, n)
@@ -174,7 +172,6 @@ func TestSeek(t *testing.T) {
 			fmt.Printf("error: seekKey: %v, val: %v;\n", tt.in, it.Item().Item.Value)
 			continue
 		}
-		// require.True(t, it.Valid())
 		k := it.Item().Item
 		require.EqualValues(t, tt.out, string(model.ParseKey(k.Key)))
 	}
@@ -224,7 +221,6 @@ func TestConcatIterator(t *testing.T) {
 			//require.EqualValues(t, fmt.Sprintf("%d", count%10000), string(vs.Value))
 			count++
 		}
-		//require.EqualValues(t, 30000, count)
 
 		it.Seek(model.KeyWithTs([]byte("a")))
 		require.EqualValues(t, "keya0000", string(model.ParseKey(it.Key())))
@@ -239,7 +235,6 @@ func TestConcatIterator(t *testing.T) {
 		require.EqualValues(t, "0", it.Value())
 
 		it.Seek(model.KeyWithTs([]byte("keyd")))
-		//require.False(t, it.Valid())
 	}
 
 	{
@@ -251,10 +246,8 @@ func TestConcatIterator(t *testing.T) {
 		for ; it.Valid(); it.Next() {
 			vs := it.Value()
 			fmt.Printf("key: %v, value: %v\n", string(model.ParseKey(it.Key())), string(vs))
-			//require.EqualValues(t, fmt.Sprintf("%d", 10000-(count%10000)-1), string(vs))
 			count++
 		}
-		//require.EqualValues(t, 30000, count)
 
 		it.Seek(model.KeyWithTs([]byte("a")))
 		require.False(t, it.Valid())

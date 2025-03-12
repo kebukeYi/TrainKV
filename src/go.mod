@@ -1,6 +1,8 @@
 module trainKv
 
-go 1.19
+go 1.21
+
+toolchain go1.23.0
 
 require (
 	github.com/cespare/xxhash/v2 v2.1.2
@@ -14,6 +16,6 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
-	google.golang.org/protobuf v1.26.0 // indirect
+	google.golang.org/protobuf v1.36.3 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

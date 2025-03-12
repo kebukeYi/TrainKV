@@ -22,7 +22,6 @@ type FileOptions struct {
 	MaxSz    int32
 }
 
-// LoadIDMap Get the id of all sst files in the current folder
 func LoadIDMap(dir string) map[uint64]struct{} {
 	fileInfos, err := os.ReadDir(dir)
 	common.Err(err)
@@ -63,7 +62,6 @@ func FileNameSSTable(dir string, id uint64) string {
 	return filepath.Join(dir, fmt.Sprintf("%05d.sst", id))
 }
 
-// VerifyChecksum crc32
 func VerifyChecksum(data []byte, expected []byte) error {
 	actual := uint64(crc32.Checksum(data, common.CastigationCryTable))
 	expectedU64 := binary.BigEndian.Uint64(expected)
@@ -72,8 +70,6 @@ func VerifyChecksum(data []byte, expected []byte) error {
 	}
 	return nil
 }
-
-// CalculateChecksum _
 func CalculateChecksum(data []byte) uint64 {
 	return uint64(crc32.Checksum(data, common.CastigationCryTable))
 }
