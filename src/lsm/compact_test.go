@@ -42,7 +42,7 @@ func createEmptyTable(lsm *LSM) *table {
 	defer b.close()
 	// Add one key so that we can open this table.
 	b.add(model.Entry{Key: model.KeyWithTestTs([]byte("foo"), uint64(1)), Value: []byte{}}, false)
-	fileName := utils.FileNameSSTable(compactOptions.WorkDir, lsm.levelManger.reserveFileID())
+	fileName := utils.FileNameSSTable(compactOptions.WorkDir, lsm.levelManger.nextFileID())
 	tab, _ := openTable(&levelsManger{opt: &Options{SSTableMaxSz: compactOptions.SSTableMaxSz}}, fileName, b)
 	return tab
 }
@@ -55,11 +55,12 @@ func createAndSetLevel(lsm *LSM, td []keyValVersion, level int) {
 	// Add all keys and versions to the table.
 	for _, item := range td {
 		key := model.KeyWithTestTs([]byte(item.key), uint64(item.version))
-		val := model.ValueExt{Value: []byte(item.val), Meta: item.meta}
-		e := model.NewEntry(key, val.Value)
+		// val := model.ValueExt{Value: []byte(item.val), Meta: item.meta}
+		e := model.NewEntry(key, []byte(item.val))
+		e.Meta = item.meta
 		builder.add(e, false)
 	}
-	fileName := utils.FileNameSSTable(compactOptions.WorkDir, lsm.levelManger.reserveFileID())
+	fileName := utils.FileNameSSTable(compactOptions.WorkDir, lsm.levelManger.nextFileID())
 	tab, _ := openTable(lsm.levelManger, fileName, builder)
 	if err := lsm.levelManger.manifestFile.addChanges([]*pb.ManifestChange{newCreateChange(tab.fid, level)}); err != nil {
 		panic(err)
@@ -153,6 +154,8 @@ func TestCheckOverlap(t *testing.T) {
 }
 
 func TestCompaction(t *testing.T) {
+
+	// 简单测试 l0中的数据合并到l1, 只保留相同key的最高版本单个数据;
 	t.Run("level 0 to level 1", func(t *testing.T) {
 		runBadgerTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
 			l0 := []keyValVersion{
@@ -193,6 +196,310 @@ func TestCompaction(t *testing.T) {
 				{"fooz", "baz", 1, 0}})
 		})
 	})
+
+	// 简单测试 l0中的数据合并到l1, 只保留相同key的最高版本单个数据;
+	t.Run("level 0 to level 1 with duplicates", func(t *testing.T) {
+		runBadgerTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
+			l0 := []keyValVersion{
+				{"fooz", "baz", 1, 0}}
+			l01 := []keyValVersion{
+				{"foo", "bar", 4, 0}}
+			l1 := []keyValVersion{
+				{"foo", "bar", 3, 0}}
+
+			// Level 0 has table l0 and l01.
+			createAndSetLevel(lsm, l0, 0)
+			createAndSetLevel(lsm, l01, 0)
+			// Level 1 has table l1.
+			createAndSetLevel(lsm, l1, 1)
+
+			// lsm层面的迭代器会返回数据库中所有数据,按照版本号递增,包括低版本数据;
+			// db层面的迭代器会返回数据库中所有最高版本数据,不包括低版本无效数据;
+			getAllAndCheck(t, lsm, []keyValVersion{
+				{"foo", "bar", 3, 0},
+				{"foo", "bar", 4, 0},
+				{"fooz", "baz", 1, 0},
+			})
+			cdef := compactDef{
+				thisLevel:  lsm.levelManger.levelHandlers[0],
+				nextLevel:  lsm.levelManger.levelHandlers[1],
+				thisTables: lsm.levelManger.levelHandlers[0].tables,
+				nextTables: lsm.levelManger.levelHandlers[1].tables,
+				dst:        lsm.levelManger.levelTargets(),
+			}
+			cdef.dst.dstLevelId = 1
+			require.NoError(t, lsm.levelManger.runCompactDef(-1, 0, cdef))
+			// foo version 3 (both) should be dropped after compaction.
+			getAllAndCheck(t, lsm, []keyValVersion{
+				{"foo", "bar", 4, 0},
+				{"fooz", "baz", 1, 0}})
+		})
+	})
+
+	// 简单测试 l0中的数据合并到l1, 只保留相同key的最高版本单个数据;
+	t.Run("level 0 to level 1 with lower overlap", func(t *testing.T) {
+		runBadgerTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
+			l0 := []keyValVersion{
+				{"foo", "bar", 4, 0},
+				{"fooz", "baz", 1, 0}}
+			l01 := []keyValVersion{
+				{"foo", "bar", 3, 0}}
+			l1 := []keyValVersion{
+				{"foo", "bar", 2, 0}}
+			l2 := []keyValVersion{
+				{"foo", "bar", 1, 0}}
+			// Level 0 has table l0 and l01.
+			createAndSetLevel(lsm, l0, 0)
+			createAndSetLevel(lsm, l01, 0)
+			// Level 1 has table l1.
+			createAndSetLevel(lsm, l1, 1)
+			// Level 2 has table l2.
+			createAndSetLevel(lsm, l2, 2)
+
+			getAllAndCheck(t, lsm, []keyValVersion{
+				{"foo", "bar", 1, 0},
+				{"foo", "bar", 2, 0},
+				{"foo", "bar", 3, 0},
+				{"foo", "bar", 4, 0},
+				{"fooz", "baz", 1, 0},
+			})
+			cdef := compactDef{
+				thisLevel:  lsm.levelManger.levelHandlers[0],
+				nextLevel:  lsm.levelManger.levelHandlers[1],
+				thisTables: lsm.levelManger.levelHandlers[0].tables,
+				nextTables: lsm.levelManger.levelHandlers[1].tables,
+				dst:        lsm.levelManger.levelTargets(),
+			}
+			cdef.dst.dstLevelId = 1
+			require.NoError(t, lsm.levelManger.runCompactDef(-1, 0, cdef))
+			// foo version 2 and version 1 should be dropped after compaction.
+			getAllAndCheck(t, lsm, []keyValVersion{
+				{"foo", "bar", 1, 0}, // 在level2层,没有参与 l0->l1 的合并;
+				{"foo", "bar", 4, 0},
+				{"fooz", "baz", 1, 0},
+			})
+		})
+	})
+
+	// 简单测试 l1中的数据合并到l2, 只保留相同key的最高版本单个数据;
+	t.Run("level 1 to level 2", func(t *testing.T) {
+		runBadgerTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
+			l1 := []keyValVersion{
+				{"foo", "bar", 3, 0},
+				{"fooz", "baz", 1, 0}}
+			l2 := []keyValVersion{
+				{"foo", "bar", 2, 0}}
+
+			createAndSetLevel(lsm, l1, 1)
+			createAndSetLevel(lsm, l2, 2)
+
+			getAllAndCheck(t, lsm, []keyValVersion{
+				{"foo", "bar", 2, 0},
+				{"foo", "bar", 3, 0},
+				{"fooz", "baz", 1, 0},
+			})
+			cdef := compactDef{
+				thisLevel:  lsm.levelManger.levelHandlers[1],
+				nextLevel:  lsm.levelManger.levelHandlers[2],
+				thisTables: lsm.levelManger.levelHandlers[1].tables,
+				nextTables: lsm.levelManger.levelHandlers[2].tables,
+				dst:        lsm.levelManger.levelTargets(),
+			}
+			cdef.dst.dstLevelId = 2
+			require.NoError(t, lsm.levelManger.runCompactDef(-1, 1, cdef))
+			// foo version 2 should be dropped after compaction.
+			getAllAndCheck(t, lsm, []keyValVersion{
+				{"foo", "bar", 3, 0},
+				{"fooz", "baz", 1, 0}}) // 理解
+		})
+	})
+
+	t.Run("level 1 to level 2 with delete", func(t *testing.T) {
+
+		// 简单测试 l0中的数据合并到l1, 只保留相同key的最高版本单个数据,尽管是删除类型数据;
+		t.Run("with overlap", func(t *testing.T) {
+			runBadgerTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
+				l1 := []keyValVersion{
+					{"foo", "bar", 3, common.BitDelete},
+					{"fooz", "baz", 1, common.BitDelete}}
+				l2 := []keyValVersion{
+					{"foo", "bar", 2, 0},
+				}
+				l3 := []keyValVersion{
+					{"foo", "bar", 1, 0},
+				}
+				createAndSetLevel(lsm, l1, 1)
+				createAndSetLevel(lsm, l2, 2)
+				createAndSetLevel(lsm, l3, 3)
+
+				getAllAndCheck(t, lsm, []keyValVersion{
+					{"foo", "bar", 1, 0},
+					{"foo", "bar", 2, 0},
+					{"foo", "bar", 3, common.BitDelete},
+					{"fooz", "baz", 1, common.BitDelete},
+				})
+				// l1 -> l2
+				cdef := compactDef{
+					thisLevel:  lsm.levelManger.levelHandlers[1],
+					nextLevel:  lsm.levelManger.levelHandlers[2],
+					thisTables: lsm.levelManger.levelHandlers[1].tables,
+					nextTables: lsm.levelManger.levelHandlers[2].tables,
+					dst:        lsm.levelManger.levelTargets(),
+				}
+				cdef.dst.dstLevelId = 2
+				require.NoError(t, lsm.levelManger.runCompactDef(-1, 1, cdef))
+				// foo bar version 2 should be dropped after compaction.
+				// fooz baz version 1 will remain because overlap exists, which is
+				// expected because `hasOverlap` is only checked once at the
+				// beginning of `compactBuildTables` method.
+				// 处在l1,l2 层中的 fooz 并没有和下层l3 有overlap, 按照常规下, 是会被清理掉的, 但是为什么没有清理掉?
+				// 但是处在 l1,l2 层中的 foo,和l3层有重合, 因此 hasOverlap ,也就被置为 true; 因此属于是连带效应,没有被铲除;
+				// everything from level 1 is now in level 2.
+				getAllAndCheck(t, lsm, []keyValVersion{
+					{"foo", "bar", 1, 0},                 // 在l3层
+					{"foo", "bar", 3, common.BitDelete},  // 在l2层
+					{"fooz", "baz", 1, common.BitDelete}, // 在l2层
+				})
+
+				// l2 -> l3
+				cdef = compactDef{
+					thisLevel:  lsm.levelManger.levelHandlers[2],
+					nextLevel:  lsm.levelManger.levelHandlers[3],
+					thisTables: lsm.levelManger.levelHandlers[2].tables,
+					nextTables: lsm.levelManger.levelHandlers[3].tables,
+					dst:        lsm.levelManger.levelTargets()}
+				cdef.dst.dstLevelId = 3
+				require.NoError(t, lsm.levelManger.runCompactDef(-1, 2, cdef))
+				// everything should be removed now
+				getAllAndCheck(t, lsm, []keyValVersion{
+					{"foo", "bar", 3, common.BitDelete},  // 在l3层
+					{"fooz", "baz", 1, common.BitDelete}, // 在l2层
+				}) // 理解
+			})
+		})
+
+		t.Run("with bottom overlap", func(t *testing.T) {
+			runBadgerTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
+				l1 := []keyValVersion{
+					{"foo", "bar", 3, common.BitDelete}}
+				l2 := []keyValVersion{
+					{"foo", "bar", 2, 0},
+					{"fooz", "baz", 2, common.BitDelete}}
+				l3 := []keyValVersion{
+					{"fooz", "baz", 1, 0}}
+
+				createAndSetLevel(lsm, l1, 1)
+				createAndSetLevel(lsm, l2, 2)
+				createAndSetLevel(lsm, l3, 3)
+
+				getAllAndCheck(t, lsm, []keyValVersion{
+					{"foo", "bar", 2, 0},
+					{"foo", "bar", 3, common.BitDelete},
+					{"fooz", "baz", 1, 0},
+					{"fooz", "baz", 2, common.BitDelete},
+				})
+				cdef := compactDef{
+					thisLevel:  lsm.levelManger.levelHandlers[1],
+					nextLevel:  lsm.levelManger.levelHandlers[2],
+					thisTables: lsm.levelManger.levelHandlers[1].tables,
+					nextTables: lsm.levelManger.levelHandlers[2].tables,
+					dst:        lsm.levelManger.levelTargets(),
+				}
+				cdef.dst.dstLevelId = 2
+				require.NoError(t, lsm.levelManger.runCompactDef(-1, 1, cdef))
+				// the top table at L1 doesn't overlap L3, but the bottom table at L2
+				// does, delete keys should not be removed. 理解
+				getAllAndCheck(t, lsm, []keyValVersion{
+					{"foo", "bar", 3, common.BitDelete},
+					{"fooz", "baz", 1, 0}, // 理解
+					{"fooz", "baz", 2, common.BitDelete},
+				})
+			})
+		})
+
+		t.Run("without overlap", func(t *testing.T) {
+			runBadgerTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
+				l1 := []keyValVersion{
+					{"foo", "bar", 3, common.BitDelete},
+					{"fooz", "baz", 1, common.BitDelete}}
+				l2 := []keyValVersion{
+					{"fooo", "barr", 2, 0}}
+
+				createAndSetLevel(lsm, l1, 1)
+				createAndSetLevel(lsm, l2, 2)
+
+				getAllAndCheck(t, lsm, []keyValVersion{
+					{"foo", "bar", 3, common.BitDelete},
+					{"fooo", "barr", 2, 0},
+					{"fooz", "baz", 1, common.BitDelete},
+				})
+				cdef := compactDef{
+					thisLevel:  lsm.levelManger.levelHandlers[1],
+					nextLevel:  lsm.levelManger.levelHandlers[2],
+					thisTables: lsm.levelManger.levelHandlers[1].tables,
+					nextTables: lsm.levelManger.levelHandlers[2].tables,
+					dst:        lsm.levelManger.levelTargets(),
+				}
+				cdef.dst.dstLevelId = 2
+				require.NoError(t, lsm.levelManger.runCompactDef(-1, 1, cdef))
+				// foo version 2 should be dropped after compaction.
+				// 没有出现 重合, 删除标记,还存在;
+				getAllAndCheck(t, lsm, []keyValVersion{
+					{"foo", "bar", 3, common.BitDelete},
+					{"fooo", "barr", 2, 0},
+					{"fooz", "baz", 1, common.BitDelete},
+				})
+			})
+		})
+
+		t.Run("with splits", func(t *testing.T) {
+			runBadgerTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
+				l1 := []keyValVersion{{"C", "bar", 3, common.BitDelete}}
+
+				l21 := []keyValVersion{{"A", "bar", 2, 0}}
+				l22 := []keyValVersion{{"B", "bar", 2, 0}}
+				l23 := []keyValVersion{{"C", "bar", 2, 0}}
+				l24 := []keyValVersion{{"D", "bar", 2, 0}}
+
+				l3 := []keyValVersion{{"fooz", "baz", 1, 0}}
+
+				createAndSetLevel(lsm, l1, 1)
+				createAndSetLevel(lsm, l21, 2)
+				createAndSetLevel(lsm, l22, 2)
+				createAndSetLevel(lsm, l23, 2)
+				createAndSetLevel(lsm, l24, 2)
+				createAndSetLevel(lsm, l3, 3)
+
+				getAllAndCheck(t, lsm, []keyValVersion{
+					{"A", "bar", 2, 0},
+					{"B", "bar", 2, 0},
+					{"C", "bar", 2, 0},
+					{"C", "bar", 3, common.BitDelete},
+					{"D", "bar", 2, 0},
+					{"fooz", "baz", 1, 0},
+				})
+
+				cdef := compactDef{
+					thisLevel:  lsm.levelManger.levelHandlers[1],
+					nextLevel:  lsm.levelManger.levelHandlers[2],
+					thisTables: lsm.levelManger.levelHandlers[1].tables,
+					nextTables: lsm.levelManger.levelHandlers[2].tables,
+					dst:        lsm.levelManger.levelTargets(),
+				}
+				cdef.dst.dstLevelId = 2
+				require.NoError(t, lsm.levelManger.runCompactDef(-1, 1, cdef))
+
+				getAllAndCheck(t, lsm, []keyValVersion{
+					{"A", "bar", 2, 0},
+					{"B", "bar", 2, 0},
+					{"C", "bar", 3, common.BitDelete},
+					{"D", "bar", 2, 0},
+					{"fooz", "baz", 1, 0},
+				})
+			})
+		})
+	})
+
 }
 
 func getAllAndCheck(t *testing.T, lsm *LSM, expected []keyValVersion) {
@@ -202,13 +509,14 @@ func getAllAndCheck(t *testing.T, lsm *LSM, expected []keyValVersion) {
 	i := 0
 	for it.Rewind(); it.Valid(); it.Next() {
 		item := it.Item().Item
+		item.Key = model.ParseKey(item.Key)
 		//fmt.Printf("key:%s ,val:%s,varsion:%d, meta:%d\n", string(item.Key), string(item.Value), item.Version, item.Meta)
 		require.Less(t, i, len(expected), "DB has more number of key than expected")
 		expect := expected[i]
 		require.Equal(t, expect.key, string(item.Key), "expected key: %s actual key: %s", expect.key, item.Key)
 		require.Equal(t, expect.val, string(item.Value), "key: %s expected value: %s actual %s", item.Key, expect.val, item.Value)
 		require.Equal(t, expect.version, int(item.Version), "key: %s expected version: %d actual %d", item.Key, expect.version, item.Version)
-		require.Equal(t, expect.meta, item.Meta, "key: %s expected meta: %d meta %d", item.Key, expect.meta, item.Meta)
+		require.Equal(t, expect.meta, item.Meta, "key: %s, version:%d, expected meta: %d meta %d", item.Key, item.Version, expect.meta, item.Meta)
 		i++
 	}
 	require.Equal(t, len(expected), i, "keys examined should be equal to keys expected")

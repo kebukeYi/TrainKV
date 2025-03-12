@@ -7,9 +7,10 @@ import (
 )
 
 type DBIterator struct {
-	iter    model.Iterator
-	vlog    *ValueLog
-	skipKey []byte
+	iter      model.Iterator
+	vlog      *ValueLog
+	lastKey   []byte
+	lastEntry model.Entry
 }
 
 func (db *TrainKVDB) NewDBIterator(opt *model.Options) *DBIterator {
@@ -24,54 +25,74 @@ func (db *TrainKVDB) NewDBIterator(opt *model.Options) *DBIterator {
 
 func (dbIter *DBIterator) Next() {
 	dbIter.iter.Next()
-	for ; dbIter.Valid() && dbIter.Item().Item.Value == nil; dbIter.iter.Next() {
-	}
 }
-
-func (dbIter *DBIterator) Valid() bool {
-	return dbIter.iter.Valid()
-}
-
 func (dbIter *DBIterator) Seek(key []byte) {
 	dbIter.iter.Seek(key)
 }
 
 func (dbIter *DBIterator) Rewind() {
 	dbIter.iter.Rewind()
-	for ; dbIter.Valid() && dbIter.Item().Item.Key == nil; dbIter.iter.Next() {
-	}
 }
 
+func (dbIter *DBIterator) Valid() bool {
+	return dbIter.iter.Valid() || dbIter.lastEntry.Key != nil
+}
 func (dbIter *DBIterator) Item() model.Item {
-	entry := dbIter.iter.Item().Item
-	var value []byte
+	judgeKey := func(entry model.Entry) model.Item {
+		if entry.Value != nil && model.IsValPtr(entry) {
+			var vp model.ValuePtr
+			vp.Decode(entry.Value)
+			read, callback, err := dbIter.vlog.Read(&vp)
+			model.RunCallback(callback)
+			if err != nil {
+				fmt.Printf("dbIter read Item()value error: %v", err)
+				return model.Item{Item: model.Entry{Version: -1}}
+			}
+			entry.Value = model.SafeCopy(nil, read)
+		}
 
-	if entry.Value != nil && model.IsValPtr(entry) {
-		var vp model.ValuePtr
-		vp.Decode(entry.Value)
-		read, callback, err := dbIter.vlog.Read(&vp)
-		defer model.RunCallback(callback)
-		if err != nil {
-			fmt.Printf("dbIter read Item()value error: %v", err)
+		if entry.IsDeleteOrExpired() {
+			//fmt.Printf("entry is deleted or expired, key:%s, len(val):%d, version:%d, Meat:%d ;\n", model.ParseKey(entry.Key), len(entry.Value), entry.Version, entry.Meta)
 			return model.Item{Item: model.Entry{Version: -1}}
 		}
-		value = model.SafeCopy(nil, read)
-	}
 
-	if entry.IsDeleteOrExpired() {
-		//fmt.Printf("entry is deleted or expired, key:%s, len(val):%d, version:%d, Meat:%d ;\n", model.ParseKey(entry.Key), len(entry.Value), entry.Version, entry.Meta)
-		return model.Item{Item: model.Entry{Version: -1}}
+		return model.Item{Item: entry}
 	}
+	// 1) sst [aaa:4]
+	// 2) sst [aaa:4,aaa:7,aaa:8,aaa:14]
+	// 3) sst [aaa:4,aaa:7,bbb:8,bbb:14]
+	//for ; dbIter.Valid(); dbIter.Next() {
+	for ; dbIter.iter.Valid(); dbIter.iter.Next() {
+		entry := dbIter.iter.Item().Item
+		curKey := entry.Key
 
-	ret := model.Entry{
-		Key:       entry.Key,
-		Value:     value,
-		ExpiresAt: entry.ExpiresAt,
-		Meta:      entry.Meta,
-		Version:   entry.Version,
-		Offset:    entry.Offset,
+		if dbIter.lastKey == nil {
+			dbIter.lastKey = model.SafeCopy(dbIter.lastKey, curKey)
+			dbIter.lastEntry = entry
+		}
+
+		if !model.SameKeyNoTs(curKey, dbIter.lastKey) {
+			lastEntry := dbIter.lastEntry
+			dbIter.lastKey = model.SafeCopy(dbIter.lastKey, curKey)
+			dbIter.lastEntry = entry
+			return judgeKey(lastEntry)
+		} else {
+			if model.ParseTsVersion(curKey) > model.ParseTsVersion(dbIter.lastKey) {
+				dbIter.lastKey = model.SafeCopy(dbIter.lastKey, curKey)
+				dbIter.lastEntry = entry
+			} else {
+				// model.ParseTsVersion(curKey) < model.ParseTsVersion(lastKey)
+				// don`t do anything; continue to next key;
+			}
+		}
 	}
-	return model.Item{Item: ret}
+	if dbIter.lastEntry.Key != nil {
+		lastValidEntry := dbIter.lastEntry
+		dbIter.lastEntry = model.Entry{Version: -1}
+		dbIter.lastKey = nil
+		return judgeKey(lastValidEntry)
+	}
+	return model.Item{Item: model.Entry{Version: -1}}
 }
 
 func (dbIter *DBIterator) Close() error {

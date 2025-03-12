@@ -83,7 +83,7 @@ func TestAPI(t *testing.T) {
 	delStart := 0
 	delEnd := 40
 	fmt.Println("========================put1(0-60)==================================")
-	// 写入 0-60
+	// 写入 0-60 version=1
 	for i := putStart; i <= putEnd; i++ {
 		key := fmt.Sprintf("key%d", i)
 		val := fmt.Sprintf("val%d", i)
@@ -105,7 +105,7 @@ func TestAPI(t *testing.T) {
 	}
 
 	fmt.Println("========================del(0-40)==================================")
-	// 写入删除 0-40, 剩余 41-60;
+	// 写入删除 0-40,version:2 ;剩余 41-60;
 	for i := delStart; i <= delEnd; i++ {
 		key := fmt.Sprintf("key%d", i)
 		if err := db.Del([]byte(key), int64(2)); err != nil {
@@ -114,7 +114,7 @@ func TestAPI(t *testing.T) {
 	}
 
 	fmt.Println("========================put2(70-90)=================================")
-	// 写入 70-90
+	// 写入 70-90,version:3;
 	for i := putStart1; i <= putEnd1; i++ {
 		key := fmt.Sprintf("key%d", i)
 		val := fmt.Sprintf("val%d", i)
@@ -137,7 +137,6 @@ func TestAPI(t *testing.T) {
 	}
 
 	fmt.Println("=========================iter(41-60 70-90)===========================")
-	// 注意:迭代器 会把全量数据迭代出来,包括已经失效的数据;失效的数据只能等待后台自动compact合并剔除;
 	iter := db.NewDBIterator(&model.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
 	iter.Rewind()
@@ -157,21 +156,20 @@ func TestReStart(t *testing.T) {
 		_ = db.Close()
 		_ = callBack()
 	}()
-	//putStart := 0
-	//putEnd := 90
-	//// 读取
-	//fmt.Println("=============db.get=========================================")
-	//for i := putStart; i <= putEnd; i++ {
-	//	key := fmt.Sprintf("key%d", i)
-	//	if entry, err := db.Get([]byte(key)); err != nil {
-	//		fmt.Printf("err db.Get key=%s, version:%d, err: %v \n", key, entry.Version, err)
-	//	} else {
-	//		fmt.Printf("ok  db.Get key=%s, value=%s,meta:%d, version=%d \n",
-	//			model.ParseKey(entry.Key), entry.Value, entry.Meta, entry.Version)
-	//	}
-	//}
+	putStart := 0
+	putEnd := 90
+	// 读取
+	fmt.Println("=============db.get=========================================")
+	for i := putStart; i <= putEnd; i++ {
+		key := fmt.Sprintf("key%d", i)
+		if entry, err := db.Get([]byte(key)); err != nil {
+			fmt.Printf("err db.Get key=%s, version:%d, err: %v \n", key, entry.Version, err)
+		} else {
+			fmt.Printf("ok  db.Get key=%s, value=%s,meta:%d, version=%d \n",
+				model.ParseKey(entry.Key), entry.Value, entry.Meta, entry.Version)
+		}
+	}
 	fmt.Println("=============db.Iterator=========================================")
-	// 注意:迭代器 会把全量数据迭代出来,包括已经失效的数据;失效的数据只能等待后台自动compact合并剔除;
 	iter := db.NewDBIterator(&model.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
 	iter.Rewind()

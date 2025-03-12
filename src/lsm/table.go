@@ -301,7 +301,6 @@ func (tier *tableIterator) prev() {
 	}
 }
 func (tier *tableIterator) Valid() bool {
-	//return tier.err != io.EOF // 如果没有的时候 则是EOF
 	return tier.err == nil // 如果没有的时候 则是EOF;
 }
 

@@ -312,7 +312,8 @@ func (m *MergeIterator) Rewind() {
 	m.setCurrentKey() // 赋值最小值;
 }
 func (m *MergeIterator) setCurrentKey() {
-	common.CondPanic(m.small.entry.Key == nil && m.small.valid == true, fmt.Errorf("mi.small.entry is nil"))
+	common.CondPanic(m.small.entry.Key == nil && m.small.valid == true,
+		fmt.Errorf("mi.small.entry is nil"))
 	if m.small.valid {
 		m.curKey = append(m.curKey[:0], m.small.entry.Key...)
 		m.curVal = append(m.curVal[:0], m.small.entry.Value...)

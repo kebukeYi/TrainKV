@@ -667,8 +667,6 @@ func (lm *levelsManger) subCompact(iterator model.Iterator, kr keyRange, cd comp
 
 			if lastKey == nil {
 				lastKey = model.SafeCopy(lastKey, curKey)
-				//item := iterator.Item().Item
-				//lastEntry = item.SafeCopy()
 				lastEntry = iterator.Item().Item
 			}
 
@@ -689,8 +687,6 @@ func (lm *levelsManger) subCompact(iterator model.Iterator, kr keyRange, cd comp
 			if !model.SameKeyNoTs(curKey, lastKey) {
 				builderAdd(builder, lastEntry)
 				lastKey = model.SafeCopy(lastKey, curKey)
-				//item := iterator.Item().Item
-				//lastEntry = item.SafeCopy()
 				lastEntry = iterator.Item().Item
 			} else {
 				// lastKey: aaa:1  curKey: aaa:5  nextKey: aaa:9
@@ -698,8 +694,6 @@ func (lm *levelsManger) subCompact(iterator model.Iterator, kr keyRange, cd comp
 					// skip lastKey
 					updateDiscardStats(lastEntry)
 					lastKey = model.SafeCopy(lastKey, curKey)
-					//item := iterator.Item().Item
-					//lastEntry = item.SafeCopy
 					lastEntry = iterator.Item().Item
 				} else {
 					// model.ParseTsVersion(curKey) <= model.ParseTsVersion(lastKey)
