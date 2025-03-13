@@ -2,9 +2,9 @@ package lsm
 
 import (
 	"fmt"
-	"github.com/trainlabs/trainkv/common"
-	"github.com/trainlabs/trainkv/model"
-	"github.com/trainlabs/trainkv/utils"
+	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/model"
+	"github.com/kebukeYi/TrainKV/utils"
 	"strconv"
 	"sync"
 	"sync/atomic"

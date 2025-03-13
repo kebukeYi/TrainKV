@@ -2,9 +2,9 @@ package skl
 
 import (
 	"fmt"
+	"github.com/kebukeYi/TrainKV/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/trainlabs/trainkv/model"
 	"math/rand"
 	"strconv"
 	"strings"

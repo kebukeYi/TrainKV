@@ -2,8 +2,8 @@ package TrainKV
 
 import (
 	"fmt"
-	"github.com/trainlabs/trainkv/lsm"
-	"github.com/trainlabs/trainkv/model"
+	"github.com/kebukeYi/TrainKV/lsm"
+	"github.com/kebukeYi/TrainKV/model"
 )
 
 type DBIterator struct {

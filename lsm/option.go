@@ -1,8 +1,8 @@
 package lsm
 
 import (
-	"github.com/trainlabs/trainkv/common"
-	"github.com/trainlabs/trainkv/skl"
+	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/skl"
 	"os"
 )
 

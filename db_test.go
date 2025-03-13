@@ -2,9 +2,9 @@ package TrainKV
 
 import (
 	"fmt"
-	"github.com/trainlabs/trainkv/common"
-	"github.com/trainlabs/trainkv/lsm"
-	"github.com/trainlabs/trainkv/model"
+	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/lsm"
+	"github.com/kebukeYi/TrainKV/model"
 	"os"
 	"testing"
 )

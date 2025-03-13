@@ -1,13 +1,13 @@
 package lsm
 
 import (
+	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/model"
 	"github.com/stretchr/testify/require"
-	"github.com/trainlabs/trainkv/common"
-	"github.com/trainlabs/trainkv/model"
 	"testing"
 
-	"github.com/trainlabs/trainkv/pb"
-	"github.com/trainlabs/trainkv/utils"
+	"github.com/kebukeYi/TrainKV/pb"
+	"github.com/kebukeYi/TrainKV/utils"
 )
 
 var compactTestPath = "/usr/projects_gen_data/goprogendata/trainkvdata/test/compact"

@@ -1,4 +1,4 @@
-module github.com/trainlabs/trainkv
+module github.com/kebukeYi/TrainKV
 
 go 1.21
 
