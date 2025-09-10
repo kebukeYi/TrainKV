@@ -20,8 +20,8 @@ func main() {
 		_ = callBack()
 	}()
 
-	key := "name"
-	val := "trainDB"
+	key := "Name"
+	val := "TrainKV"
 
 	// Set key.
 	e := model.NewEntry([]byte(key), []byte(val))
@@ -30,7 +30,7 @@ func main() {
 	}
 
 	// To test a valid key for the following iterator.
-	newE := model.NewEntry([]byte("newName"), []byte("validVal"))
+	newE := model.NewEntry([]byte("newName"), []byte("newValidVal"))
 	if err := db.Set(newE); err != nil {
 		panic(err)
 	}
@@ -50,7 +50,7 @@ func main() {
 
 	// Get key again.
 	if entry, err := db.Get([]byte(key)); err != nil || entry == nil {
-		fmt.Printf("db.Get key=%s; err: %v;\n", err, key)
+		fmt.Printf("err: %v; db.Get key=%s;\n", err, key)
 	} else {
 		fmt.Printf("db.Get key=%s, value=%s, meta:%d, version=%d; \n",
 			model.ParseKey(entry.Key), entry.Value, entry.Meta, entry.Version)
@@ -63,7 +63,7 @@ func main() {
 	for iter.Valid() {
 		it := iter.Item()
 		if it.Item.Version != -1 {
-			fmt.Printf("db.Iterator key=%s, value=%s, meta:%d, version=%d \n",
+			fmt.Printf("db.Iterator key=%s, value=%s, meta:%d, version=%d\n;",
 				model.ParseKey(it.Item.Key), it.Item.Value, it.Item.Meta, it.Item.Version)
 		}
 		iter.Next()

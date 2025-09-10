@@ -256,7 +256,6 @@ func (skipList *SkipList) Put(e *model.Entry) {
 		Meta:      e.Meta,
 		Value:     e.Value,
 		ExpiresAt: e.ExpiresAt,
-		Version:   e.Version,
 	}
 
 	listHeight := skipList.getHeight()
@@ -416,13 +415,14 @@ func (s *SkipListIterator) Rewind() {
 	s.SeekToFirst()
 }
 func (s *SkipListIterator) Item() model.Item {
-	return model.Item{Item: model.Entry{
+	entry := model.Entry{
 		Key:       s.Key(),
 		Value:     s.Value().Value,
 		Meta:      s.Value().Meta,
 		ExpiresAt: s.Value().ExpiresAt,
-		Version:   s.Value().Version,
-	}}
+	}
+	entry.Version = model.ParseTsVersion(entry.Key)
+	return model.Item{Item: entry}
 }
 func (s *SkipListIterator) Seek(key []byte) {
 	// find >=

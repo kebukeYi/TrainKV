@@ -394,7 +394,7 @@ func (itr *blockIterator) setIndex(idx int) {
 		return
 	}
 	itr.err = nil
-	// 找到entry data区域
+	// 找到entry data区域;
 	startOffset := int(itr.entryOffsets[idx])
 	if len(itr.baseKey) == 0 { // 说明当前 block 没有重叠key, 因此直接获得不同的key区间
 		var header entryHeader

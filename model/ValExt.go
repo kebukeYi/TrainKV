@@ -8,7 +8,7 @@ type ValueExt struct {
 	Value     []byte
 	ExpiresAt uint64
 
-	Version int64
+	Version int64 // 注意: 此字段,实际上并没有存储到磁盘中;
 }
 
 func (val *ValueExt) EncodeValSize() uint32 {

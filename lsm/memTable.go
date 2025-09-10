@@ -4,6 +4,7 @@ import (
 	"fmt"
 	errors "github.com/kebukeYi/TrainKV/common"
 	"github.com/kebukeYi/TrainKV/model"
+	"github.com/kebukeYi/TrainKV/skl"
 	"github.com/kebukeYi/TrainKV/utils"
 	"os"
 	"path/filepath"
@@ -16,7 +17,7 @@ const MemTableName string = ".memtable"
 
 type memoryTable struct {
 	lsm         *LSM
-	skipList    *SkipList
+	skipList    *skl.SkipList
 	wal         *WAL
 	maxVersion  uint64
 	name        string
@@ -35,7 +36,7 @@ func (lsm *LSM) NewMemoryTable() *memoryTable {
 	}
 	mt := &memoryTable{
 		lsm:      lsm,
-		skipList: NewSkipList(lsm.option.MemTableSize),
+		skipList: skl.NewSkipList(lsm.option.MemTableSize),
 		wal:      OpenWalFile(walFileOpt),
 		name:     strconv.FormatUint(newFid, 10) + MemTableName,
 	}
@@ -69,7 +70,6 @@ func (m *memoryTable) Put(e *model.Entry) error {
 		return err
 	}
 	m.skipList.Put(e)
-	m.currKey = e.Key
 	m.currKey = e.Key
 	m.currKeyMeta = e.Meta
 	return nil
@@ -154,7 +154,7 @@ func (lsm *LSM) openMemTable(walFid uint64) (*memoryTable, error) {
 		FileName: mtFilePath(lsm.option.WorkDir, walFid),
 	}
 	walFile := OpenWalFile(fileOpt)
-	s := NewSkipList(lsm.option.MemTableSize)
+	s := skl.NewSkipList(lsm.option.MemTableSize)
 	mem := &memoryTable{
 		lsm:      lsm,
 		skipList: s,
