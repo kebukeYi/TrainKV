@@ -1,17 +1,17 @@
-package TrainDB
+package TrainKV
 
 import (
 	"github.com/gofrs/flock"
-	"github.com/kebukeYi/TrainDB/common"
-	"github.com/kebukeYi/TrainDB/lsm"
-	"github.com/kebukeYi/TrainDB/model"
-	"github.com/kebukeYi/TrainDB/utils"
+	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/lsm"
+	"github.com/kebukeYi/TrainKV/model"
+	"github.com/kebukeYi/TrainKV/utils"
 	"github.com/pkg/errors"
 	"path/filepath"
 	"sync"
 )
 
-type TrainKVDB struct {
+type TrainKV struct {
 	Mux            sync.Mutex
 	Lsm            *lsm.LSM
 	vlog           *ValueLog
@@ -30,12 +30,12 @@ type closer struct {
 	valueGC    *utils.Closer
 }
 
-func Open(opt *lsm.Options) (*TrainKVDB, error, func() error) {
+func Open(opt *lsm.Options) (*TrainKV, error, func() error) {
 	if opt == nil {
 		opt = lsm.GetLSMDefaultOpt("")
 	}
 	callBack, _ := lsm.CheckLSMOpt(opt)
-	db := &TrainKVDB{Opt: opt}
+	db := &TrainKV{Opt: opt}
 
 	fileLock := flock.New(filepath.Join(opt.WorkDir, common.LockFile))
 	hold, err := fileLock.TryLock()
@@ -71,7 +71,7 @@ func Open(opt *lsm.Options) (*TrainKVDB, error, func() error) {
 	return db, nil, callBack
 }
 
-func (db *TrainKVDB) Get(key []byte) (*model.Entry, error) {
+func (db *TrainKV) Get(key []byte) (*model.Entry, error) {
 	if key == nil || len(key) == 0 {
 		return nil, common.ErrEmptyKey
 	}
@@ -101,7 +101,7 @@ func (db *TrainKVDB) Get(key []byte) (*model.Entry, error) {
 	return &entry, nil
 }
 
-func (db *TrainKVDB) Set(entry *model.Entry) error {
+func (db *TrainKV) Set(entry *model.Entry) error {
 	if entry.Key == nil || len(entry.Key) == 0 {
 		return common.ErrEmptyKey
 	}
@@ -111,7 +111,7 @@ func (db *TrainKVDB) Set(entry *model.Entry) error {
 	return err
 }
 
-func (db *TrainKVDB) SetToLSM(entry *model.Entry) error {
+func (db *TrainKV) SetToLSM(entry *model.Entry) error {
 	if entry.Key == nil || len(entry.Key) == 0 {
 		return common.ErrEmptyKey
 	}
@@ -133,7 +133,7 @@ func (db *TrainKVDB) SetToLSM(entry *model.Entry) error {
 	return err
 }
 
-func (db *TrainKVDB) Del(key []byte) error {
+func (db *TrainKV) Del(key []byte) error {
 	return db.Set(&model.Entry{
 		Key:       key,
 		Value:     nil,
@@ -142,7 +142,7 @@ func (db *TrainKVDB) Del(key []byte) error {
 	})
 }
 
-func (db *TrainKVDB) RunValueLogGC(discardRatio float64) error {
+func (db *TrainKV) RunValueLogGC(discardRatio float64) error {
 	if discardRatio >= 1.0 || discardRatio <= 0.0 {
 		return nil
 	}
@@ -152,7 +152,7 @@ func (db *TrainKVDB) RunValueLogGC(discardRatio float64) error {
 
 // BatchSet batch set entries
 // 1. vlog GC组件调用, 目的是加速 有效key重新写;
-func (db *TrainKVDB) BatchSet(entries []*model.Entry) error {
+func (db *TrainKV) BatchSet(entries []*model.Entry) error {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -167,7 +167,7 @@ func (db *TrainKVDB) BatchSet(entries []*model.Entry) error {
 // 1. vlog.Re重放: openVlog() -> go vlog.flushDiscardStats(); 监听并收集vlog文件的GC信息, 必要时将序列化统计表数据, 发送到 db 的写通道中, 以便重启时可以直接获得;
 // 2. vlog.GC重写: db.batchSet(); 批处理(加速vlog GC重写速度), 将多个 []entry 写到指定通道中;
 // 3. db.set(): 串行化写流程,避免vlog和wal加锁;
-func (db *TrainKVDB) SendToWriteCh(entries []*model.Entry) (*Request, error) {
+func (db *TrainKV) SendToWriteCh(entries []*model.Entry) (*Request, error) {
 	var count, size int64
 	for _, entry := range entries {
 		size += int64(entry.EstimateSize(db.Opt.ValueThreshold))
@@ -185,7 +185,7 @@ func (db *TrainKVDB) SendToWriteCh(entries []*model.Entry) (*Request, error) {
 	return request, nil
 }
 
-func (db *TrainKVDB) handleWriteCh(closer *utils.Closer) {
+func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 	defer closer.Done()
 	var reqLen int64
 	reqs := make([]*Request, 0, 10)
@@ -247,7 +247,7 @@ func (db *TrainKVDB) handleWriteCh(closer *utils.Closer) {
 // 1.各个vlog文件的失效数据统计表
 // 2.vlog GC重写的entry[]
 // 写完 vlog 后, 再逐一写到 lsm 中
-func (db *TrainKVDB) WriteRequest(reqs []*Request) error {
+func (db *TrainKV) WriteRequest(reqs []*Request) error {
 	if len(reqs) == 0 {
 		return nil
 	}
@@ -280,7 +280,7 @@ func (db *TrainKVDB) WriteRequest(reqs []*Request) error {
 	return nil
 }
 
-func (db *TrainKVDB) writeToLSM(req *Request) error {
+func (db *TrainKV) writeToLSM(req *Request) error {
 	if len(req.ValPtr) != len(req.Entries) {
 		return errors.Errorf("Ptrs and Entries don't match: %+v", req)
 	}
@@ -298,11 +298,11 @@ func (db *TrainKVDB) writeToLSM(req *Request) error {
 	return nil
 }
 
-func (db *TrainKVDB) ShouldWriteValueToLSM(entry *model.Entry) bool {
+func (db *TrainKV) ShouldWriteValueToLSM(entry *model.Entry) bool {
 	return len(entry.Value) < db.Opt.ValueThreshold
 }
 
-func (db *TrainKVDB) initVlog() {
+func (db *TrainKV) initVlog() {
 	vlog := &ValueLog{
 		DirPath:    db.Opt.WorkDir,
 		Mux:        sync.RWMutex{},
@@ -318,7 +318,7 @@ func (db *TrainKVDB) initVlog() {
 	vlog.GarbageCh = make(chan struct{}, 1) //一次只允许运行一个vlogGC协程
 }
 
-func (db *TrainKVDB) Close() error {
+func (db *TrainKV) Close() error {
 	db.Closer.valueGC.CloseAndWait()
 	db.Closer.writes.CloseAndWait()
 	close(db.writeCh)

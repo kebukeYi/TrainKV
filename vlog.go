@@ -1,4 +1,4 @@
-package TrainDB
+package TrainKV
 
 import (
 	"bufio"
@@ -6,11 +6,11 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/kebukeYi/TrainDB/common"
-	"github.com/kebukeYi/TrainDB/file"
-	"github.com/kebukeYi/TrainDB/lsm"
-	"github.com/kebukeYi/TrainDB/model"
-	"github.com/kebukeYi/TrainDB/utils"
+	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/file"
+	"github.com/kebukeYi/TrainKV/lsm"
+	"github.com/kebukeYi/TrainKV/model"
+	"github.com/kebukeYi/TrainKV/utils"
 	"github.com/pkg/errors"
 	"hash/crc32"
 	"io"
@@ -36,7 +36,7 @@ type ValueLog struct {
 	entriesWrittenNum  int32
 	Opt                *lsm.Options
 
-	Db                     *TrainKVDB
+	Db                     *TrainKV
 	GarbageCh              chan struct{}
 	VLogFileDisCardStaInfo *VLogFileDisCardStaInfo
 	closer                 *utils.Closer

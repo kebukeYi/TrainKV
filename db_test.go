@@ -1,12 +1,12 @@
-package TrainDB
+package TrainKV
 
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/kebukeYi/TrainDB/common"
-	"github.com/kebukeYi/TrainDB/lsm"
-	"github.com/kebukeYi/TrainDB/model"
-	"github.com/kebukeYi/TrainDB/utils"
+	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/lsm"
+	"github.com/kebukeYi/TrainKV/model"
+	"github.com/kebukeYi/TrainKV/utils"
 	"github.com/stretchr/testify/require"
 	"os"
 	"sync"
@@ -300,7 +300,7 @@ func TestWriteRequest(t *testing.T) {
 }
 
 func TestConcurrentWrite(t *testing.T) {
-	runBadgerTest(t, nil, func(t *testing.T, db *TrainKVDB) {
+	runBadgerTest(t, nil, func(t *testing.T, db *TrainKV) {
 		// Not a benchmark. Just a simple test for concurrent writes.
 		n := 20
 		m := 500
@@ -354,7 +354,7 @@ func TestConcurrentWrite(t *testing.T) {
 	})
 }
 
-func runBadgerTest(t *testing.T, opts *lsm.Options, test func(t *testing.T, db *TrainKVDB)) {
+func runBadgerTest(t *testing.T, opts *lsm.Options, test func(t *testing.T, db *TrainKV)) {
 	if opts == nil {
 		opts = &lsm.Options{}
 		opts = lsm.GetLSMDefaultOpt("")
@@ -379,7 +379,7 @@ func runBadgerTest(t *testing.T, opts *lsm.Options, test func(t *testing.T, db *
 
 // createTableWithRange function is used in TestCompactionFilePicking. It creates
 // a table with key starting from start and ending with end.
-func CreateTableWithRange(t *testing.T, db *TrainKVDB, start, end int) *lsm.Table {
+func CreateTableWithRange(t *testing.T, db *TrainKV, start, end int) *lsm.Table {
 	builder := lsm.NewSSTBuilder(db.Opt)
 	nums := []int{start, end}
 	for _, i := range nums {

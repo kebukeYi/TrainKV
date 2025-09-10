@@ -2,7 +2,7 @@ package skl
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainDB/model"
+	"github.com/kebukeYi/TrainKV/model"
 	"github.com/pkg/errors"
 	"log"
 	"math"

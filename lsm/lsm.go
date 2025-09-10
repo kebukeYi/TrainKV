@@ -1,10 +1,10 @@
 package lsm
 
 import (
-	"github.com/kebukeYi/TrainDB/common"
-	"github.com/kebukeYi/TrainDB/model"
-	"github.com/kebukeYi/TrainDB/skl"
-	"github.com/kebukeYi/TrainDB/utils"
+	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/model"
+	"github.com/kebukeYi/TrainKV/skl"
+	"github.com/kebukeYi/TrainKV/utils"
 	"sync"
 )
 

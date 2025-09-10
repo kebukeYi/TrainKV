@@ -3,7 +3,7 @@ package model
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/kebukeYi/TrainDB/common"
+	"github.com/kebukeYi/TrainKV/common"
 	"hash"
 	"hash/crc32"
 	"io"

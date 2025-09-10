@@ -1,13 +1,13 @@
-# TrainDB
+# TrainKV
 
-TrainDB is a key-value store that uses LSM-trees to store data. It is designed to be fast, efficient, and easy to use.
+TrainKV is a key-value store that uses LSM-trees to store data. It is designed to be fast, efficient, and easy to use.
 
 ## Getting Started
 
 ### Installing
 
 ```sh
-go get github.com/kebukeYi/TrainDB@latest
+go get github.com/kebukeYi/TrainKV@latest
 ```
 
 ### Basic operations
@@ -17,16 +17,16 @@ package main
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainDB"
-	"github.com/kebukeYi/TrainDB/lsm"
-	"github.com/kebukeYi/TrainDB/model"
+	"github.com/kebukeYi/TrainKV"
+	"github.com/kebukeYi/TrainKV/lsm"
+	"github.com/kebukeYi/TrainKV/model"
 )
 
 func main() {
 	// 未指定具体工作目录时, 程序会创建临时目录, 程序正常关闭时会清理临时目录;
 	dirPath := ""
 	defaultOpt := lsm.GetLSMDefaultOpt(dirPath)
-	db, err, callBack := TrainDB.Open(defaultOpt)
+	db, err, callBack := TrainKV.Open(defaultOpt)
 	if err != nil {
 	    panic(err)
 	}

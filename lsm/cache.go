@@ -1,6 +1,6 @@
 package lsm
 
-import "github.com/kebukeYi/TrainDB/utils/cache"
+import "github.com/kebukeYi/TrainKV/utils/cache"
 
 type LevelsCache struct {
 	indexData *cache.Cache

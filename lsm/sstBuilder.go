@@ -2,10 +2,10 @@ package lsm
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainDB/common"
-	"github.com/kebukeYi/TrainDB/model"
-	"github.com/kebukeYi/TrainDB/pb"
-	"github.com/kebukeYi/TrainDB/utils"
+	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/model"
+	"github.com/kebukeYi/TrainKV/pb"
+	"github.com/kebukeYi/TrainKV/utils"
 	"github.com/pkg/errors"
 	"io"
 	"math"

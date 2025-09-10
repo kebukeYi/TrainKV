@@ -5,7 +5,7 @@ package file
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainDB/mmap"
+	"github.com/kebukeYi/TrainKV/mmap"
 )
 
 func (m *MmapFile) Truncate(maxSz int64) error {

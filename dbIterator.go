@@ -1,9 +1,9 @@
-package TrainDB
+package TrainKV
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainDB/lsm"
-	"github.com/kebukeYi/TrainDB/model"
+	"github.com/kebukeYi/TrainKV/lsm"
+	"github.com/kebukeYi/TrainKV/model"
 )
 
 type DBIterator struct {
@@ -13,7 +13,7 @@ type DBIterator struct {
 	lastEntry model.Entry
 }
 
-func (db *TrainKVDB) NewDBIterator(opt *model.Options) *DBIterator {
+func (db *TrainKV) NewDBIterator(opt *model.Options) *DBIterator {
 	iters := make([]model.Iterator, 0)
 	iters = append(iters, db.Lsm.NewLsmIterator(opt)...)
 	res := &DBIterator{

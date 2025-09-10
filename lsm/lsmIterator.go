@@ -3,8 +3,8 @@ package lsm
 import (
 	"bytes"
 	"fmt"
-	"github.com/kebukeYi/TrainDB/common"
-	"github.com/kebukeYi/TrainDB/model"
+	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/model"
 	"sort"
 )
 

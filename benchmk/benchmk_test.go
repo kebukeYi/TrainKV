@@ -2,11 +2,11 @@ package benchmk
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainDB"
-	"github.com/kebukeYi/TrainDB/common"
-	"github.com/kebukeYi/TrainDB/lsm"
-	"github.com/kebukeYi/TrainDB/model"
-	"github.com/kebukeYi/TrainDB/utils"
+	"github.com/kebukeYi/TrainKV"
+	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/lsm"
+	"github.com/kebukeYi/TrainKV/model"
+	"github.com/kebukeYi/TrainKV/utils"
 	"github.com/stretchr/testify/assert"
 	"math/rand"
 	"os"
@@ -65,7 +65,7 @@ func BenchmarkNormalEntry(b *testing.B) {
 	b.ReportAllocs()
 	clearDir(benchMarkOpt.WorkDir)
 	//traindb, _, _ := TrainDB.Open(benchMarkOpt)
-	traindb, _, _ := TrainDB.Open(lsm.GetLSMDefaultOpt(benchMarkOpt.WorkDir))
+	traindb, _, _ := TrainKV.Open(lsm.GetLSMDefaultOpt(benchMarkOpt.WorkDir))
 	defer traindb.Close()
 
 	for i := 0; i < b.N; i++ {
@@ -94,7 +94,7 @@ func BenchmarkWriteRequest(b *testing.B) {
 	b.ReportAllocs()
 	clearDir(benchMarkOpt.WorkDir)
 	//traindb, _, _ := TrainDB.Open(benchMarkOpt)
-	traindb, _, _ := TrainDB.Open(lsm.GetLSMDefaultOpt(benchMarkOpt.WorkDir))
+	traindb, _, _ := TrainKV.Open(lsm.GetLSMDefaultOpt(benchMarkOpt.WorkDir))
 	defer traindb.Close()
 	for i := 0; i < b.N; i++ {
 		key := fmt.Sprintf("key=%d", i)
@@ -102,8 +102,8 @@ func BenchmarkWriteRequest(b *testing.B) {
 		//val := make([]byte, 10<<20+1)
 		e := model.NewEntry([]byte(key), []byte(val))
 		e.Key = model.KeyWithTs(e.Key)
-		request := TrainDB.BuildRequest([]*model.Entry{e})
-		if err := traindb.WriteRequest([]*TrainDB.Request{request}); err != nil {
+		request := TrainKV.BuildRequest([]*model.Entry{e})
+		if err := traindb.WriteRequest([]*TrainKV.Request{request}); err != nil {
 			assert.Nil(b, err)
 		} else {
 			err := request.Wait()
@@ -125,7 +125,7 @@ func BenchmarkWriteRequest(b *testing.B) {
 func TestNormalEntry(b *testing.T) {
 	clearDir(benchMarkOpt.WorkDir)
 	go utils.StartHttpDebugger()
-	traindb, _, _ := TrainDB.Open(benchMarkOpt)
+	traindb, _, _ := TrainKV.Open(benchMarkOpt)
 	//traindb, _, _ := TrainDB.Open(lsm.GetLSMDefaultOpt(benchMarkOpt.WorkDir))
 	defer traindb.Close()
 	n := 8000

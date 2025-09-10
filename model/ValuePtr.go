@@ -2,7 +2,7 @@ package model
 
 import (
 	"encoding/binary"
-	"github.com/kebukeYi/TrainDB/common"
+	"github.com/kebukeYi/TrainKV/common"
 	"reflect"
 	"time"
 	"unsafe"
