@@ -70,16 +70,18 @@ func (lsm *LSM) Get(keyTs []byte) (model.Entry, error) {
 		entry model.Entry
 		err   error
 	)
-	// 1. 跳表中进行对比, key 去除掉 Ts时间戳进行对比,相同直接返回到lsm,将不再继续向level层寻找;
+	// 1. 跳表中,对返回的near节点进行对比时, key 是去掉Ts时间戳的, 相同直接返回,将不再继续向level层寻找;否则继续向level层寻找;
 	entry, err = lsm.memoryTable.Get(keyTs)
 	if entry.Version != -1 {
 		return entry, err
 	}
+	// 2. 在等待持久化 immemoryTables 中进行寻找;
 	for i := len(lsm.immemoryTables) - 1; i >= 0; i-- {
 		if entry, err = lsm.immemoryTables[i].Get(keyTs); entry.Version != -1 {
 			return entry, err
 		}
 	}
+	// 3. level 0-7层 进行寻找;
 	return lsm.LevelManger.Get(keyTs)
 }
 
