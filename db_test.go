@@ -14,9 +14,7 @@ import (
 	"time"
 )
 
-//var dbTestPath = "/usr/projects_gen_data/goprogendata/trainkvdata/test/db"
-
-var dbTestPath = "F:\\ProjectsData\\golang\\TrainDB\\test\\db"
+var dbTestPath = "/usr/golanddata/trainkv/db"
 
 var dbTestOpt = &lsm.Options{
 	WorkDir:             dbTestPath,

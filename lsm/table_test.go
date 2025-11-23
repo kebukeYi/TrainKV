@@ -13,9 +13,7 @@ import (
 
 var sstID uint64
 
-var sstTestPath = "/usr/projects_gen_data/goprogendata/trainkvdata/test/table"
-
-//var sstTestPath = "F:\\ProjectsData\\golang\\TrainDB\\test\\table"
+var sstTestPath = "/usr/golanddata/trainkv/table"
 
 func getTestTableOptions() *Options {
 	return &Options{

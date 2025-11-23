@@ -11,9 +11,7 @@ import (
 	"time"
 )
 
-// var vlogTestPath = "/usr/projects_gen_data/goprogendata/trainkvdata/test/vlog"
-
-var vlogTestPath = "F:\\ProjectsData\\golang\\TrainDB\\test\\vlog"
+var vlogTestPath = "/usr/golanddata/trainkv/vlog"
 
 var (
 	vlogOpt = &lsm.Options{

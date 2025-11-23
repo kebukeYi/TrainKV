@@ -9,9 +9,7 @@ import (
 	"testing"
 )
 
-var lsmTestPath = "/usr/projects_gen_data/goprogendata/trainkvdata/test/lsm"
-
-//var lsmTestPath = "F:\\ProjectsData\\golang\\TrainDB\\test\\lsm"
+var lsmTestPath = "/usr/golanddata/trainkv/lsm"
 
 var lsmOptions = &Options{
 	WorkDir:             lsmTestPath,

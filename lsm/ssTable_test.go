@@ -6,13 +6,15 @@ import (
 	"github.com/kebukeYi/TrainKV/model"
 	"github.com/kebukeYi/TrainKV/utils"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 )
 
+var dirPath = "/usr/golanddata/trainkv/sst"
+
 func TestOpenSStable(t *testing.T) {
-	//tableName := "/user/trainFS/temp/nameNode1/task/00005.sst"
-	tableName := "F:\\ProjectsData\\golang\\TrainDB\\test\\db\\00001.sst"
+	tableName := filepath.Join(dirPath, "00001.sst")
 	options := GetLSMDefaultOpt("")
 	fid := utils.FID(tableName)
 	levelManger := &LevelsManger{}

@@ -5,13 +5,12 @@ import (
 	"github.com/kebukeYi/TrainKV/model"
 	"github.com/kebukeYi/TrainKV/utils"
 	"math/rand"
+	"path/filepath"
 	"testing"
 	"time"
 )
 
-var walTestPath = "/usr/projects_gen_data/goprogendata/trainkvdata/test/wal"
-
-//var walTestPath = "F:\\ProjectsData\\golang\\TrainDB\\test\\wal"
+var walTestPath = "/usr/golanddata/trainkv/wal"
 
 var r = rand.New(rand.NewSource(time.Now().UnixNano()))
 
@@ -37,7 +36,7 @@ func getDefaultFileOpt(walFilePath string) *utils.FileOptions {
 	return options
 }
 func TestWAL_WalDecode(t *testing.T) {
-	walFilePath := "/user/trainFS/temp/nameNode1/task/00005.wal"
+	walFilePath := filepath.Join(walTestPath, "0.00005.wal")
 	w := OpenWalFile(getDefaultFileOpt(walFilePath))
 	reader := model.NewHashReader(w.file.Fd)
 	var readAt uint32 = 0

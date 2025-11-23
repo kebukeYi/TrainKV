@@ -11,9 +11,7 @@ import (
 	"github.com/kebukeYi/TrainKV/utils"
 )
 
-//var compactTestPath = "/usr/projects_gen_data/goprogendata/trainkvdata/test/compact"
-
-var compactTestPath = "F:\\ProjectsData\\golang\\TrainDB\\test\\compact"
+var compactTestPath = "/usr/golanddata/trainkv/compact"
 
 var compactOptions = &Options{
 	WorkDir:             compactTestPath,
