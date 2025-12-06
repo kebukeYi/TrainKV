@@ -1,16 +1,27 @@
 # TrainKV
 
-TrainKV is a key-value store that uses LSM-trees to store data. It is designed to be fast, efficient, and easy to use.
+[![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## Getting Started
+TrainKV is a high-performance embedded Key-Value storage engine based on LSM-Tree architecture, implemented from scratch in Go.
 
-### Installing
+## Features
+
+- **LSM-Tree Storage Engine** - Multi-level compaction with L0-L7 levels
+- **SkipList MemTable** - Lock-free skip list with Arena allocator
+- **KV Separation** - Large values stored in Value Log to reduce write amplification
+- **W-TinyLFU Cache** - Adaptive cache with Bloom Filter + Count-Min Sketch
+- **Mmap I/O** - Memory-mapped file for efficient random reads
+- **Crash Recovery** - WAL + CRC32 checksum + Manifest metadata
+- **Value Log GC** - Automatic garbage collection based on discard ratio
+
+## Installation
 
 ```sh
 go get github.com/kebukeYi/TrainKV@latest
 ```
 
-### Basic operations
+## Quick Start
 
 ```go
 package main
@@ -23,66 +34,53 @@ import (
 )
 
 func main() {
-	// 未指定具体工作目录时, 程序会创建临时目录, 程序正常关闭时会清理临时目录;
-	dirPath := ""
-	defaultOpt := lsm.GetLSMDefaultOpt(dirPath)
-	db, err, callBack := TrainKV.Open(defaultOpt)
+	// Open database (empty path creates temp directory)
+	db, err, cleanup := TrainKV.Open(lsm.GetLSMDefaultOpt(""))
 	if err != nil {
 		panic(err)
 	}
 	defer func() {
 		_ = db.Close()
-		_ = callBack()
+		_ = cleanup()
 	}()
 
-	key := "Name"
-	val := "TrainKV"
+	// Set
+	_ = db.Set(model.NewEntry([]byte("hello"), []byte("world")))
 
-	// Set key.
-	e := model.NewEntry([]byte(key), []byte(val))
-	if err := db.Set(e); err != nil {
-		panic(err)
-	}
+	// Get
+	entry, _ := db.Get([]byte("hello"))
+	fmt.Printf("key=%s, value=%s\n", entry.Key, entry.Value)
 
-	// To test a valid key for the following iterator.
-	newE := model.NewEntry([]byte("newName"), []byte("newValidVal"))
-	if err := db.Set(newE); err != nil {
-		panic(err)
-	}
+	// Delete
+	_ = db.Del([]byte("hello"))
 
-	// Get key.
-	if entry, err := db.Get([]byte(key)); err != nil || entry == nil {
-		fmt.Printf("err: %v; db.Get key=%s;\n", err, key)
-	} else {
-		fmt.Printf("db.Get key=%s, value=%s, meta:%d, version=%d; \n",
-			model.ParseKey(entry.Key), entry.Value, entry.Meta, entry.Version)
-	}
-
-	// Delete key.
-	if err := db.Del([]byte(key)); err != nil {
-		panic(err)
-	}
-
-	// Get key again.
-	if entry, err := db.Get([]byte(key)); err != nil || entry == nil {
-		fmt.Printf("err: %v; db.Get key=%s;\n", err, key)
-	} else {
-		fmt.Printf("db.Get key=%s, value=%s, meta:%d, version=%d; \n",
-			model.ParseKey(entry.Key), entry.Value, entry.Meta, entry.Version)
-	}
-
-	// Iterator keys(Only valid values are returned).
+	// Iterator
 	iter := db.NewDBIterator(&model.Options{IsAsc: true})
-	defer func() { _ = iter.Close() }()
-	iter.Rewind()
-	for iter.Valid() {
+	defer iter.Close()
+	for iter.Rewind(); iter.Valid(); iter.Next() {
 		it := iter.Item()
-		if it.Item.Version != -1 {
-			fmt.Printf("db.Iterator key=%s, value=%s, meta:%d, version=%d\n;",
-				model.ParseKey(it.Item.Key), it.Item.Value, it.Item.Meta, it.Item.Version)
-		}
-		iter.Next()
+		fmt.Printf("key=%s, value=%s\n", model.ParseKey(it.Item.Key), it.Item.Value)
 	}
 }
+```
+
+## Architecture
 
 ```
+┌─────────────────────────────────────────┐
+│              TrainKV API                │
+├─────────────────────────────────────────┤
+│  MemTable (SkipList)  │   Value Log     │
+├───────────────────────┼─────────────────┤
+│      Immutable MemTables (Queue)        │
+├─────────────────────────────────────────┤
+│            LSM-Tree Levels              │
+│  L0 → L1 → L2 → ... → L7 (SSTable)      │
+├─────────────────────────────────────────┤
+│   Mmap File I/O  │  WAL  │  Manifest    │
+└─────────────────────────────────────────┘
+```
+
+## License
+
+MIT License
