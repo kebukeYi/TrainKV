@@ -13,7 +13,7 @@
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-TrainKV is a high-performance embedded Key-Value storage engine based on LSM-Tree architecture, implemented from scratch in Go.
+TrainKV is a lightweight embedded Key-Value storage engine based on LSM-Tree architecture with key-value separation support.
 
 ## Features
 

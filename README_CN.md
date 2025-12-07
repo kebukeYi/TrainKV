@@ -13,7 +13,7 @@
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-TrainKV 是一个基于 LSM-Tree 架构的高性能嵌入式 Key-Value 存储引擎，使用 Go 语言从零实现。
+TrainKV 是一个基于 LSM-Tree 架构的轻量级支持kv分离的嵌入式 Key-Value 存储引擎。
 
 ## 特性
 
