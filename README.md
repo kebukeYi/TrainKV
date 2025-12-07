@@ -80,7 +80,3 @@ func main() {
 │   Mmap File I/O  │  WAL  │  Manifest    │
 └─────────────────────────────────────────┘
 ```
-
-## License
-
-MIT License
