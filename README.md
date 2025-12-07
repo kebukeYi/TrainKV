@@ -1,3 +1,13 @@
+<div align="center">
+<strong>
+<samp>
+
+[English](https://github.com/kebukeYi/TrainKV/blob/main/README.md) · [简体中文](https://github.com/kebukeYi/TrainKV/blob/main/README_CN.md)
+
+</samp>
+</strong>
+</div>
+
 # TrainKV
 
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://go.dev/)
