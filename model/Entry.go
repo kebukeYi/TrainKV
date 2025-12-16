@@ -20,7 +20,7 @@ type Entry struct {
 	ExpiresAt uint64
 
 	Meta    byte
-	Version int64
+	Version uint64
 
 	HeaderLen    int
 	Offset       uint32
@@ -95,9 +95,9 @@ func (e *Entry) IsDeleteOrExpired() bool {
 		return true
 	}
 
-	if e.Version == -1 {
-		return true
-	}
+	//if e.Version == -1 {
+	//	return true
+	//}
 	if e.Value == nil {
 		return true
 	}

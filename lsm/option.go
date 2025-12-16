@@ -21,8 +21,8 @@ type Options struct {
 	ValueLogFileSize    int32 // vlogFile的文件大小;
 	VerifyValueChecksum bool  // 是否开启vlogFile的crc检查;
 
-	MaxBatchCount int64 // 批处理entry数量;
-	MaxBatchSize  int64 // 批处理entry总量大小;
+	MaxBatchCount int64 // 批处理entry数量; 1.  2. txn 提交时,会进行批处理判断;
+	MaxBatchSize  int64 // 批处理entry总量大小; 1. 2.txn 提交时,会进行批处理判断;
 
 	// compact 合并相关
 	NumCompactors       int   // 合并协程数量;默认2;
@@ -34,13 +34,15 @@ type Options struct {
 	MaxLevelNum         int   // 最大层数,默认是 7 层;
 
 	DiscardStatsCh *chan map[uint32]int64 //  用于 compact 组件向 vlog 组件传递信息使用,在合并过程中,知道哪些文件是失效的,让vlog组件知道,方便其GC;
+	// txn
+	DetectConflicts bool
 }
 
 const KvWriteChCapacity = 1000
 
 const maxValueThreshold = 1 << 20
 
-func GetLSMDefaultOpt(dirPath string) *Options {
+func GetDefaultOpt(dirPath string) *Options {
 	return &Options{
 		WorkDir:             dirPath,
 		MemTableSize:        64 << 20,
@@ -71,7 +73,7 @@ func GetLSMDefaultOpt(dirPath string) *Options {
 	}
 }
 
-func CheckLSMOpt(opt *Options) (func() error, error) {
+func CheckOpt(opt *Options) (func() error, error) {
 	var err error
 	var tempDir string
 	if opt.WorkDir == "" {

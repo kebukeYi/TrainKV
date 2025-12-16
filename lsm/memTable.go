@@ -53,14 +53,14 @@ func (m *memoryTable) Get(keyTs []byte) (model.Entry, error) {
 	// 1.没有找到,需要继续寻找; 满足: val.Version: == -1 && val.Value == nil;
 	// 2.delete标记的数据(不再寻找,正确返回); val.Meta=delete; 仅满足: val.Value == nil;
 	if val.Version == -1 {
-		return model.Entry{Version: -1}, errors.ErrKeyNotFound
+		return model.Entry{Version: 0}, errors.ErrKeyNotFound
 	}
 	e := model.Entry{
 		Key:       keyTs,
 		Value:     val.Value,
 		Meta:      val.Meta,
 		ExpiresAt: val.ExpiresAt,
-		Version:   val.Version,
+		Version:   uint64(val.Version),
 	}
 	return e, nil
 }

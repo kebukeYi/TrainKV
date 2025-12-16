@@ -3,6 +3,7 @@ package skl
 import (
 	"fmt"
 	"github.com/kebukeYi/TrainKV/model"
+	"github.com/kebukeYi/TrainKV/utils"
 	"github.com/pkg/errors"
 	"log"
 	"math"
@@ -248,7 +249,7 @@ func (skipList *SkipList) Get(userKeyTs []byte) model.ValueExt {
 	val := skipList.arena.getVal(valOffset, valSize)
 	// todo 非常重要的一步, 需要显式分析出版本,以便在vlogGC中进行版本判断,决定去留;
 	// 此时的 nearKeyTs 的版本时间戳 可能是大于等于 userKeyTs的; 因此需要显示解析出确定的版本号;
-	val.Version = model.ParseTsVersion(nearKeyTs)
+	val.Version = int64(model.ParseTsVersion(nearKeyTs))
 	return val
 }
 func (skipList *SkipList) Put(e *model.Entry) {
@@ -289,9 +290,9 @@ func (skipList *SkipList) Put(e *model.Entry) {
 	for i := 0; i < height; i++ {
 		for {
 			if skipList.arena.getNode(prev[i]) == nil {
-				AssertTrue(i > 1) // This cannot happen in base level.
+				utils.AssertTrue(i > 1) // This cannot happen in base level.
 				prev[i], next[i] = skipList.findSpliceForLevel(key, skipList.headOffset, i)
-				AssertTrue(prev[i] != next[i])
+				utils.AssertTrue(prev[i] != next[i])
 			}
 			x.next[i] = next[i]
 			pnode := skipList.arena.getNode(prev[i])
@@ -405,7 +406,7 @@ func (s *SkipListIterator) Next() {
 	}
 }
 func (s *SkipListIterator) Prev() {
-	AssertTrue(s.Valid())
+	utils.AssertTrue(s.Valid())
 	s.curr, _ = s.list.findNear(s.Key(), true, false)
 }
 func (s *SkipListIterator) Valid() bool {

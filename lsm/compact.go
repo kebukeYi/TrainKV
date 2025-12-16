@@ -126,7 +126,7 @@ func (lm *LevelsManger) run(compactorId int, prio compactionPriority) bool {
 	switch err {
 	case nil:
 		return true
-	case common.ErrfillTables:
+	case common.ErrFillTables:
 	default:
 		log.Printf("[taskID:%d] While running doCompact: %v\\n.", compactorId, err)
 	}
@@ -264,7 +264,7 @@ func (lm *LevelsManger) doCompact(id int, prio compactionPriority) error {
 	if prio.levelId == 0 {
 		cd.nextLevel = lm.levelHandlers[prio.dst.dstLevelId]
 		if !lm.findTablesL0(&cd) {
-			return common.ErrfillTables
+			return common.ErrFillTables
 		}
 	} else {
 		cd.nextLevel = cd.thisLevel
@@ -272,7 +272,7 @@ func (lm *LevelsManger) doCompact(id int, prio compactionPriority) error {
 			cd.nextLevel = lm.levelHandlers[prio.levelId+1]
 		}
 		if !lm.findTables(&cd) {
-			return common.ErrfillTables
+			return common.ErrFillTables
 		}
 	}
 
@@ -755,7 +755,10 @@ func IsDeletedOrExpired(e *model.Entry) bool {
 	if e.Meta&common.BitDelete > 0 {
 		return true
 	}
-	if e.Version == -1 {
+	if e.Version == 0 {
+		return true
+	}
+	if e.Meta == 0 && e.Value == nil {
 		return true
 	}
 	if e.ExpiresAt == 0 {

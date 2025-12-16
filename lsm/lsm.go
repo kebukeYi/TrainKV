@@ -64,7 +64,7 @@ func (lsm *LSM) Put(entry *model.Entry) (err error) {
 
 func (lsm *LSM) Get(keyTs []byte) (model.Entry, error) {
 	if len(keyTs) <= 8 {
-		return model.Entry{Version: -1}, common.ErrEmptyKey
+		return model.Entry{Version: 0}, common.ErrEmptyKey
 	}
 	var (
 		entry model.Entry
@@ -72,12 +72,12 @@ func (lsm *LSM) Get(keyTs []byte) (model.Entry, error) {
 	)
 	// 1. 跳表中,对返回的near节点进行对比时, key 是去掉Ts时间戳的, 相同直接返回,将不再继续向level层寻找;否则继续向level层寻找;
 	entry, err = lsm.memoryTable.Get(keyTs)
-	if entry.Version != -1 {
+	if entry.Version != 0 {
 		return entry, err
 	}
 	// 2. 在等待持久化 immemoryTables 中进行寻找;
 	for i := len(lsm.immemoryTables) - 1; i >= 0; i-- {
-		if entry, err = lsm.immemoryTables[i].Get(keyTs); entry.Version != -1 {
+		if entry, err = lsm.immemoryTables[i].Get(keyTs); entry.Version != 0 {
 			return entry, err
 		}
 	}

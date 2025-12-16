@@ -10,7 +10,7 @@ import (
 func main() {
 	// 未指定具体工作目录时, 程序会创建临时目录, 程序正常关闭时会清理临时目录;
 	dirPath := ""
-	defaultOpt := lsm.GetLSMDefaultOpt(dirPath)
+	defaultOpt := lsm.GetDefaultOpt(dirPath)
 	db, err, callBack := TrainKV.Open(defaultOpt)
 	if err != nil {
 		panic(err)

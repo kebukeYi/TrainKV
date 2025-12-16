@@ -24,7 +24,7 @@ func RandString(len int) string {
 }
 
 func getDefaultFileOpt(walFilePath string) *utils.FileOptions {
-	opt := GetLSMDefaultOpt("")
+	opt := GetDefaultOpt("")
 	options := &utils.FileOptions{
 		FID:      0,
 		FileName: walFilePath,

@@ -370,7 +370,7 @@ func (vlog *ValueLog) handleDiscardStats() {
 			return err
 		}
 		entries := []*model.Entry{{
-			Key:   model.KeyWithTs([]byte(common.VlogFileDiscardStatsKey)),
+			Key:   model.KeyWithTs([]byte(common.VlogFileDiscardStatsKey), model.NewCurVersion()),
 			Value: encodeMap,
 		}}
 		request, err := vlog.Db.SendToWriteCh(entries)

@@ -2,9 +2,8 @@ package cache
 
 import (
 	"container/list"
-	xxhash "github.com/cespare/xxhash/v2"
+	"github.com/kebukeYi/TrainKV/utils"
 	"sync"
-	"unsafe"
 )
 
 type Cache struct {
@@ -44,7 +43,7 @@ func (c *Cache) Set(key, val interface{}) bool {
 }
 
 func (c *Cache) set(key, val interface{}) bool {
-	keyToHash, _ := KeyToHash(key)
+	keyToHash, _ := utils.KeyToHash(key)
 	itme := storeItem{
 		keyHash: keyToHash,
 		value:   val,
@@ -93,7 +92,7 @@ func (c *Cache) get(key interface{}) (interface{}, bool) {
 		c.total = 0
 	}
 
-	keyToHash, _ := KeyToHash(key)
+	keyToHash, _ := utils.KeyToHash(key)
 	element, ok := c.data[keyToHash]
 
 	if !ok {
@@ -126,7 +125,7 @@ func (c *Cache) Del(key interface{}) (interface{}, bool) {
 }
 
 func (c *Cache) del(key interface{}) (interface{}, bool) {
-	keyToHash, _ := KeyToHash(key)
+	keyToHash, _ := utils.KeyToHash(key)
 	_, ok := c.data[keyToHash]
 	if !ok {
 		return 0, false
@@ -134,51 +133,6 @@ func (c *Cache) del(key interface{}) (interface{}, bool) {
 	//item := element.Value.(*storeItem)
 	delete(c.data, keyToHash)
 	return keyToHash, true
-}
-
-func KeyToHash(key interface{}) (uint64, uint64) {
-	if key == nil {
-		return 0, 0
-	}
-	switch k := key.(type) {
-	case uint64:
-		return k, 0
-	case string:
-		return MemHashString(k), xxhash.Sum64String(k)
-	case []byte:
-		return MemHash(k), xxhash.Sum64(k)
-	case byte:
-		return uint64(k), 0
-	case int:
-		return uint64(k), 0
-	case int32:
-		return uint64(k), 0
-	case int64:
-		return uint64(k), 0
-	case uint32:
-		return uint64(k), 0
-	default:
-		panic("#keyToHash(): Key type not supported")
-	}
-}
-
-type stringStruct struct {
-	str unsafe.Pointer
-	len int
-}
-
-//go:noescape
-//go:linkname memhash runtime.memhash
-func memhash(p unsafe.Pointer, h, s uintptr) uintptr
-
-func MemHashString(str string) uint64 {
-	ss := (*stringStruct)(unsafe.Pointer(&str))
-	return uint64(memhash(ss.str, 0, uintptr(ss.len)))
-}
-
-func MemHash(data []byte) uint64 {
-	ss := (*stringStruct)(unsafe.Pointer(&data))
-	return uint64(memhash(ss.str, 0, uintptr(ss.len)))
 }
 
 func (c *Cache) String() string {

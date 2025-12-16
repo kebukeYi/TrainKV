@@ -70,20 +70,20 @@ func (t *Table) Search(keyTs []byte) (entry model.Entry, err error) {
 	indexData := t.sst.Indexs()
 	bloomFilter := utils.Filter(indexData.BloomFilter)
 	if t.sst.HasBloomFilter() && !bloomFilter.MayContainKey(model.ParseKey(keyTs)) {
-		return model.Entry{Version: -1}, common.ErrKeyNotFound
+		return model.Entry{}, common.ErrKeyNotFound
 	}
 	iterator := t.NewTableIterator(&model.Options{IsAsc: true})
 	defer iterator.Close()
 	iterator.Seek(keyTs)
 	if !iterator.Valid() {
-		return model.Entry{Version: -1}, iterator.err
+		return model.Entry{Version: 0}, iterator.err
 	}
 	// 额外:有可能在有效的情况下,返回和keyTs不相同的数值;
 	// 因此需要再判断一次;
 	if model.SameKeyNoTs(keyTs, iterator.Item().Item.Key) {
 		return iterator.Item().Item, nil
 	}
-	return model.Entry{Version: -1}, common.ErrKeyNotFound
+	return model.Entry{}, common.ErrKeyNotFound
 }
 
 func (t *Table) getBlock(idx int) (*block, error) {

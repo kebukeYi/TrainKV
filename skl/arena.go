@@ -3,8 +3,7 @@ package skl
 import (
 	"fmt"
 	"github.com/kebukeYi/TrainKV/model"
-	"github.com/pkg/errors"
-	"log"
+	"github.com/kebukeYi/TrainKV/utils"
 	"sync/atomic"
 	"unsafe"
 )
@@ -33,7 +32,7 @@ func (a *Arena) allocate(sz uint32) uint32 {
 	offset := atomic.AddUint32(&a.sizes, sz)
 	if !a.shouldGrow {
 		fmt.Printf("Arena size: %d, len(d.data): %d ,grow: %v; \n", a.sizes, len(a.data), a.shouldGrow)
-		AssertTrue(int(offset) <= len(a.data))
+		utils.AssertTrue(int(offset) <= len(a.data))
 		return offset - sz
 	}
 	if int(offset) > len(a.data)-MaxSkipNodeSize {
@@ -45,7 +44,7 @@ func (a *Arena) allocate(sz uint32) uint32 {
 			growBy = sz
 		}
 		newData := make([]byte, len(a.data)+int(growBy))
-		AssertTrue(len(a.data) == copy(newData, a.data))
+		utils.AssertTrue(len(a.data) == copy(newData, a.data))
 		a.data = newData
 	}
 	return offset - sz
@@ -81,7 +80,7 @@ func (a *Arena) PutKey(key []byte) uint32 {
 	keyLen := uint32(len(key))
 	offset := a.allocate(keyLen)
 	buf := a.data[offset : offset+keyLen]
-	AssertTrue(len(key) == copy(buf, key))
+	utils.AssertTrue(len(key) == copy(buf, key))
 	return offset
 }
 
@@ -99,10 +98,4 @@ func (a *Arena) getKey(offset uint32, size uint32) []byte {
 func (a *Arena) getVal(offset uint32, size uint32) (ret model.ValueExt) {
 	ret.DecodeVal(a.data[offset : offset+size])
 	return
-}
-
-func AssertTrue(b bool) {
-	if !b {
-		log.Fatalf("%+v", errors.Errorf("Assert failed"))
-	}
 }

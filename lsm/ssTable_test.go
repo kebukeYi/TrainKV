@@ -15,7 +15,7 @@ var dirPath = "/usr/golanddata/trainkv/sst"
 
 func TestOpenSStable(t *testing.T) {
 	tableName := filepath.Join(dirPath, "00001.sst")
-	options := GetLSMDefaultOpt("")
+	options := GetDefaultOpt("")
 	fid := utils.FID(tableName)
 	levelManger := &LevelsManger{}
 	levelManger.cache = newLevelsCache(options)

@@ -56,25 +56,25 @@ func (leh *levelHandler) Get(keyTs []byte) (model.Entry, error) {
 func (leh *levelHandler) searchL0SST(keyTs []byte) (model.Entry, error) {
 	for i := len(leh.tables) - 1; i >= 0; i-- {
 		table := leh.tables[i]
-		if entry, _ := table.Search(keyTs); entry.Version != -1 {
+		if entry, _ := table.Search(keyTs); entry.Version != 0 {
 			return entry, nil
 		}
 	}
-	return model.Entry{Version: -1}, common.ErrKeyNotFound
+	return model.Entry{Version: 0}, common.ErrKeyNotFound
 }
 
 func (leh *levelHandler) searchLnSST(key []byte) (model.Entry, error) {
 	getTable := leh.getTable(key)
 	if getTable == nil {
-		return model.Entry{Version: -1}, common.ErrNotFoundTable
+		return model.Entry{Version: 0}, common.ErrNotFoundTable
 	}
 	defer getTable.DecrRef()
 	var err error
 	var entry model.Entry
-	if entry, err = getTable.Search(key); entry.Version != -1 {
+	if entry, err = getTable.Search(key); entry.Version != 0 {
 		return entry, nil
 	}
-	return model.Entry{Version: -1}, err
+	return model.Entry{Version: 0}, err
 }
 
 // 默认从 首部 开始查询, 找到第一个大于等于key的sst, 除了l0层之外, 其他层的 Table 都是递增规律;

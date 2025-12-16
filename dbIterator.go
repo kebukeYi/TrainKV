@@ -46,14 +46,14 @@ func (dbIter *DBIterator) Item() model.Item {
 			model.RunCallback(callback)
 			if err != nil {
 				fmt.Printf("dbIter read Item()value error: %v", err)
-				return model.Item{Item: model.Entry{Version: -1}}
+				return model.Item{Item: model.Entry{Version: 0}}
 			}
 			entry.Value = model.SafeCopy(nil, read)
 		}
 
 		if entry.IsDeleteOrExpired() {
 			//fmt.Printf("entry is deleted or expired, key:%s, len(val):%d, version:%d, Meat:%d ;\n", model.ParseKey(entry.Key), len(entry.Value), entry.Version, entry.Meta)
-			return model.Item{Item: model.Entry{Version: -1}}
+			return model.Item{Item: model.Entry{Version: 0}}
 		}
 
 		return model.Item{Item: entry}
@@ -88,11 +88,11 @@ func (dbIter *DBIterator) Item() model.Item {
 	}
 	if dbIter.lastEntry.Key != nil {
 		lastValidEntry := dbIter.lastEntry
-		dbIter.lastEntry = model.Entry{Version: -1}
+		dbIter.lastEntry = model.Entry{Version: 0}
 		dbIter.lastKey = nil
 		return judgeKey(lastValidEntry)
 	}
-	return model.Item{Item: model.Entry{Version: -1}}
+	return model.Item{Item: model.Entry{Version: 0}}
 }
 func (dbIter *DBIterator) Close() error {
 	return dbIter.iter.Close()

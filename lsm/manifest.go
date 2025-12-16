@@ -134,6 +134,7 @@ func ReplyManifestFile(file *os.File) (m *Manifest, truncOffset int64, err error
 		if err := changeSet.Unmarshal(dataBuf); err != nil {
 			return &Manifest{}, 0, err
 		}
+
 		if err = applyChangeSet(manifest, &changeSet); err != nil {
 			return &Manifest{}, 0, err
 		}

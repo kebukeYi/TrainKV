@@ -10,8 +10,10 @@ const (
 	VlogFileDiscardStatsKey           = "VlogFileDiscard" // For storing lfDiscardStats
 	ManifestFilename                  = "MANIFEST"
 	ManifestRewriteFilename           = "REWRITEMANIFEST"
+	TxnKey                            = "!train!txn"
 	LockFile                          = "LOCKFILE"
-	ManifestDeletionsRewriteThreshold = 10000
+	ManifestDeletionsRewriteThreshold = 10000 // 次
+	MaxKeySize                        = 65000 // B
 	ManifestDeletionsRatio            = 10
 	ManifestFileHeaderLen             = 8
 	ManifestFileCrcLen                = 8
@@ -22,10 +24,12 @@ const (
 	KVWriteChRequestCapacity          = 1000
 )
 
-// meta
+// entry meta
 const (
 	BitDelete       byte = 1 << 0 //1 Set if the key has been deleted.
-	BitValuePointer byte = 2 << 1 //2 Set if the value is NOT stored directly next to key.
+	BitValuePointer byte = 1 << 2 //2 Set if the value is NOT stored directly next to key.
+	BitTxn          byte = 1 << 3
+	BitFinTxn       byte = 1 << 4
 )
 
 var (

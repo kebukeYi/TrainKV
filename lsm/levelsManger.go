@@ -103,12 +103,12 @@ func (lm *LevelsManger) Get(keyTs []byte) (model.Entry, error) {
 		entry model.Entry
 		err   error
 	)
-	entry.Version = -1
-	if entry, err = lm.levelHandlers[0].Get(keyTs); entry.Version != -1 {
+	entry.Version = 0
+	if entry, err = lm.levelHandlers[0].Get(keyTs); entry.Version != 0 {
 		return entry, err
 	}
 	for i := 1; i < lm.opt.MaxLevelNum; i++ {
-		if entry, err = lm.levelHandlers[i].Get(keyTs); entry.Version != -1 {
+		if entry, err = lm.levelHandlers[i].Get(keyTs); entry.Version != 0 {
 			return entry, err
 		}
 	}

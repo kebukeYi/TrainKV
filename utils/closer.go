@@ -1,6 +1,10 @@
 package utils
 
-import "sync"
+import (
+	"github.com/pkg/errors"
+	"log"
+	"sync"
+)
 
 type Closer struct {
 	waiting     sync.WaitGroup
@@ -26,4 +30,15 @@ func (c *Closer) Done() {
 
 func (c *Closer) Add(n int) {
 	c.waiting.Add(n)
+}
+
+func AssertTrue(b bool) {
+	if !b {
+		log.Fatalf("%+v", errors.Errorf("Assert failed"))
+	}
+}
+func AssertTruef(b bool, format string, args ...interface{}) {
+	if !b {
+		log.Fatalf("%+v", errors.Errorf(format, args...))
+	}
 }

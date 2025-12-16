@@ -57,7 +57,7 @@ func (b *BloomFilter) AllowKey(key []byte) bool {
 	already := b.mayContainKey(key)
 	if !already {
 		//b.Insert(utils.Hash(key))
-		keyToHash, _ := KeyToHash(key)
+		keyToHash, _ := utils.KeyToHash(key)
 		b.Insert(uint32(keyToHash))
 	}
 	return already

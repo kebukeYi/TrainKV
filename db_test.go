@@ -85,7 +85,7 @@ func TestAPI(t *testing.T) {
 	//	time.Sleep(8 * time.Second)
 	//}()
 	clearDir(dbTestOpt.WorkDir)
-	//dbTestOpt = lsm.GetLSMDefaultOpt(dbTestOpt.WorkDir)
+	//dbTestOpt = lsm.GetDefaultOpt(dbTestOpt.WorkDir)
 	db, _, callBack := Open(dbTestOpt)
 	defer func() {
 		_ = db.Close()
@@ -208,7 +208,7 @@ func TestReStart(t *testing.T) {
 func TestWriteRequest(t *testing.T) {
 	go utils.StartHttpDebugger()
 	clearDir(dbTestOpt.WorkDir)
-	// dbTestOpt = lsm.GetLSMDefaultOpt(dbTestOpt.WorkDir)
+	// dbTestOpt = lsm.GetDefaultOpt(dbTestOpt.WorkDir)
 	db, _, callBack := Open(dbTestOpt)
 	defer func() {
 		_ = db.Close()
@@ -355,7 +355,7 @@ func TestConcurrentWrite(t *testing.T) {
 func runBadgerTest(t *testing.T, opts *lsm.Options, test func(t *testing.T, db *TrainKV)) {
 	if opts == nil {
 		opts = &lsm.Options{}
-		opts = lsm.GetLSMDefaultOpt("")
+		opts = lsm.GetDefaultOpt("")
 	}
 	var err error
 	var dir string

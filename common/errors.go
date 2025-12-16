@@ -3,6 +3,7 @@ package common
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -35,17 +36,19 @@ var (
 	ErrTruncate      = errors.New("err do truncate")
 	ErrEmptyVlogFile = errors.New("empty vlogFile when Entry()")
 
-	ErrfillTables = errors.New("Unable to fill tables")
+	ErrFillTables = errors.New("unable to fill tables")
 
-	ErrTxnTooBig     = errors.New("Txn is too big to fit into one request")
-	ErrBatchTooLarge = errors.New("Batch is too big to fit into one request")
+	ErrReadOnlyTxn  = errors.New("no sets or deletes are allowed in a read-only transaction")
+	ErrDiscardedTxn = errors.New("this transaction has been discarded. Create a new one")
 
-	// ErrNoRewrite is returned if a call for value log GC doesn't result in a log file rewrite.
-	ErrNoRewrite = errors.New("Value log GC attempt didn't result in any cleanup")
+	ErrTxnTooBig = errors.New("txn is too big to fit into one request")
+	ErrConflict  = errors.New("transaction Conflict. Please retry")
 
-	// ErrRejected is returned if a value log GC is called either while another GC is running, or
-	// after DB::Close has been called.
-	ErrRejected = errors.New("Value log GC request rejected")
+	ErrBatchTooLarge = errors.New("batch is too big to fit into one request")
+
+	ErrNoRewrite = errors.New("value log GC attempt didn't result in any cleanup")
+
+	ErrRejected = errors.New("value log GC request rejected")
 )
 
 func location(deep int, fullPath bool) string {
@@ -82,6 +85,17 @@ func CondPanic(condition bool, err error) {
 	if condition {
 		Panic(err)
 	}
+}
+func Check(err error) {
+	if err != nil {
+		log.Fatalf("%+v", Wrap(err, ""))
+	}
+}
+func Wrap(err error, msg string) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s err: %+v", msg, err)
 }
 func WarpErr(format string, err error) error {
 	if err != nil {

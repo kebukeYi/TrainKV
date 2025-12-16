@@ -14,6 +14,7 @@ func CompareKeyNoTs(key1, key2 []byte) int {
 	return bytes.Compare(key1[:len(key1)-8], key2[:len(key2)-8])
 }
 
+// CompareKeyWithTs MergeIterator.fix()使用; ok
 func CompareKeyWithTs(key1, key2 []byte) int {
 	if cmp := bytes.Compare(key1[:len(key1)-8], key2[:len(key2)-8]); cmp != 0 {
 		return cmp
@@ -23,12 +24,12 @@ func CompareKeyWithTs(key1, key2 []byte) int {
 	return bytes.Compare(key1Version, key2Version)
 }
 
-func ParseTsVersion(key []byte) int64 {
+func ParseTsVersion(key []byte) uint64 {
 	if len(key) <= 8 {
 		return 0
 	}
-	timestamp := binary.BigEndian.Uint64(key[len(key)-8:])
-	return int64(timestamp)
+	ts := binary.BigEndian.Uint64(key[len(key)-8:])
+	return ts
 }
 
 // ParseKey 祛除掉版本信息之后的key;
@@ -46,10 +47,10 @@ func SameKeyNoTs(src, dst []byte) bool {
 	return bytes.Equal(ParseKey(src), ParseKey(dst))
 }
 
-func KeyWithTs(key []byte) []byte {
+func KeyWithTs(key []byte, ts uint64) []byte {
 	out := make([]byte, len(key)+8)
 	copy(out, key)
-	binary.BigEndian.PutUint64(out[len(key):], NewCurVersion())
+	binary.BigEndian.PutUint64(out[len(key):], ts)
 	return out
 }
 

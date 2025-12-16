@@ -22,7 +22,7 @@ type sstBuilder struct {
 	curBlock      *block
 	keyCount      uint32
 	keyHashes     []uint32 // sst 为单位
-	maxVersion    int64
+	maxVersion    uint64
 	baseKey       []byte
 	staleDataSize int
 	estimateSize  int64

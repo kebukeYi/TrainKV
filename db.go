@@ -1,6 +1,8 @@
 package TrainKV
 
 import (
+	"expvar"
+	"fmt"
 	"github.com/gofrs/flock"
 	"github.com/kebukeYi/TrainKV/common"
 	"github.com/kebukeYi/TrainKV/lsm"
@@ -12,15 +14,16 @@ import (
 )
 
 type TrainKV struct {
-	Mux            sync.Mutex
-	Lsm            *lsm.LSM
-	vlog           *ValueLog
-	Opt            *lsm.Options
-	writeCh        chan *Request
-	blockWrites    int32
-	VlogReplayHead model.ValuePtr
-	logRotates     int32
-	Closer         closer
+	Mux                sync.Mutex
+	Lsm                *lsm.LSM
+	vlog               *ValueLog
+	Opt                *lsm.Options
+	transactionManager *TransactionManager
+	writeCh            chan *Request
+	blockWrites        int32
+	VlogReplayHead     model.ValuePtr
+	logRotates         int32
+	Closer             closer
 }
 
 type closer struct {
@@ -32,9 +35,9 @@ type closer struct {
 
 func Open(opt *lsm.Options) (*TrainKV, error, func() error) {
 	if opt == nil {
-		opt = lsm.GetLSMDefaultOpt("")
+		opt = lsm.GetDefaultOpt("")
 	}
-	callBack, _ := lsm.CheckLSMOpt(opt)
+	callBack, _ := lsm.CheckOpt(opt)
 	db := &TrainKV{Opt: opt}
 
 	fileLock := flock.New(filepath.Join(opt.WorkDir, common.LockFile))
@@ -75,7 +78,8 @@ func (db *TrainKV) Get(key []byte) (*model.Entry, error) {
 	if key == nil || len(key) == 0 {
 		return nil, common.ErrEmptyKey
 	}
-	internalKey := model.KeyWithTs(key)
+	internalKey := key
+	internalKey = model.KeyWithTs(internalKey, model.NewCurVersion())
 	var (
 		entry model.Entry
 		err   error
@@ -105,7 +109,6 @@ func (db *TrainKV) Set(entry *model.Entry) error {
 	if entry.Key == nil || len(entry.Key) == 0 {
 		return common.ErrEmptyKey
 	}
-	entry.Key = model.KeyWithTs(entry.Key)
 	entry.Version = model.ParseTsVersion(entry.Key)
 	err := db.BatchSet([]*model.Entry{entry})
 	return err
@@ -119,7 +122,6 @@ func (db *TrainKV) SetToLSM(entry *model.Entry) error {
 		vp  *model.ValuePtr
 		err error
 	)
-	entry.Key = model.KeyWithTs(entry.Key)
 	entry.Version = model.ParseTsVersion(entry.Key)
 	if db.ShouldWriteValueToLSM(entry) {
 	} else {
@@ -185,6 +187,68 @@ func (db *TrainKV) SendToWriteCh(entries []*model.Entry) (*Request, error) {
 	return request, nil
 }
 
+func (db *TrainKV) handleWriteCh1(closer *utils.Closer) {
+	defer closer.Done()
+	blockChan := make(chan struct{}, 1) //限制:每次只允许一个协程去写数据;
+
+	writeRequest := func(reqs []*Request) {
+		if err := db.WriteRequest(reqs); err != nil {
+			common.Panic(err)
+		}
+		<-blockChan
+	}
+
+	reqLen := new(expvar.Int)
+	reqs := make([]*Request, 0, 10)
+
+	for {
+		var r *Request
+		select {
+		case r = <-db.writeCh:
+		case <-closer.CloseSignal:
+			goto closeCase
+		}
+
+		for {
+			reqs = append(reqs, r)
+			reqLen.Set(int64(len(reqs)))
+
+			if len(reqs) >= 3*common.KVWriteChRequestCapacity {
+				blockChan <- struct{}{}
+				goto writeCse
+			}
+
+			select {
+			case r = <-db.writeCh:
+			case blockChan <- struct{}{}:
+				goto writeCse
+			case <-closer.CloseSignal:
+				goto closeCase
+				// default:
+				// 隐形bug: 只有新请求到来时才有机会检查是否可以写当前批次;
+			}
+		} // for over
+
+	closeCase:
+		for {
+			select {
+			case r = <-db.writeCh:
+				reqs = append(reqs, r)
+			default: // b.writeCh 中没有更多数据, 执行 default 分支;
+				blockChan <- struct{}{} // Push to pending before doing a write.
+				writeRequest(reqs)
+				return
+			}
+		}
+
+	writeCse:
+		go writeRequest(reqs)
+		reqs = make([]*Request, 0, 10)
+		reqLen.Set(0)
+
+	} // for over
+}
+
 func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 	defer closer.Done()
 	var reqLen int64
@@ -199,11 +263,13 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 	}
 
 	for {
+		var r *Request
 		select {
 		case <-closer.CloseSignal:
 			for {
 				select {
-				case r := <-db.writeCh:
+				case r = <-db.writeCh:
+					fmt.Println("close default-3")
 					reqs = append(reqs, r)
 				default: // db.writeCh 中没有更多数据, 执行 default 分支;
 					blockChan <- struct{}{}
@@ -211,11 +277,12 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 					return
 				}
 			}
-		case r := <-db.writeCh:
+		case r = <-db.writeCh:
+
 			reqs = append(reqs, r)
 			reqLen = int64(len(reqs))
 
-			if reqLen >= 2*common.KVWriteChRequestCapacity {
+			if reqLen >= 3*common.KVWriteChRequestCapacity {
 				blockChan <- struct{}{}
 				go writeRequest(reqs)
 				reqs = make([]*Request, 0, 10)
@@ -223,27 +290,33 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 			}
 
 			select {
+			case r = <-db.writeCh:
+				reqs = append(reqs, r)
+				reqLen = int64(len(reqs))
 			case blockChan <- struct{}{}:
 				go writeRequest(reqs)
 				reqs = make([]*Request, 0, 10)
 				reqLen = 0
 			case <-closer.CloseSignal:
-				go writeRequest(reqs)
-				return
+				for {
+					select {
+					case r = <-db.writeCh:
+						fmt.Println("close default-4")
+						reqs = append(reqs, r)
+					default: // db.writeCh 中没有更多数据, 执行 default 分支;
+						blockChan <- struct{}{}
+						writeRequest(reqs)
+						return
+					}
+				}
 				// default:
+				// 隐形bug: 只有新请求到来时才有机会检查是否可以写当前批次;
 			}
-			//default:
-			//	if len(reqs) > 0 {
-			//		blockChan <- struct{}{}
-			//		go writeRequest(reqs)
-			//		reqs = make([]*Request, 0, 10)
-			//		reqLen = 0
-			//	}
 		}
-	}
+	} // for over
 }
 
-// writeRequests is called serially by only one goroutine.
+// WriteRequest is called serially by only one goroutine.
 // 1.各个vlog文件的失效数据统计表
 // 2.vlog GC重写的entry[]
 // 写完 vlog 后, 再逐一写到 lsm 中
@@ -315,7 +388,7 @@ func (db *TrainKV) initVlog() {
 	vlog.Db = db
 	vlog.Opt = db.Opt
 	db.vlog = vlog
-	vlog.GarbageCh = make(chan struct{}, 1) //一次只允许运行一个vlogGC协程
+	vlog.GarbageCh = make(chan struct{}, 1) //一次只允许运行一个vlogGC协程;
 }
 
 func (db *TrainKV) Close() error {
@@ -333,7 +406,6 @@ func (db *TrainKV) Close() error {
 	if err := db.vlog.Close(); err != nil {
 		return err
 	}
-	// fmt.Println("db.Close exit.")
 	return nil
 }
 
