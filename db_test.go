@@ -228,7 +228,7 @@ func TestWriteRequest(t *testing.T) {
 		//val := make([]byte, 10<<20+1)
 		e := model.NewEntry([]byte(key), []byte(val))
 		e.Version = 1
-		e.Key = model.KeyWithTs(e.Key)
+		e.Key = model.KeyWithTs(e.Key, model.NewCurVersion())
 		request := BuildRequest([]*model.Entry{e})
 		if err := db.WriteRequest([]*Request{request}); err != nil {
 			t.Fatal(err)
@@ -250,7 +250,7 @@ func TestWriteRequest(t *testing.T) {
 	for i := delStart; i <= delEnd; i++ {
 		key := fmt.Sprintf("key%d", i)
 		e := model.NewEntry([]byte(key), nil)
-		e.Key = model.KeyWithTs(e.Key)
+		e.Key = model.KeyWithTs(e.Key, model.NewCurVersion())
 		e.Meta = common.BitDelete
 		if err := db.WriteRequest([]*Request{BuildRequest([]*model.Entry{e})}); err != nil {
 			t.Fatal(err)
@@ -265,7 +265,7 @@ func TestWriteRequest(t *testing.T) {
 		//val := make([]byte, 10<<20+1)
 		e := model.NewEntry([]byte(key), []byte(val))
 		e.Version = 3
-		e.Key = model.KeyWithTs(e.Key)
+		e.Key = model.KeyWithTs(e.Key, model.NewCurVersion())
 		if err := db.WriteRequest([]*Request{BuildRequest([]*model.Entry{e})}); err != nil {
 			t.Fatal(err)
 		}
@@ -383,7 +383,7 @@ func CreateTableWithRange(t *testing.T, db *TrainKV, start, end int) *lsm.Table 
 	for _, i := range nums {
 		Key := make([]byte, 8)
 		binary.BigEndian.PutUint64(Key[:], uint64(i))
-		Key = model.KeyWithTs(Key)
+		Key = model.KeyWithTs(Key, model.NewCurVersion())
 		val := []byte(fmt.Sprintf("%d", i))
 		e := &model.Entry{Key: Key, Value: val}
 		builder.Add(e, false)
