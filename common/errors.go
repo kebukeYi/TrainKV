@@ -24,6 +24,7 @@ var (
 	ErrKeyNotFound   = errors.New("err not found key")
 
 	ErrWalInvalidCrc = errors.New("walFile: invalid crc")
+	ErrBadTxn        = errors.New("walFile: bad txn")
 	ErrBadReadMagic  = errors.New("read magic failed")
 	ErrBadMagic      = errors.New("bad magic")
 	ErrBadCRC        = errors.New("bad crc")
@@ -97,6 +98,10 @@ func Wrap(err error, msg string) error {
 	}
 	return fmt.Errorf("%s err: %+v", msg, err)
 }
+func Wrapf(err error, format string, args ...interface{}) error {
+	return fmt.Errorf(format+" error: %+v", append(args, err)...)
+}
+
 func WarpErr(format string, err error) error {
 	if err != nil {
 		fmt.Printf("%s %s %s", format, location(2, true), err)

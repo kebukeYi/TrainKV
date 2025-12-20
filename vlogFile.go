@@ -1,10 +1,12 @@
-package file
+package TrainKV
 
 import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
 	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/file"
+	"github.com/kebukeYi/TrainKV/lsm"
 	"github.com/kebukeYi/TrainKV/model"
 	"github.com/kebukeYi/TrainKV/utils"
 	"github.com/pkg/errors"
@@ -17,21 +19,22 @@ import (
 )
 
 type VLogFile struct {
-	f    *MmapFile
+	f    *file.MmapFile
 	FID  uint32
 	size uint32
 	Lock sync.RWMutex
+	opt  *lsm.Options
 }
 
 func (vlog *VLogFile) Open(opt *utils.FileOptions) error {
 	var err error
 	vlog.FID = uint32(opt.FID)
 	vlog.Lock = sync.RWMutex{}
-	vlog.f, err = OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
+	vlog.f, err = file.OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
 	common.Panic(err)
 	info, err := vlog.f.Fd.Stat()
 	if err != nil {
-		return common.WarpErr("Unable to run file.Stat", err)
+		return common.WarpErr("#Open Unable to run VLogFile.Stat", err)
 	}
 	vlog.size = uint32(info.Size()) // 看最终截断的长度;
 	common.CondPanic(vlog.size > math.MaxUint32, fmt.Errorf("file size: %d greater than %d", vlog.size, uint32(math.MaxUint32)))
@@ -52,21 +55,20 @@ func (vlog *VLogFile) Read(vptr *model.ValuePtr) (buf []byte, err error) {
 }
 
 func (vlog *VLogFile) DoneWriting(offset uint32) error {
-	// (We call this from write() and thus know we have shared access to the fd.)
-	if err := vlog.f.Sync(); err != nil {
-		return errors.Wrapf(err, "Unable to sync value log: %q", vlog.FileName())
-
+	if vlog.opt.SyncWrites {
+		if err := vlog.f.Sync(); err != nil {
+			return errors.Wrapf(err, "Unable to sync value log: %q", vlog.FileName())
+		}
 	}
+
+	// 确保在"取消映射→重新映射"这个关键操作期间，没有其他线程能访问这个内存区域;
 	vlog.Lock.Lock()
 	defer vlog.Lock.Unlock()
 
-	// Truncation must run after unmapping, otherwise Windows would crap itself.
 	if err := vlog.f.Truncate(int64(offset)); err != nil {
 		return errors.Wrapf(err, "Unable to truncate file: %q", vlog.FileName())
-
 	}
 
-	// Reinitialize the log file. This will mmap the entire file.
 	if err := vlog.Init(); err != nil {
 		return errors.Wrapf(err, "failed to initialize file %s", vlog.FileName())
 	}
@@ -74,8 +76,6 @@ func (vlog *VLogFile) DoneWriting(offset uint32) error {
 }
 
 func (vlog *VLogFile) Write(offset uint32, buf []byte) (err error) {
-	vlog.Lock.Lock()
-	defer vlog.Lock.Unlock()
 	return vlog.f.AppendBuffer(offset, buf)
 }
 
@@ -127,11 +127,11 @@ func (vlog *VLogFile) Close() error {
 	return vlog.f.Close()
 }
 
-// EncodeEntry will encode entry to the buf
-// layout of entry
-// +--------+-----+-------+-------+
-// | header | key | value | crc32 |
-// +--------+-----+-------+-------+
+// EncodeEntry will encode entry to the out
+// layout of entry in vlogFile;
+// +----------------------------------+-----+-------+-------+
+// | header(meta,klen,vlen,ExpiresAt) | key | value | crc32 |
+// +----------------------------------+-----+-------+-------+
 func (vlog *VLogFile) EncodeEntry(entry *model.Entry, out *bytes.Buffer) (int, error) {
 	header := model.EntryHeader{
 		KLen:      uint32(len(entry.Key)),

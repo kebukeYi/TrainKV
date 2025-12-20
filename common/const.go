@@ -18,11 +18,14 @@ const (
 	ManifestFileHeaderLen             = 8
 	ManifestFileCrcLen                = 8
 	DefaultFileFlag                   = os.O_RDWR | os.O_CREATE | os.O_APPEND
-	DefaultFileMode                   = 0666
-	MaxHeaderSize                     = 21 // 基于可变长编码,vlogFile其最可能的编码
+	DefaultFileMode                   = 0666 // 666
+	MaxHeaderSize                     = 21   // 基于可变长编码,vlogFile其最可能的编码;
 	VlogHeaderSize                    = 0
 	KVWriteChRequestCapacity          = 1000
 )
+
+const LevelMaxStaleDataSize = 10 << 20 // 10MB
+const MaxAllocatorInitialSize = 256 << 20
 
 // entry meta
 const (

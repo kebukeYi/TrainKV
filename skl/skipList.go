@@ -2,6 +2,7 @@ package skl
 
 import (
 	"fmt"
+	"github.com/kebukeYi/TrainKV/interfaces"
 	"github.com/kebukeYi/TrainKV/model"
 	"github.com/kebukeYi/TrainKV/utils"
 	"github.com/pkg/errors"
@@ -128,7 +129,7 @@ func (skipList *SkipList) getHeight() int32 {
 	return atomic.LoadInt32(&skipList.height)
 }
 func (skipList *SkipList) GetMemSize() int64 {
-	//return skipList.arena.size()
+	// return skipList.arena.size()
 	return int64(skipList.num)
 }
 func (skipList *SkipList) findLast() *skipNode {
@@ -175,7 +176,7 @@ func (skipList *SkipList) findNear(key []byte, less bool, allowEqual bool) (*ski
 		}
 		// nextNode!=nil
 		getKey := nextNode.getKey(skipList.arena)
-		cmp := model.CompareKeyNoTs(key, getKey)
+		cmp := model.CompareKeyWithTs(key, getKey)
 		if cmp > 0 {
 			x = nextNode
 			continue
@@ -224,8 +225,7 @@ func (skipList *SkipList) findSpliceForLevel(key []byte, before uint32, level in
 			return before, nextOffset
 		}
 		nextKey := nextNode.getKey(skipList.arena)
-		// todo 跳表对比key时, 祛除掉 ts版本号;
-		cmp := model.CompareKeyNoTs(key, nextKey)
+		cmp := model.CompareKeyWithTs(key, nextKey)
 		if cmp == 0 {
 			return nextOffset, nextOffset
 		}
@@ -239,17 +239,17 @@ func (skipList *SkipList) findSpliceForLevel(key []byte, before uint32, level in
 func (skipList *SkipList) Get(userKeyTs []byte) model.ValueExt {
 	findNear, _ := skipList.findNear(userKeyTs, false, true)
 	if findNear == nil {
-		return model.ValueExt{Version: -1}
+		return model.ValueExt{Version: 0}
 	}
 	nearKeyTs := skipList.arena.getKey(findNear.keyOffset, findNear.keySize)
 	if !model.SameKeyNoTs(userKeyTs, nearKeyTs) {
-		return model.ValueExt{Version: -1}
+		return model.ValueExt{Version: 0}
 	}
 	valOffset, valSize := findNear.getValOffset()
 	val := skipList.arena.getVal(valOffset, valSize)
 	// todo 非常重要的一步, 需要显式分析出版本,以便在vlogGC中进行版本判断,决定去留;
 	// 此时的 nearKeyTs 的版本时间戳 可能是大于等于 userKeyTs的; 因此需要显示解析出确定的版本号;
-	val.Version = int64(model.ParseTsVersion(nearKeyTs))
+	val.Version = model.ParseTsVersion(nearKeyTs)
 	return val
 }
 func (skipList *SkipList) Put(e *model.Entry) {
@@ -368,7 +368,7 @@ func (skipList *SkipList) Draw(align bool) {
 		fmt.Println()
 	}
 }
-func (skipList *SkipList) NewSkipListIterator(name string) model.Iterator {
+func (skipList *SkipList) NewSkipListIterator(name string) interfaces.Iterator {
 	skipList.IncrRef()
 	return &SkipListIterator{
 		list: skipList,
@@ -415,7 +415,7 @@ func (s *SkipListIterator) Valid() bool {
 func (s *SkipListIterator) Rewind() {
 	s.SeekToFirst()
 }
-func (s *SkipListIterator) Item() model.Item {
+func (s *SkipListIterator) Item() interfaces.Item {
 	entry := model.Entry{
 		Key:       s.Key(),
 		Value:     s.Value().Value,
@@ -423,7 +423,7 @@ func (s *SkipListIterator) Item() model.Item {
 		ExpiresAt: s.Value().ExpiresAt,
 	}
 	entry.Version = model.ParseTsVersion(entry.Key)
-	return model.Item{Item: entry}
+	return interfaces.Item{Item: entry}
 }
 func (s *SkipListIterator) Seek(key []byte) {
 	// find >=

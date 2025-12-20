@@ -2,6 +2,7 @@ package lsm
 
 import (
 	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/interfaces"
 	"github.com/kebukeYi/TrainKV/model"
 	"sort"
 	"sync"
@@ -12,8 +13,8 @@ type levelHandler struct {
 	levelID        int
 	tables         []*Table
 	totalSize      int64
-	totalStaleSize int64         // 失效数据量
-	lm             *LevelsManger // 上层引用
+	totalStaleSize int64         // 失效数据量;
+	lm             *LevelsManger // 上层引用;
 }
 
 func (leh *levelHandler) add(r *Table) {
@@ -54,41 +55,54 @@ func (leh *levelHandler) Get(keyTs []byte) (model.Entry, error) {
 }
 
 func (leh *levelHandler) searchL0SST(keyTs []byte) (model.Entry, error) {
+	var maxEntry model.Entry
 	for i := len(leh.tables) - 1; i >= 0; i-- {
 		table := leh.tables[i]
-		if entry, _ := table.Search(keyTs); entry.Version != 0 {
-			return entry, nil
+		// 结果集:
+		// 1. 没有找到;
+		// 2. 等于找到;
+		// 3. 找到小于当前 ketTs的;
+		entry, _ := table.Search(keyTs)
+		if entry.Version != 0 {
+			if entry.Version > maxEntry.Version {
+				maxEntry = entry
+				continue
+			}
 		}
 	}
-	return model.Entry{Version: 0}, common.ErrKeyNotFound
+	return maxEntry, nil
 }
 
-func (leh *levelHandler) searchLnSST(key []byte) (model.Entry, error) {
-	getTable := leh.getTable(key)
+func (leh *levelHandler) searchLnSST(keyTs []byte) (model.Entry, error) {
+	getTable := leh.getTable(keyTs)
 	if getTable == nil {
 		return model.Entry{Version: 0}, common.ErrNotFoundTable
 	}
-	defer getTable.DecrRef()
-	var err error
-	var entry model.Entry
-	if entry, err = getTable.Search(key); entry.Version != 0 {
-		return entry, nil
+	var maxEntry model.Entry
+	// 结果集:
+	// 1. 没有找到;
+	// 2. 等于找到;
+	// 3. 找到小于当前 ketTs的;
+	entry, _ := getTable.Search(keyTs)
+	if entry.Version != 0 {
+		if entry.Version > maxEntry.Version {
+			maxEntry = entry
+		}
 	}
-	return model.Entry{Version: 0}, err
+	return maxEntry, nil
 }
 
-// 默认从 首部 开始查询, 找到第一个大于等于key的sst, 除了l0层之外, 其他层的 Table 都是递增规律;
+// 默认从 首部 开始查询, 找到第一个最大值 大于等于 key的 sst, 除了l0层之外, 其他层的 Table 都是递增规律;
 func (leh *levelHandler) getTable(key []byte) *Table {
 	idx := sort.Search(len(leh.tables), func(i int) bool {
-		minKey := leh.tables[i].sst.MinKey()
-		cmp := model.CompareKeyNoTs(minKey, key)
+		maxKey := leh.tables[i].sst.MaxKey()
+		cmp := model.CompareKeyWithTs(maxKey, key)
 		return cmp >= 0
 	})
 	if idx >= len(leh.tables) {
 		return nil
 	}
 	tbl := leh.tables[idx]
-	tbl.IncrRef()
 	return tbl
 }
 
@@ -105,7 +119,7 @@ func (leh *levelHandler) Sort() {
 		})
 	} else {
 		sort.Slice(leh.tables, func(i, j int) bool {
-			return model.CompareKeyNoTs(leh.tables[i].sst.MinKey(), leh.tables[j].sst.MinKey()) < 0
+			return model.CompareKeyWithTs(leh.tables[i].sst.MinKey(), leh.tables[j].sst.MinKey()) < 0
 		})
 	}
 }
@@ -118,10 +132,10 @@ func (leh *levelHandler) findOverLappingTables(_ levelHandlerRLocked, kr keyRang
 		return 0, 0
 	}
 	left := sort.Search(len(leh.tables), func(i int) bool {
-		return model.CompareKeyNoTs(kr.left, leh.tables[i].sst.MaxKey()) <= 0
+		return model.CompareKeyWithTs(kr.left, leh.tables[i].sst.MaxKey()) <= 0
 	})
 	right := sort.Search(len(leh.tables), func(i int) bool {
-		return model.CompareKeyNoTs(kr.right, leh.tables[i].sst.MinKey()) < 0
+		return model.CompareKeyWithTs(kr.right, leh.tables[i].sst.MinKey()) < 0
 	})
 	return left, right
 }
@@ -150,7 +164,7 @@ func (leh *levelHandler) updateTable(toDel, toAdd []*Table) error {
 
 	leh.tables = newTables
 	sort.Slice(leh.tables, func(i, j int) bool {
-		return model.CompareKeyNoTs(leh.tables[i].sst.MinKey(), leh.tables[j].sst.MinKey()) < 0
+		return model.CompareKeyWithTs(leh.tables[i].sst.MinKey(), leh.tables[j].sst.MinKey()) < 0
 	})
 
 	return decrRefs(toDel)
@@ -173,12 +187,12 @@ func (leh *levelHandler) deleteTable(toDel []*Table) error {
 	}
 	leh.tables = newTables
 	sort.Slice(leh.tables, func(i, j int) bool {
-		return model.CompareKeyNoTs(leh.tables[i].sst.MinKey(), leh.tables[j].sst.MinKey()) < 0
+		return model.CompareKeyWithTs(leh.tables[i].sst.MinKey(), leh.tables[j].sst.MinKey()) < 0
 	})
 	return decrRefs(toDel)
 }
 
-func (leh *levelHandler) iterators(opt *model.Options) []model.Iterator {
+func (leh *levelHandler) iterators(opt *interfaces.Options) []interfaces.Iterator {
 	leh.mux.Lock()
 	defer leh.mux.Unlock()
 	if leh.levelID == 0 {
@@ -187,7 +201,7 @@ func (leh *levelHandler) iterators(opt *model.Options) []model.Iterator {
 	if len(leh.tables) == 0 {
 		return nil
 	}
-	return []model.Iterator{NewConcatIterator(leh.tables, opt)}
+	return []interfaces.Iterator{NewConcatIterator(leh.tables, opt)}
 }
 
 func (leh *levelHandler) close() error {

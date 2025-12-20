@@ -2,20 +2,22 @@ package lsm
 
 import (
 	"bytes"
+	"container/heap"
 	"fmt"
 	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/interfaces"
 	"github.com/kebukeYi/TrainKV/model"
 	"sort"
 )
 
 type lsmIterator struct {
-	iters []model.Iterator
-	item  model.Item
+	iters []interfaces.Iterator
+	item  interfaces.Item
 }
 
-func (lsm *LSM) NewLsmIterator(opt *model.Options) []model.Iterator {
+func (lsm *LSM) NewLsmIterator(opt *interfaces.Options) []interfaces.Iterator {
 	iter := &lsmIterator{}
-	iter.iters = make([]model.Iterator, 0)
+	iter.iters = make([]interfaces.Iterator, 0)
 	iter.iters = append(iter.iters, lsm.memoryTable.skipList.NewSkipListIterator(lsm.memoryTable.name))
 	for _, imemoryTable := range lsm.immemoryTables {
 		iter.iters = append(iter.iters, imemoryTable.skipList.NewSkipListIterator(imemoryTable.name))
@@ -26,19 +28,19 @@ func (lsm *LSM) NewLsmIterator(opt *model.Options) []model.Iterator {
 
 type ConcatIterator struct {
 	tables []*Table
-	iters  []model.Iterator
+	iters  []interfaces.Iterator
 	idx    int
-	curIer model.Iterator
-	opt    *model.Options
+	curIer interfaces.Iterator
+	opt    *interfaces.Options
 }
 
-func NewConcatIterator(tables []*Table, opt *model.Options) *ConcatIterator {
+func NewConcatIterator(tables []*Table, opt *interfaces.Options) *ConcatIterator {
 	for i := 0; i < len(tables); i++ {
 		tables[i].IncrRef()
 	}
 	return &ConcatIterator{
 		tables: tables,
-		iters:  make([]model.Iterator, len(tables)),
+		iters:  make([]interfaces.Iterator, len(tables)),
 		idx:    -1,
 		curIer: nil,
 		opt:    opt,
@@ -79,7 +81,7 @@ func (conIter *ConcatIterator) Rewind() {
 func (conIter *ConcatIterator) Valid() bool {
 	return conIter.curIer != nil && conIter.curIer.Valid()
 }
-func (conIter *ConcatIterator) Item() model.Item {
+func (conIter *ConcatIterator) Item() interfaces.Item {
 	return conIter.curIer.Item()
 }
 func (conIter *ConcatIterator) Seek(key []byte) {
@@ -87,18 +89,13 @@ func (conIter *ConcatIterator) Seek(key []byte) {
 	if conIter.opt.IsAsc { // 升序遍历;
 		idx = sort.Search(len(conIter.tables), func(i int) bool {
 			maxKey := conIter.tables[i].sst.MaxKey()
-			cmp := model.CompareKeyNoTs(maxKey, key) >= 0
+			cmp := model.CompareKeyWithTs(maxKey, key) >= 0
 			return cmp
 		})
 	} else { // 降序遍历; sst 本身是 升序的; 需要从后往前找,小于当前值的;
-		//idx = sort.Search(len(conIter.tables), func(i int) bool {
-		//	minKey := conIter.tables[i].sst.MinKey()
-		//	cmp := model.CompareKeyNoTs(key, minKey) >= 0
-		//	return cmp
-		//})
 		n := len(conIter.tables)
 		idx = n - 1 - sort.Search(n, func(i int) bool {
-			return model.CompareKeyNoTs(conIter.tables[n-1-i].sst.MinKey(), key) <= 0
+			return model.CompareKeyWithTs(conIter.tables[n-1-i].sst.MinKey(), key) <= 0
 		})
 	}
 	if idx >= len(conIter.tables) || idx < 0 {
@@ -115,7 +112,7 @@ func (conIter *ConcatIterator) Next() {
 	if conIter.curIer.Valid() {
 		return
 	}
-	// 如果向后找一个block无效了; 开始找下一个 table;
+	// 如果向后找一个block无效了; 那就尝试开始从下一个 table 找;
 	for {
 		if conIter.opt.IsAsc { // 升序,直接找后一个;
 			conIter.setIdx(conIter.idx + 1)
@@ -151,6 +148,108 @@ func (conIter *ConcatIterator) Close() error {
 	return nil
 }
 
+type IteratorHeap []interfaces.Iterator
+
+func (hp IteratorHeap) Len() int {
+	return len(hp)
+}
+func (hp IteratorHeap) Less(i, j int) bool {
+	if hp[i].Valid() && hp[j].Valid() {
+		return bytes.Compare(hp[i].Item().Item.Key, hp[j].Item().Item.Key) < 0
+	}
+	return true
+}
+func (hp IteratorHeap) Swap(i, j int) {
+	hp[i], hp[j] = hp[j], hp[i]
+}
+func (hp *IteratorHeap) Pop() any {
+	oldHp := *hp
+	v := oldHp[len(oldHp)-1]
+	*hp = oldHp[:len(oldHp)-1]
+	return v
+}
+func (hp *IteratorHeap) Push(x any) {
+	*hp = append(*hp, x.(interfaces.Iterator))
+}
+
+type MergingIterator struct {
+	itHeap IteratorHeap
+	opt    *interfaces.Options
+}
+
+func NewMergingIterator(iters []interfaces.Iterator, opt *interfaces.Options) *MergingIterator {
+	hp := make(IteratorHeap, 0)
+	for _, iter := range iters {
+		//if iter != nil && iter.Valid() {
+		if iter != nil {
+			hp = append(hp, iter)
+		}
+	}
+	return &MergingIterator{
+		itHeap: hp,
+		opt:    opt,
+	}
+}
+
+func (m *MergingIterator) Rewind() {
+	for _, iter := range m.itHeap {
+		iter.Rewind()
+	}
+	m.fix()
+}
+
+func (m *MergingIterator) Valid() bool {
+	return len(m.itHeap) > 0
+}
+
+func (m *MergingIterator) Item() interfaces.Item {
+	item := m.itHeap[0].Item()
+	safeCopy := item.Item.SafeCopy()
+	return interfaces.Item{Item: safeCopy}
+}
+
+func (m *MergingIterator) Next() {
+	// sst文件内key排序规则: 不同key, 按照字典排序; 相同key, 按照版本号升序排序;
+	// sst_1: foo3, foo4, foo5, zoo8, zoo9;
+	// sst_2: foo1, foo7, foo8, zoo1, zoo5;
+	// sst_3: aoo1, boo3, coo8, poo2, poo3;
+	// 正确合并结果: aoo1, boo3, coo8, f001, poo2, zoo1;
+	minIterator := heap.Pop(&m.itHeap).(interfaces.Iterator)
+	minIterator.Next()
+	// 如果这个迭代器有效, 则继续迭代;
+	if minIterator.Valid() {
+
+		heap.Push(&m.itHeap, minIterator)
+	}
+}
+
+func (m *MergingIterator) Seek(key []byte) {
+	for _, iter := range m.itHeap {
+		iter.Seek(key)
+	}
+	m.fix()
+}
+
+func (m *MergingIterator) fix() {
+	heap.Init(&m.itHeap)
+}
+
+func (m *MergingIterator) Close() error {
+	for _, iter := range m.itHeap {
+		if iter != nil {
+			if err := iter.Close(); err != nil {
+				common.Err(err)
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (m *MergingIterator) Name() string {
+	return "MergingIterator"
+}
+
 type MergeIterator struct {
 	left    node
 	right   node
@@ -165,13 +264,13 @@ type node struct {
 	valid bool
 
 	entry model.Entry
-	iter  model.Iterator
+	iter  interfaces.Iterator
 
 	merge  *MergeIterator
 	concat *ConcatIterator
 }
 
-func (n *node) setIterator(iter model.Iterator) {
+func (n *node) setIterator(iter interfaces.Iterator) {
 	n.iter = iter
 	n.merge, _ = iter.(*MergeIterator)
 	n.concat, _ = iter.(*ConcatIterator)
@@ -215,7 +314,7 @@ func (n *node) seek(key []byte) {
 	n.setEntry()
 }
 
-func NewMergeIterator(iters []model.Iterator, reverse bool) model.Iterator {
+func NewMergeIterator(iters []interfaces.Iterator, reverse bool) interfaces.Iterator {
 	switch len(iters) {
 	case 0:
 		return nil
@@ -231,7 +330,7 @@ func NewMergeIterator(iters []model.Iterator, reverse bool) model.Iterator {
 		return m
 	}
 	mid := len(iters) / 2
-	return NewMergeIterator([]model.Iterator{
+	return NewMergeIterator([]interfaces.Iterator{
 		NewMergeIterator(iters[:mid], reverse),
 		NewMergeIterator(iters[mid:], reverse)}, reverse)
 }
@@ -294,7 +393,7 @@ func (m *MergeIterator) Seek(key []byte) {
 	m.fix()
 	m.setCurrentKey()
 }
-func (m *MergeIterator) Item() model.Item {
+func (m *MergeIterator) Item() interfaces.Item {
 	return m.small.iter.Item()
 }
 func (m *MergeIterator) Key() []byte {

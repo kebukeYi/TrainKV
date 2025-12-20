@@ -14,7 +14,7 @@ var lsmTestPath = "/usr/golanddata/trainkv/lsm"
 var lsmOptions = &Options{
 	WorkDir:             lsmTestPath,
 	MemTableSize:        10 << 10, // 10KB; 默认:64 << 20(64MB)
-	NumFlushMemtables:   1,        // 默认：15;
+	WaitFlushMemTables:  1,        // 默认：15;
 	BlockSize:           2 * 1024, // 默认:4 * 1024
 	BloomFalsePositive:  0.01,     // 误差率
 	CacheNums:           1 * 1024, // 默认:10240个
@@ -51,7 +51,7 @@ func TestLSM_Get(t *testing.T) {
 	assert.Equal(t, common.ErrEmptyKey, err)
 
 	// Test key found in memoryTable
-	keyWithTs := model.KeyWithTs(key)
+	keyWithTs := model.KeyWithTs(key, 1)
 	newEntry := model.NewEntry(keyWithTs, value)
 	lsm.memoryTable.Put(newEntry)
 	entry, err := lsm.Get(keyWithTs)
@@ -59,7 +59,7 @@ func TestLSM_Get(t *testing.T) {
 
 	// Test key found in imemoryTables
 	lsm.immemoryTables = append(lsm.immemoryTables, lsm.NewMemoryTable())
-	keyWithTs = model.KeyWithTs([]byte("newKey"))
+	keyWithTs = model.KeyWithTs([]byte("newKey"), 1)
 	e := model.NewEntry(keyWithTs, value)
 	lsm.immemoryTables[0].Put(e)
 	entry, err = lsm.Get(keyWithTs)
@@ -70,7 +70,7 @@ func TestLSM_Put(t *testing.T) {
 	clearDir(lsmOptions.WorkDir)
 	lsm := NewLSM(lsmOptions, utils.NewCloser(1))
 	defer lsm.Close()
-	newEntry := model.NewEntry(model.KeyWithTs([]byte("testKey")), []byte("testValue"))
+	newEntry := model.NewEntry(model.KeyWithTs([]byte("testKey"), 1), []byte("testValue"))
 	// Test successful Put
 	success := lsm.Put(newEntry)
 	common.Panic(success)

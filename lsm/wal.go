@@ -12,60 +12,20 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 )
 
 const (
-	WalHeaderSize int    = 17
+	WalHeaderSize int    = 21
 	crcSize       int    = 4
 	walFileExt    string = ".wal"
 )
-
-type WalHeader struct {
-	keyLen    uint32 // 4B
-	valLen    uint32 // 4B
-	Meta      byte   // 1B
-	ExpiredAt uint64 // 8B
-}
-
-func (h WalHeader) encode(buf []byte) int {
-	index := 0
-	index = binary.PutUvarint(buf[index:], uint64(h.keyLen))
-	index += binary.PutUvarint(buf[index:], uint64(h.valLen))
-	index += binary.PutUvarint(buf[index:], uint64(h.Meta))
-	index += binary.PutUvarint(buf[index:], h.ExpiredAt)
-	return index
-}
-
-func (h *WalHeader) decode(reader *model.HashReader) (int, error) {
-	var err error
-	klen, err := binary.ReadUvarint(reader)
-	if err != nil {
-		return 0, err
-	}
-	h.keyLen = uint32(klen)
-
-	vlen, err := binary.ReadUvarint(reader)
-	if err != nil {
-		return 0, err
-	}
-	h.valLen = uint32(vlen)
-
-	meta, err := binary.ReadUvarint(reader)
-	if err != nil {
-		return 0, err
-	}
-	h.Meta = byte(meta)
-	h.ExpiredAt, err = binary.ReadUvarint(reader)
-	if err != nil {
-		return 0, err
-	}
-	return reader.ByteRead, nil
-}
 
 type WAL struct {
 	file    *file.MmapFile
 	opt     *utils.FileOptions
 	lock    sync.Mutex
+	buf     *bytes.Buffer
 	size    uint32
 	writeAt uint32
 	readAt  uint32
@@ -82,6 +42,7 @@ func OpenWalFile(opt *utils.FileOptions) *WAL {
 		size:    uint32(fileInfo.Size()),
 		writeAt: 0,
 		opt:     opt,
+		buf:     &bytes.Buffer{},
 	}
 	if err != nil {
 		fmt.Printf("open wal file error: %v ;\n", err)
@@ -91,14 +52,16 @@ func OpenWalFile(opt *utils.FileOptions) *WAL {
 }
 
 func (w *WAL) Write(e *model.Entry) error {
-	walEncode, size := w.WalEncode(e)
-	w.lock.Lock()
-	defer w.lock.Unlock()
-	err := w.file.AppendBuffer(w.writeAt, walEncode)
+	w.buf.Reset()
+	size, err := w.WalEncode(w.buf, e)
 	if err != nil {
 		return err
 	}
-	w.writeAt += uint32(size)
+	err = w.file.AppendBuffer(w.writeAt, w.buf.Bytes())
+	if err != nil {
+		return err
+	}
+	atomic.AddUint32(&w.writeAt, uint32(size))
 	return nil
 }
 
@@ -113,17 +76,16 @@ func (w *WAL) Read(reader io.Reader) (*model.Entry, uint32) {
 	return entry, w.readAt
 }
 
-// WalEncode | header(klen,vlen,meta,expir) | key | value | crc32 |
-func (w *WAL) WalEncode(e *model.Entry) ([]byte, int) {
-	header := WalHeader{
-		keyLen:    uint32(len(e.Key)),
-		valLen:    uint32(len(e.Value)),
-		ExpiredAt: e.ExpiresAt,
+// WalEncode | header(meta,klen,vlen,expir) | key | value | crc32 |
+func (w *WAL) WalEncode(buf *bytes.Buffer, e *model.Entry) (int, error) {
+	header := model.EntryHeader{
+		KLen:      uint32(len(e.Key)),
+		VLen:      uint32(len(e.Value)),
+		ExpiresAt: e.ExpiresAt,
 		Meta:      e.Meta,
 	}
-	buf := &bytes.Buffer{}
 	var headerEnc [WalHeaderSize]byte
-	sz := header.encode(headerEnc[:])
+	sz := header.Encode(headerEnc[:])
 
 	hash := crc32.New(errors.CastigationCryTable)
 	writer := io.MultiWriter(buf, hash)
@@ -135,15 +97,15 @@ func (w *WAL) WalEncode(e *model.Entry) ([]byte, int) {
 	crcBuf := make([]byte, crcSize)
 	binary.BigEndian.PutUint32(crcBuf[:], hash.Sum32())
 	writer.Write(crcBuf[:])
-	return buf.Bytes(), len(headerEnc[:sz]) + len(e.Key) + len(e.Value) + len(crcBuf)
+	return len(headerEnc[:sz]) + len(e.Key) + len(e.Value) + len(crcBuf), nil
 }
 
 func (w *WAL) WalDecode(reader io.Reader) (*model.Entry, error) {
 	var err error
 	hashReader := model.NewHashReader(reader)
-	var header WalHeader
-	headLen, err := header.decode(hashReader)
-	if header.keyLen == 0 {
+	var header model.EntryHeader
+	headLen, err := header.DecodeFrom(hashReader)
+	if header.KLen == 0 {
 		return nil, io.EOF
 	}
 	if err != nil {
@@ -151,7 +113,7 @@ func (w *WAL) WalDecode(reader io.Reader) (*model.Entry, error) {
 	}
 	entry := &model.Entry{}
 
-	dataBuf := make([]byte, header.keyLen+header.valLen)
+	dataBuf := make([]byte, header.KLen+header.VLen)
 	dataLen, err := io.ReadFull(hashReader, dataBuf[:])
 	if err != nil {
 		if err == io.EOF {
@@ -159,10 +121,10 @@ func (w *WAL) WalDecode(reader io.Reader) (*model.Entry, error) {
 		}
 		return nil, err
 	}
-	entry.Key = dataBuf[:header.keyLen]
-	entry.Value = dataBuf[header.keyLen:]
+	entry.Key = dataBuf[:header.KLen]
+	entry.Value = dataBuf[header.KLen:]
 	entry.Meta = header.Meta
-	entry.ExpiresAt = header.ExpiredAt
+	entry.ExpiresAt = header.ExpiresAt
 	sum32 := hashReader.Sum32()
 
 	crcBuf := make([]byte, crcSize)
@@ -184,11 +146,11 @@ func EstimateWalEncodeSize(e *model.Entry) int {
 }
 
 func (w *WAL) Size() uint32 {
-	return w.writeAt
+	return atomic.LoadUint32(&w.writeAt)
 }
 
 func (w *WAL) SetSize(offset uint32) {
-	w.writeAt = offset
+	atomic.StoreUint32(&w.writeAt, offset)
 }
 
 func (w *WAL) Fid() uint64 {

@@ -5,10 +5,13 @@ import (
 	"context"
 	"encoding/hex"
 	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/interfaces"
 	"github.com/kebukeYi/TrainKV/lsm"
 	"github.com/kebukeYi/TrainKV/model"
 	"github.com/kebukeYi/TrainKV/utils"
 	"github.com/pkg/errors"
+	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 )
@@ -37,8 +40,8 @@ func NewTransactionManager(options *lsm.Options) *TransactionManager {
 		commitMark:      &utils.LimitMark{Name: "commitMark"},
 		closer:          utils.NewCloser(2),
 	}
-	tm.startMark.Init(tm.closer)
-	tm.commitMark.Init(tm.closer)
+	tm.startMark.Init(tm.closer, options.TxnDoneIndexCh)
+	tm.commitMark.Init(tm.closer, nil)
 	return tm
 }
 func (m *TransactionManager) Stop() {
@@ -63,7 +66,7 @@ func (m *TransactionManager) incrementNextTs() {
 	m.nextTxnTs++
 	m.tsLock.Unlock()
 }
-func (m *TransactionManager) discardTs() uint64 {
+func (m *TransactionManager) DiscardTs() uint64 {
 	return m.startMark.GetDoneIndex()
 }
 func (m *TransactionManager) hasConflict(txn *Transaction) bool {
@@ -204,7 +207,6 @@ func (t *Transaction) checkSize(e *model.Entry) error {
 	t.size = size
 	return nil
 }
-
 func (t *Transaction) Set(key, value []byte) error {
 	entry := model.NewEntry(key, value)
 	return t.modify(entry)
@@ -226,8 +228,8 @@ func (t *Transaction) Get(key []byte) (*model.Entry, error) {
 		}
 		t.addReadKey(key)
 	}
-	keyMaxReadTs := model.KeyWithTs(key, t.startTs)
-	entry, err := t.db.Get(keyMaxReadTs)
+	keyMaxStartTs := model.KeyWithTs(key, t.startTs)
+	entry, err := t.db.Get(keyMaxStartTs)
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +254,6 @@ func (t *Transaction) addReadKey(key []byte) {
 		t.readKeys = append(t.readKeys, hash)
 	}
 }
-
 func (t *Transaction) Commit() error {
 	defer t.Discard()
 	callBack, err := t.commitAndSendToDB()
@@ -262,7 +263,6 @@ func (t *Transaction) Commit() error {
 	err = callBack()
 	return err
 }
-
 func (t *Transaction) commitAndSendToDB() (func() error, error) {
 	manager := t.db.transactionManager
 	manager.writeChLock.Lock()
@@ -285,13 +285,22 @@ func (t *Transaction) commitAndSendToDB() (func() error, error) {
 		}
 		entries = append(entries, entry)
 	}
+
+	if keepTogether {
+		entry := model.NewEntry([]byte(common.TxnKey), []byte(strconv.FormatUint(commitTs, 10)))
+		entry.Version = commitTs
+		entry.Meta |= common.BitFinTxn
+		entries = append(entries, entry)
+	}
+
 	req, err := t.db.SendToWriteCh(entries)
 	if err != nil {
 		manager.doneCommit(commitTs)
 		return nil, err
 	}
+
 	ret := func() error {
-		// 阻塞等待,写入lsm结果, 然后才允许 结束当前水印;
+		// 阻塞等待, 写入lsm结果, 然后才允许, 结束当前水印;
 		err := req.Wait()
 		manager.doneCommit(commitTs)
 		return err
@@ -306,9 +315,83 @@ func (t *Transaction) Discard() {
 		panic("Unclosed iterator at time of Txn.Discard.")
 	}
 	t.discard = true
+	t.RollBack()
 	t.db.transactionManager.doneStart(t)
 }
-
+func (t *Transaction) RollBack() {
+	t.pendingKeys = nil
+	t.conflictKeys = nil
+	t.readKeys = nil
+	t.db = nil
+}
 func (t *Transaction) StartTs() uint64 {
 	return t.startTs
+}
+
+type pendingWritesIterator struct {
+	entries   []*model.Entry
+	nextIndex int
+	startTs   uint64
+	reversed  bool
+}
+
+func (t *Transaction) newPendingWritesIterator(reversed bool) *pendingWritesIterator {
+	if !t.update || len(t.pendingKeys) == 0 {
+		return nil
+	}
+	entries := make([]*model.Entry, len(t.pendingKeys))
+	for _, entry := range t.pendingKeys {
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		cmp := bytes.Compare(entries[i].Key, entries[j].Key)
+		if !reversed {
+			return cmp < 0
+		}
+		return cmp > 0
+	})
+	return &pendingWritesIterator{
+		entries:  entries,
+		startTs:  t.startTs,
+		reversed: reversed,
+	}
+}
+func (pi *pendingWritesIterator) Name() string {
+	return "pendingWritesIterator"
+}
+func (pi *pendingWritesIterator) Next() {
+	pi.nextIndex++
+}
+func (pi *pendingWritesIterator) Valid() bool {
+	return pi.nextIndex < len(pi.entries)
+}
+func (pi *pendingWritesIterator) Rewind() {
+	pi.nextIndex = 0
+}
+func (pi *pendingWritesIterator) Seek(keyStartTs []byte) {
+	rawKey := model.ParseKey(keyStartTs)
+	sort.Search(len(pi.entries), func(i int) bool {
+		cmp := bytes.Compare(pi.entries[i].Key, rawKey)
+		if !pi.reversed {
+			// 正向迭代：寻找第一个 >= rawKey 的条目
+			return cmp >= 0
+		} else {
+			return cmp <= 0
+		}
+	})
+}
+func (pi *pendingWritesIterator) Item() interfaces.Item {
+	utils.AssertTrue(pi.Valid())
+	entry := pi.entries[pi.nextIndex]
+	safeCopy := entry.SafeCopy()
+	safeCopy.Version = pi.startTs
+	return interfaces.Item{Item: safeCopy}
+}
+func (pi *pendingWritesIterator) Close() error {
+	return nil
+}
+func (pi *pendingWritesIterator) key() []byte {
+	utils.AssertTrue(pi.Valid())
+	entry := pi.entries[pi.nextIndex]
+	return model.KeyWithTs(entry.Key, pi.startTs)
 }

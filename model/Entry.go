@@ -34,7 +34,7 @@ func NewEntry(key, val []byte) *Entry {
 	}
 }
 
-// 生成随机字符串作为key和value
+// 生成随机字符串作为key和value;
 func randStr(length int) string {
 	// 包括特殊字符,进行测试
 	str := "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -49,16 +49,6 @@ func randStr(length int) string {
 
 func BuildBigEntry(key []byte, bigValSize uint64) *Entry {
 	value := make([]byte, bigValSize)
-	expiresAt := uint64(time.Now().Add(12*time.Hour).UnixNano() / 1e6)
-	return &Entry{
-		Key:       key,
-		Value:     value,
-		ExpiresAt: expiresAt,
-	}
-}
-
-func BuildKeyEntry(key []byte) *Entry {
-	value := []byte(randStr(6))
 	expiresAt := uint64(time.Now().Add(12*time.Hour).UnixNano() / 1e6)
 	return &Entry{
 		Key:       key,
@@ -95,9 +85,6 @@ func (e *Entry) IsDeleteOrExpired() bool {
 		return true
 	}
 
-	//if e.Version == -1 {
-	//	return true
-	//}
 	if e.Value == nil {
 		return true
 	}
@@ -107,8 +94,11 @@ func (e *Entry) IsDeleteOrExpired() bool {
 	return e.ExpiresAt <= uint64(time.Now().Unix())
 }
 
-func (e *Entry) EstimateSize(valThreshold int) int {
-	if len(e.Value) < valThreshold {
+func (e *Entry) EstimateSize(valThreshold int64) int {
+	if e.ValThreshold == 0 {
+		e.ValThreshold = valThreshold
+	}
+	if int64(len(e.Value)) < valThreshold {
 		// 1 for meta.
 		return len(e.Key) + len(e.Value) + 1
 	} else {
@@ -138,11 +128,12 @@ func sizeVarInt(a uint64) (n int) {
 	return n
 }
 
+// EntryHeader for wal and vlogFile;
 type EntryHeader struct {
-	KLen      uint32
-	VLen      uint32
-	ExpiresAt uint64
-	Meta      byte
+	KLen      uint32 // 4-5
+	VLen      uint32 // 4-5
+	ExpiresAt uint64 // 8|10
+	Meta      byte   // 1
 }
 
 func (h EntryHeader) Encode(out []byte) int {

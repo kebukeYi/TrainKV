@@ -1,10 +1,12 @@
 package TrainKV
 
 import (
+	"bytes"
 	"expvar"
 	"fmt"
 	"github.com/gofrs/flock"
 	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/interfaces"
 	"github.com/kebukeYi/TrainKV/lsm"
 	"github.com/kebukeYi/TrainKV/model"
 	"github.com/kebukeYi/TrainKV/utils"
@@ -19,7 +21,7 @@ type TrainKV struct {
 	vlog               *ValueLog
 	Opt                *lsm.Options
 	transactionManager *TransactionManager
-	writeCh            chan *Request
+	writeCh            chan *model.Request
 	blockWrites        int32
 	VlogReplayHead     model.ValuePtr
 	logRotates         int32
@@ -39,7 +41,6 @@ func Open(opt *lsm.Options) (*TrainKV, error, func() error) {
 	}
 	callBack, _ := lsm.CheckOpt(opt)
 	db := &TrainKV{Opt: opt}
-
 	fileLock := flock.New(filepath.Join(opt.WorkDir, common.LockFile))
 	hold, err := fileLock.TryLock()
 	if err != nil || !hold {
@@ -49,8 +50,15 @@ func Open(opt *lsm.Options) (*TrainKV, error, func() error) {
 	db.initVlog()
 	opt.DiscardStatsCh = &db.vlog.VLogFileDisCardStaInfo.FlushCh
 
+	db.Opt.TxnDoneIndexCh = make(chan uint64, 1)
 	db.Closer.memtable = utils.NewCloser(1)
 	db.Lsm = lsm.NewLSM(opt, db.Closer.memtable)
+
+	db.transactionManager = NewTransactionManager(opt)
+	db.transactionManager.nextTxnTs = db.MaxVersion()
+	db.transactionManager.startMark.Done(db.transactionManager.nextTxnTs)
+	db.transactionManager.commitMark.Done(db.transactionManager.nextTxnTs)
+	db.transactionManager.incrementNextTs()
 
 	db.Closer.valueGC = utils.NewCloser(1)
 	go db.vlog.waitOnGC(db.Closer.valueGC)
@@ -62,31 +70,35 @@ func Open(opt *lsm.Options) (*TrainKV, error, func() error) {
 		common.Panic(err)
 	}
 
-	db.Closer.compactors = utils.NewCloser(1)
+	db.Closer.compactors = utils.NewCloser(0)
 	go db.Lsm.StartCompacter(db.Closer.compactors)
 
-	// 1.接收 vlog GC 重写大量entry的写请求;
-	// 2.接收db.set(entry)的请求,使用通道的话,就不用加锁执行vlog.write();
-	db.writeCh = make(chan *Request, lsm.KvWriteChCapacity)
+	// 1.接收 vlog GC 重写大量entry[]的写请求;
+	// 2.接收 txn.set(entry)的请求,使用通道的话,就不用加锁执行vlog.write();
+	db.writeCh = make(chan *model.Request, lsm.KvWriteChCapacity)
 	db.Closer.writes = utils.NewCloser(1)
 	go db.handleWriteCh(db.Closer.writes)
 
 	return db, nil, callBack
 }
 
-func (db *TrainKV) Get(key []byte) (*model.Entry, error) {
-	if key == nil || len(key) == 0 {
+func (db *TrainKV) GetTransactionManager() *TransactionManager {
+	return db.transactionManager
+}
+
+func (db *TrainKV) Get(keyMaxStartTs []byte) (*model.Entry, error) {
+	if keyMaxStartTs == nil || len(keyMaxStartTs) == 0 {
 		return nil, common.ErrEmptyKey
 	}
-	internalKey := key
-	internalKey = model.KeyWithTs(internalKey, model.NewCurVersion())
 	var (
 		entry model.Entry
 		err   error
 	)
-	if entry, err = db.Lsm.Get(internalKey); err != nil {
+
+	if entry, err = db.Lsm.Get(keyMaxStartTs); err != nil {
 		return nil, err
 	}
+
 	if lsm.IsDeletedOrExpired(&entry) {
 		return nil, common.ErrKeyNotFound
 	}
@@ -101,8 +113,12 @@ func (db *TrainKV) Get(key []byte) (*model.Entry, error) {
 		}
 		entry.Value = model.SafeCopy(nil, read)
 	}
-	entry.Key = key
+	entry.Key = model.ParseKey(keyMaxStartTs)
 	return &entry, nil
+}
+
+func (db *TrainKV) MaxVersion() uint64 {
+	return db.Lsm.MaxVersion()
 }
 
 func (db *TrainKV) Set(entry *model.Entry) error {
@@ -111,27 +127,6 @@ func (db *TrainKV) Set(entry *model.Entry) error {
 	}
 	entry.Version = model.ParseTsVersion(entry.Key)
 	err := db.BatchSet([]*model.Entry{entry})
-	return err
-}
-
-func (db *TrainKV) SetToLSM(entry *model.Entry) error {
-	if entry.Key == nil || len(entry.Key) == 0 {
-		return common.ErrEmptyKey
-	}
-	var (
-		vp  *model.ValuePtr
-		err error
-	)
-	entry.Version = model.ParseTsVersion(entry.Key)
-	if db.ShouldWriteValueToLSM(entry) {
-	} else {
-		if vp, err = db.vlog.NewValuePtr(entry); err != nil {
-			return err
-		}
-		entry.Meta |= common.BitValuePointer
-		entry.Value = vp.Encode() // vlog位置信息进行编码
-	}
-	err = db.Lsm.Put(entry)
 	return err
 }
 
@@ -169,7 +164,7 @@ func (db *TrainKV) BatchSet(entries []*model.Entry) error {
 // 1. vlog.Re重放: openVlog() -> go vlog.flushDiscardStats(); 监听并收集vlog文件的GC信息, 必要时将序列化统计表数据, 发送到 db 的写通道中, 以便重启时可以直接获得;
 // 2. vlog.GC重写: db.batchSet(); 批处理(加速vlog GC重写速度), 将多个 []entry 写到指定通道中;
 // 3. db.set(): 串行化写流程,避免vlog和wal加锁;
-func (db *TrainKV) SendToWriteCh(entries []*model.Entry) (*Request, error) {
+func (db *TrainKV) SendToWriteCh(entries []*model.Entry) (*model.Request, error) {
 	var count, size int64
 	for _, entry := range entries {
 		size += int64(entry.EstimateSize(db.Opt.ValueThreshold))
@@ -178,7 +173,7 @@ func (db *TrainKV) SendToWriteCh(entries []*model.Entry) (*Request, error) {
 	if count >= db.Opt.MaxBatchCount || size >= db.Opt.MaxBatchSize {
 		return nil, common.ErrBatchTooLarge
 	}
-	request := RequestPool.Get().(*Request)
+	request := model.RequestPool.Get().(*model.Request)
 	request.Reset()
 	request.Entries = entries
 	request.Wg.Add(1)
@@ -191,7 +186,7 @@ func (db *TrainKV) handleWriteCh1(closer *utils.Closer) {
 	defer closer.Done()
 	blockChan := make(chan struct{}, 1) //限制:每次只允许一个协程去写数据;
 
-	writeRequest := func(reqs []*Request) {
+	writeRequest := func(reqs []*model.Request) {
 		if err := db.WriteRequest(reqs); err != nil {
 			common.Panic(err)
 		}
@@ -199,10 +194,10 @@ func (db *TrainKV) handleWriteCh1(closer *utils.Closer) {
 	}
 
 	reqLen := new(expvar.Int)
-	reqs := make([]*Request, 0, 10)
+	reqs := make([]*model.Request, 0, 10)
 
 	for {
-		var r *Request
+		var r *model.Request
 		select {
 		case r = <-db.writeCh:
 		case <-closer.CloseSignal:
@@ -243,7 +238,7 @@ func (db *TrainKV) handleWriteCh1(closer *utils.Closer) {
 
 	writeCse:
 		go writeRequest(reqs)
-		reqs = make([]*Request, 0, 10)
+		reqs = make([]*model.Request, 0, 10)
 		reqLen.Set(0)
 
 	} // for over
@@ -252,10 +247,10 @@ func (db *TrainKV) handleWriteCh1(closer *utils.Closer) {
 func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 	defer closer.Done()
 	var reqLen int64
-	reqs := make([]*Request, 0, 10)
+	reqs := make([]*model.Request, 0, 10)
 	blockChan := make(chan struct{}, 1) //限制:每次只允许一个协程去写数据;
 
-	writeRequest := func(reqs []*Request) {
+	writeRequest := func(reqs []*model.Request) {
 		if err := db.WriteRequest(reqs); err != nil {
 			common.Panic(err)
 		}
@@ -263,7 +258,7 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 	}
 
 	for {
-		var r *Request
+		var r *model.Request
 		select {
 		case <-closer.CloseSignal:
 			for {
@@ -285,7 +280,7 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 			if reqLen >= 3*common.KVWriteChRequestCapacity {
 				blockChan <- struct{}{}
 				go writeRequest(reqs)
-				reqs = make([]*Request, 0, 10)
+				reqs = make([]*model.Request, 0, 10)
 				reqLen = 0
 			}
 
@@ -295,7 +290,7 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 				reqLen = int64(len(reqs))
 			case blockChan <- struct{}{}:
 				go writeRequest(reqs)
-				reqs = make([]*Request, 0, 10)
+				reqs = make([]*model.Request, 0, 10)
 				reqLen = 0
 			case <-closer.CloseSignal:
 				for {
@@ -317,10 +312,11 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 }
 
 // WriteRequest is called serially by only one goroutine.
-// 1.各个vlog文件的失效数据统计表
-// 2.vlog GC重写的entry[]
-// 写完 vlog 后, 再逐一写到 lsm 中
-func (db *TrainKV) WriteRequest(reqs []*Request) error {
+// 1.会收到 各个vlog文件的失效数据统计表;
+// 2.会收到 vlog GC重写的entry[];
+// 3.会收到 txn 提交的 entry[];
+// 方法逻辑: 先写进 vlogFile, 后再写到 lsm 中;
+func (db *TrainKV) WriteRequest(reqs []*model.Request) error {
 	if len(reqs) == 0 {
 		return nil
 	}
@@ -345,7 +341,7 @@ func (db *TrainKV) WriteRequest(reqs []*Request) error {
 		count += len(req.Entries)
 		if err := db.writeToLSM(req); err != nil {
 			done(err)
-			return errors.Wrap(err, "writeRequests")
+			return errors.Wrap(err, "#WriteRequest.writeToLSM()")
 		}
 	}
 
@@ -353,17 +349,19 @@ func (db *TrainKV) WriteRequest(reqs []*Request) error {
 	return nil
 }
 
-func (db *TrainKV) writeToLSM(req *Request) error {
+func (db *TrainKV) writeToLSM(req *model.Request) error {
 	if len(req.ValPtr) != len(req.Entries) {
-		return errors.Errorf("Ptrs and Entries don't match: %+v", req)
+		return errors.Errorf("#writeToLSM: Ptrs and Entries don't match: %+v", req)
 	}
 	for i, entry := range req.Entries {
 		if db.ShouldWriteValueToLSM(entry) {
-			// nothing to do.
+			// 以防万一;
+			entry.Meta &= ^(common.BitValuePointer)
 		} else {
 			entry.Meta |= common.BitValuePointer
 			entry.Value = req.ValPtr[i].Encode()
 		}
+		// 确保写入的 entry 是安全的;
 		if err := db.Lsm.Put(entry); err != nil {
 			return err
 		}
@@ -372,21 +370,22 @@ func (db *TrainKV) writeToLSM(req *Request) error {
 }
 
 func (db *TrainKV) ShouldWriteValueToLSM(entry *model.Entry) bool {
-	return len(entry.Value) < db.Opt.ValueThreshold
+	return int64(len(entry.Value)) < db.Opt.ValueThreshold
 }
 
 func (db *TrainKV) initVlog() {
 	vlog := &ValueLog{
 		DirPath:    db.Opt.WorkDir,
-		Mux:        sync.RWMutex{},
+		filesLock:  sync.RWMutex{},
 		FilesToDel: make([]uint32, 0),
+		Opt:        db.Opt,
+		buf:        &bytes.Buffer{},
 		VLogFileDisCardStaInfo: &VLogFileDisCardStaInfo{
 			FileMap: make(map[uint32]int64),
 			FlushCh: make(chan map[uint32]int64, 16),
 		},
 	}
 	vlog.Db = db
-	vlog.Opt = db.Opt
 	db.vlog = vlog
 	vlog.GarbageCh = make(chan struct{}, 1) //一次只允许运行一个vlogGC协程;
 }
@@ -409,11 +408,54 @@ func (db *TrainKV) Close() error {
 	return nil
 }
 
-func BuildRequest(entries []*model.Entry) *Request {
-	request := RequestPool.Get().(*Request)
+func BuildRequest(entries []*model.Entry) *model.Request {
+	request := model.RequestPool.Get().(*model.Request)
 	request.Reset()
 	request.Entries = entries
 	request.Wg.Add(1)
 	request.IncrRef()
 	return request
+}
+
+type DBIterator struct {
+	iter      interfaces.Iterator
+	vlog      *ValueLog
+	lastKey   []byte
+	lastEntry model.Entry
+}
+
+func (db *TrainKV) NewDBIterator(opt *interfaces.Options) *DBIterator {
+	db.vlog.incrIteratorCount()
+	iters := make([]interfaces.Iterator, 0)
+	iters = append(iters, db.Lsm.NewLsmIterator(opt)...)
+	res := &DBIterator{
+		iter: lsm.NewMergingIterator(iters, opt),
+		vlog: db.vlog,
+	}
+	return res
+}
+func (dbIter *DBIterator) Name() string {
+	return "DBIterator"
+}
+func (dbIter *DBIterator) Next() {
+	dbIter.iter.Next()
+}
+func (dbIter *DBIterator) Seek(key []byte) {
+	dbIter.iter.Seek(key)
+}
+func (dbIter *DBIterator) Rewind() {
+	dbIter.iter.Rewind()
+}
+func (dbIter *DBIterator) Valid() bool {
+	return dbIter.iter.Valid()
+}
+func (dbIter *DBIterator) Item() interfaces.Item {
+	return dbIter.iter.Item()
+}
+func (dbIter *DBIterator) Close() error {
+	err := dbIter.vlog.decrIteratorCount()
+	if err != nil {
+		return err
+	}
+	return dbIter.iter.Close()
 }

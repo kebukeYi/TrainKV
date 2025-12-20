@@ -25,14 +25,13 @@ func OpenMmapFile(fileName string, flag int, maxSz int32) (*MmapFile, error) {
 	if flag == os.O_RDONLY {
 		writable = false
 	}
-
 	fi, err := fd.Stat()
 	if err != nil {
 		return nil, errors.Wrapf(err, "cannot stat file: %s", fileName)
 	}
 	fileSize := fi.Size()
-	if maxSz > 0 && fileSize == 0 {
-		// If file is empty, truncate it to sz.
+	if fileSize == 0 && maxSz > 0 {
+		// 说明是新创建文件流程, 进行截断文件;
 		if err := fd.Truncate(int64(maxSz)); err != nil {
 			return nil, errors.Wrapf(err, "error while truncation")
 		}
@@ -46,6 +45,7 @@ func OpenMmapFile(fileName string, flag int, maxSz int32) (*MmapFile, error) {
 		return nil, errors.Wrapf(err, "while mmapping %s with size: %d", fd.Name(), fileSize)
 	}
 
+	// 为了处理文件系统缓存或确保目录元数据正确更新;
 	if fileSize == 0 {
 		dir, _ := filepath.Split(fileName)
 		if err = SyncDir(dir); err != nil {
@@ -108,9 +108,8 @@ func (m *MmapFile) AppendBuffer(offset uint32, buf []byte) error {
 	}
 	dLen := copy(m.Buf[offset:end], buf)
 	if dLen != needSize {
-		return errors.Errorf("dLen != needSize AppendBuffer failed")
+		return errors.Errorf("#AppendBuffer dLen != needSize AppendBuffer failed")
 	}
-	buf = nil
 	return nil
 }
 

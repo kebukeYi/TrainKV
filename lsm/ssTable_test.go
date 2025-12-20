@@ -3,6 +3,7 @@ package lsm
 import (
 	"fmt"
 	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/interfaces"
 	"github.com/kebukeYi/TrainKV/model"
 	"github.com/kebukeYi/TrainKV/utils"
 	"os"
@@ -30,7 +31,7 @@ func TestOpenSStable(t *testing.T) {
 	if err := table.sst.Init(); err != nil {
 		common.Err(err)
 	}
-	iterator := table.NewTableIterator(&model.Options{IsAsc: true})
+	iterator := table.NewTableIterator(&interfaces.Options{IsAsc: true})
 	iterator.Rewind()
 	for iterator.Valid() {
 		entry := iterator.Item().Item

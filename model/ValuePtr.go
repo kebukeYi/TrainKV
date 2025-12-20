@@ -97,20 +97,18 @@ func IsDeletedOrExpired(meta byte, expiresAt uint64) bool {
 
 func IsDiscardEntry(vlogEntry, lsmEntry *Entry) bool {
 	vlogTs := ParseTsVersion(vlogEntry.Key)
-	lsmTs := lsmEntry.Version // 在跳表查询过程中,进行了 version字段 赋值;
+	lsmTs := ParseTsVersion(lsmEntry.Key)
 	if vlogTs != lsmTs {
-		// Version not found. Discard.
+		// 两者版本不一致; 没有找到对应的数据, 执行删除;
 		return true
 	}
+	// lsm 中存储的是 删除标记, 那么当前的 vlogEntry 可丢弃;
 	if IsDeletedOrExpired(lsmEntry.Meta, lsmEntry.ExpiresAt) {
 		return true
 	}
-	if lsmEntry.Value == nil || len(lsmEntry.Value) == 0 {
-		return true
-	}
-	// 是否 kv 分离数据
+
+	// 最新的值 不再是 指针类型, 可抛弃;
 	if (lsmEntry.Meta & common.BitValuePointer) == 0 {
-		// Key also stores the value in LSM. Discard.
 		// 说明 value 已经变成了 可存储在 lsm 中了, 那就需要将 vlog 中的数据进行删除;
 		return true
 	}

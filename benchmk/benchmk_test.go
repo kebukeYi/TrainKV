@@ -21,7 +21,7 @@ var benchMarkDir = "/usr/golanddata/triankv/benchmk2"
 var benchMarkOpt = &lsm.Options{
 	WorkDir:             benchMarkDir,
 	MemTableSize:        10 << 20, // 10MB; 64 << 20(64MB)
-	NumFlushMemtables:   10,       // 默认:15;
+	WaitFlushMemTables:  10,       // 默认:15;
 	BlockSize:           4 * 1024, // 4 * 1024;
 	BloomFalsePositive:  0.01,     // 误差率;
 	CacheNums:           1 * 1024, // 1024个

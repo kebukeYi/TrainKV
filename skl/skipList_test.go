@@ -33,7 +33,7 @@ func TestSkipList_Put(t *testing.T) {
 	// 写入 0-60
 	for i := putStart; i <= putEnd; i++ {
 		key := fmt.Sprintf("key%d", i)
-		key = string(model.KeyWithTs([]byte(key)))
+		key = string(model.KeyWithTs([]byte(key), 1))
 		val := fmt.Sprintf("val%d", i)
 		e := model.NewEntry([]byte(key), []byte(val))
 		e.ExpiresAt = uint64(i)
@@ -44,7 +44,7 @@ func TestSkipList_Put(t *testing.T) {
 	// 读取
 	for i := putStart; i <= putEnd; i++ {
 		key := fmt.Sprintf("key%d", i)
-		key = string(model.KeyWithTs([]byte(key)))
+		key = string(model.KeyWithTs([]byte(key), 1))
 		// 查询
 		valueExt := skipList.Get([]byte(key))
 		if valueExt.ExpiresAt != 0 {
@@ -62,7 +62,7 @@ func TestSkipListUpdate(t *testing.T) {
 	key := fmt.Sprintf("key%d", 60)
 	val := fmt.Sprintf("val%d", 60)
 	e := model.NewEntry([]byte(key), []byte(val))
-	e.Key = model.KeyWithTs(e.Key)
+	e.Key = model.KeyWithTs(e.Key, 1)
 	list.Put(e)
 	vs := list.Get(e.Key)
 	assert.Equal(t, e.Value, vs.Value)
@@ -73,7 +73,7 @@ func TestSkipListUpdate(t *testing.T) {
 
 	// update2
 	time.Sleep(100 * time.Millisecond)
-	e.Key = model.KeyWithTs([]byte(key))
+	e.Key = model.KeyWithTs([]byte(key), 1)
 	e.Value = []byte("val68")
 	list.Put(e)
 
@@ -106,11 +106,11 @@ func Benchmark_SkipListBasicCRUD(b *testing.B) {
 		key = fmt.Sprintf("key%d", i)
 		val = fmt.Sprintf("Val%d", i)
 
-		keyTs := string(model.KeyWithTs([]byte(key)))
+		keyTs := string(model.KeyWithTs([]byte(key), 1))
 		entry := model.NewEntry([]byte(keyTs), []byte(val))
 		list.Put(entry)
 
-		keyTs = string(model.KeyWithTs([]byte(key)))
+		keyTs = string(model.KeyWithTs([]byte(key), 1))
 		searchVal := list.Get([]byte(keyTs)).Value
 		//fmt.Printf("key: %s, value: %s \n", key, searchVal)
 		assert.Equal(b, searchVal, []byte(val))
@@ -129,7 +129,7 @@ func TestConcurrentBasic(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			l.Put(model.NewEntry(model.KeyWithTs(key(i)), key(i)))
+			l.Put(model.NewEntry(model.KeyWithTs(key(i), 1), key(i)))
 		}(i)
 	}
 	wg.Wait()
@@ -139,7 +139,7 @@ func TestConcurrentBasic(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			v := l.Get(model.KeyWithTs(key(i))).Value
+			v := l.Get(model.KeyWithTs(key(i), 1)).Value
 			require.EqualValues(t, key(i), v)
 			return
 
@@ -160,7 +160,7 @@ func Benchmark_ConcurrentBasic(b *testing.B) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			l.Put(model.NewEntry(model.KeyWithTs(key(i)), key(i)))
+			l.Put(model.NewEntry(model.KeyWithTs(key(i), 1), key(i)))
 		}(i)
 	}
 	wg.Wait()
@@ -170,7 +170,7 @@ func Benchmark_ConcurrentBasic(b *testing.B) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			v := l.Get(model.KeyWithTs(key(i))).Value
+			v := l.Get(model.KeyWithTs(key(i), 1)).Value
 			require.EqualValues(b, key(i), v)
 			require.NotNil(b, v)
 		}(i)
@@ -182,11 +182,11 @@ func TestSkipListIterator(t *testing.T) {
 	list := NewSkipList(100000)
 
 	//Put & Get
-	entry1 := model.NewEntry(model.KeyWithTs([]byte(RandString(10))), []byte(RandString(10)))
+	entry1 := model.NewEntry(model.KeyWithTs([]byte(RandString(10)), 1), []byte(RandString(10)))
 	list.Put(entry1)
 	assert.Equal(t, entry1.Value, list.Get(entry1.Key).Value)
 
-	entry2 := model.NewEntry(model.KeyWithTs([]byte(RandString(10))), []byte(RandString(10)))
+	entry2 := model.NewEntry(model.KeyWithTs([]byte(RandString(10)), 1), []byte(RandString(10)))
 	list.Put(entry2)
 	assert.Equal(t, entry2.Value, list.Get(entry2.Key).Value)
 
@@ -225,7 +225,7 @@ func TestDrawList(t *testing.T) {
 	for i := 0; i < n; i++ {
 		index := strconv.Itoa(r.Intn(90) + 10)
 		key := index + RandString(8)
-		entryRand := model.NewEntry(model.KeyWithTs([]byte(key)), []byte(index))
+		entryRand := model.NewEntry(model.KeyWithTs([]byte(key), 1), []byte(index))
 		list.Put(entryRand)
 	}
 	list.Draw(true)

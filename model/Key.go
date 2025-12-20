@@ -3,16 +3,9 @@ package model
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
-	"github.com/kebukeYi/TrainKV/common"
+	"math"
 	"time"
 )
-
-// CompareKeyNoTs skipList.key()  table.biggestKey()  block.baseKey()
-func CompareKeyNoTs(key1, key2 []byte) int {
-	common.CondPanic(len(key1) <= 8 || len(key2) <= 8, fmt.Errorf("%s,%s < 8", string(key1), string(key2)))
-	return bytes.Compare(key1[:len(key1)-8], key2[:len(key2)-8])
-}
 
 // CompareKeyWithTs MergeIterator.fix()使用; ok
 func CompareKeyWithTs(key1, key2 []byte) int {
@@ -29,7 +22,7 @@ func ParseTsVersion(key []byte) uint64 {
 		return 0
 	}
 	ts := binary.BigEndian.Uint64(key[len(key)-8:])
-	return ts
+	return math.MaxUint64 - ts
 }
 
 // ParseKey 祛除掉版本信息之后的key;
@@ -50,7 +43,7 @@ func SameKeyNoTs(src, dst []byte) bool {
 func KeyWithTs(key []byte, ts uint64) []byte {
 	out := make([]byte, len(key)+8)
 	copy(out, key)
-	binary.BigEndian.PutUint64(out[len(key):], ts)
+	binary.BigEndian.PutUint64(out[len(key):], math.MaxUint64-ts)
 	return out
 }
 
@@ -61,13 +54,12 @@ func KeyWithTestTs(key []byte, version uint64) []byte {
 	return out
 }
 
-func SafeCopy(des, src []byte) []byte {
-	des = make([]byte, len(src))
-	copy(des, src)
-	return des
+func SafeCopy(dst, src []byte) []byte {
+	dst = make([]byte, len(src))
+	copy(dst, src)
+	return dst
 }
 
 func NewCurVersion() uint64 {
-	// return uint64(time.Now().UnixNano() / 1e9)
 	return uint64(time.Now().UnixNano())
 }

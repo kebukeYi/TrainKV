@@ -17,7 +17,7 @@ var (
 	vlogOpt = &lsm.Options{
 		WorkDir:             vlogTestPath,
 		MemTableSize:        10 << 10, // 10KB; 64 << 20(64MB)
-		NumFlushMemtables:   1,        // 默认：15;
+		WaitFlushMemTables:  1,        // 默认：15;
 		BlockSize:           2 * 1024, // 4 * 1024
 		BloomFalsePositive:  0.01,     // 误差率
 		CacheNums:           1 * 1024, // 10240个
@@ -56,10 +56,10 @@ func TestValueLog_Entry(t *testing.T) {
 	}
 
 	// 构建一个批量请求的request
-	b := new(Request)
+	b := new(model.Request)
 	b.Entries = []*model.Entry{e2}
 	// 直接写入vlog中
-	log.Write([]*Request{b})
+	log.Write([]*model.Request{b})
 	// 从vlog中使用 value ptr指针中查询写入的分段vlog文件
 	buf1, lf1, err1 := log.ReadValueBytes(b.ValPtr[0])
 	defer lf1.Lock.RUnlock()
@@ -84,7 +84,7 @@ func TestVlogBase(t *testing.T) {
 	// 创建一个简单的kv entry对象
 	const val1 = "sampleval012345678901234567890123"
 	const val2 = "samplevalb012345678901234567890123"
-	require.True(t, len(val1) >= db.Opt.ValueThreshold)
+	require.True(t, int64(len(val1)) >= db.Opt.ValueThreshold)
 
 	e1 := &model.Entry{
 		Key:   []byte("samplekey"),
@@ -98,11 +98,11 @@ func TestVlogBase(t *testing.T) {
 	}
 
 	// 构建一个批量请求的request
-	b := new(Request)
+	b := new(model.Request)
 	b.Entries = []*model.Entry{e1, e2}
 
 	// 直接写入vlog中
-	log.Write([]*Request{b})
+	log.Write([]*model.Request{b})
 	require.Len(t, b.ValPtr, 2)
 	fmt.Printf("Pointer written: %+v %+v\n", b.ValPtr[0], b.ValPtr[1])
 
@@ -182,7 +182,7 @@ func TestValueGC(t *testing.T) {
 			fmt.Printf("err:%s when key is:%s\n", err, e.Key)
 		}
 		value := getItemValue(t, item)
-		if len(value) > vlogOpt.ValueThreshold {
+		if int64(len(value)) > vlogOpt.ValueThreshold {
 			value = nil
 		}
 		fmt.Printf("key:%s, val:%s, err:%s\n", e.Key, value, err)

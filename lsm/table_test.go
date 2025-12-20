@@ -3,6 +3,7 @@ package lsm
 import (
 	"fmt"
 	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/interfaces"
 	"github.com/kebukeYi/TrainKV/model"
 	"github.com/kebukeYi/TrainKV/utils"
 	"github.com/stretchr/testify/require"
@@ -19,7 +20,7 @@ func getTestTableOptions() *Options {
 	return &Options{
 		WorkDir:             sstTestPath,
 		MemTableSize:        10 << 10, // 10KB; 64 << 20(64MB)
-		NumFlushMemtables:   1,        // 默认：15;
+		WaitFlushMemTables:  1,        // 默认：15;
 		BlockSize:           2 * 1024, // 4 * 1024
 		BloomFalsePositive:  0.01,     // 误差率
 		CacheNums:           1 * 1024, // 10240个
@@ -77,7 +78,7 @@ func buildTable(t *testing.T, keyValues [][]string, opts *Options) *Table {
 	})
 	for _, kv := range keyValues {
 		e := model.Entry{
-			Key:   model.KeyWithTs([]byte(kv[0])),
+			Key:   model.KeyWithTs([]byte(kv[0]), 1),
 			Value: []byte(kv[1]),
 		}
 		builder.Add(&e, false)
@@ -91,12 +92,12 @@ func TestTable(t *testing.T) {
 	clearDir(opts.WorkDir)
 	table := buildTestTable(t, "tableKey", 10000, opts)
 	defer func() { require.NoError(t, table.DecrRef()) }()
-	ti := table.NewTableIterator(&model.Options{IsAsc: true})
+	ti := table.NewTableIterator(&interfaces.Options{IsAsc: true})
 	defer ti.Close()
 	kid := 1010
 	//seek := y.KeyWithTs([]byte(key("key", kid)), opts.testVersion)
 	//seek := y.KeyWithTs([]byte(key("key", kid)), 10)
-	seek := model.KeyWithTs([]byte(key("tableKey", kid)))
+	seek := model.KeyWithTs([]byte(key("tableKey", kid)), 1)
 	ti.Seek(seek)
 	for ; ti.Valid(); ti.Next() {
 		k := ti.Item().Item.Key
@@ -110,11 +111,11 @@ func TestTable(t *testing.T) {
 
 	// 要搜寻的key太小找不到, 迭代器会返回当前table的最小值,但不是其要查找的值;
 	// 因此迭代器有效,但返回的值无效;
-	ti.Seek(model.KeyWithTs([]byte(key("key", 99999))))
+	ti.Seek(model.KeyWithTs([]byte(key("key", 99999)), 1))
 	fmt.Printf("It`s Key: %v", string(model.ParseKey(ti.it.Item.Key)))
 
 	// 要搜寻的key太大找不到, 迭代器会返回当前table的最大值,但不是其要查找的值;
-	ti.Seek(model.KeyWithTs([]byte(key("zzzzzzzzkey", 1111))))
+	ti.Seek(model.KeyWithTs([]byte(key("zzzzzzzzkey", 1111)), 1))
 	fmt.Printf("It`s Key: %v", string(model.ParseKey(ti.Item().Item.Key)))
 }
 
@@ -125,12 +126,12 @@ func TestTableIterator(t *testing.T) {
 			clearDir(opts.WorkDir)
 			table := buildTestTable(t, "key", n, opts)
 			defer func() { require.NoError(t, table.DecrRef()) }()
-			it := table.NewTableIterator(&model.Options{IsAsc: true})
+			it := table.NewTableIterator(&interfaces.Options{IsAsc: true})
 			defer it.Close()
 			count := 0
 			for it.Rewind(); it.Valid(); it.Next() {
 				v := it.Item().Item
-				k := model.KeyWithTs([]byte(key("key", count)))
+				k := model.KeyWithTs([]byte(key("key", count)), 1)
 				fmt.Printf("seekKey: %v, val: %v,version:%d, count: %v; \n",
 					string(model.ParseKey(k)), v.Value, v.Version, count)
 				count++
@@ -147,7 +148,7 @@ func TestSeek(t *testing.T) {
 	table := buildTestTable(t, "k", 10000, opts)
 	defer func() { require.NoError(t, table.DecrRef()) }()
 
-	it := table.NewTableIterator(&model.Options{IsAsc: true})
+	it := table.NewTableIterator(&interfaces.Options{IsAsc: true})
 	defer it.Close()
 
 	var data = []struct {
@@ -165,7 +166,7 @@ func TestSeek(t *testing.T) {
 	}
 
 	for _, tt := range data {
-		it.Seek(model.KeyWithTs([]byte(tt.in)))
+		it.Seek(model.KeyWithTs([]byte(tt.in), 1))
 		if !tt.valid {
 			// require.False(t, it.Valid())
 			fmt.Printf("error: seekKey: %v, val: %v;\n", tt.in, it.Item().Item.Value)
@@ -185,7 +186,7 @@ func TestConcatIteratorOneTable(t *testing.T) {
 	}, opts)
 	defer func() { require.NoError(t, tbl.DecrRef()) }()
 
-	it := NewConcatIterator([]*Table{tbl}, &model.Options{IsAsc: true})
+	it := NewConcatIterator([]*Table{tbl}, &interfaces.Options{IsAsc: true})
 	defer it.Close()
 
 	it.Rewind()
@@ -208,7 +209,7 @@ func TestConcatIterator(t *testing.T) {
 	defer func() { require.NoError(t, tbl3.DecrRef()) }()
 
 	{
-		it := NewConcatIterator([]*Table{tbl, tbl2, tbl3}, &model.Options{IsAsc: true})
+		it := NewConcatIterator([]*Table{tbl, tbl2, tbl3}, &interfaces.Options{IsAsc: true})
 		defer it.Close()
 		it.Rewind()
 		require.True(t, it.Valid())
@@ -221,23 +222,23 @@ func TestConcatIterator(t *testing.T) {
 			count++
 		}
 
-		it.Seek(model.KeyWithTs([]byte("a")))
+		it.Seek(model.KeyWithTs([]byte("a"), 1))
 		require.EqualValues(t, "keya0000", string(model.ParseKey(it.Key())))
 		require.EqualValues(t, "0", it.Value())
 
-		it.Seek(model.KeyWithTs([]byte("keyb")))
+		it.Seek(model.KeyWithTs([]byte("keyb"), 1))
 		require.EqualValues(t, "keyb0000", string(model.ParseKey(it.Key())))
 		require.EqualValues(t, "0", it.Value())
 
-		it.Seek(model.KeyWithTs([]byte("keyb9999b")))
+		it.Seek(model.KeyWithTs([]byte("keyb9999b"), 1))
 		require.EqualValues(t, "keyc0000", string(model.ParseKey(it.Key())))
 		require.EqualValues(t, "0", it.Value())
 
-		it.Seek(model.KeyWithTs([]byte("keyd")))
+		it.Seek(model.KeyWithTs([]byte("keyd"), 1))
 	}
 
 	{
-		it := NewConcatIterator([]*Table{tbl, tbl2, tbl3}, &model.Options{IsAsc: false})
+		it := NewConcatIterator([]*Table{tbl, tbl2, tbl3}, &interfaces.Options{IsAsc: false})
 		defer it.Close()
 		it.Rewind()
 		require.True(t, it.Valid())
@@ -248,16 +249,16 @@ func TestConcatIterator(t *testing.T) {
 			count++
 		}
 
-		it.Seek(model.KeyWithTs([]byte("a")))
+		it.Seek(model.KeyWithTs([]byte("a"), 1))
 		require.False(t, it.Valid())
 
-		it.Seek(model.KeyWithTs([]byte("keyb")))
+		it.Seek(model.KeyWithTs([]byte("keyb"), 1))
 		require.EqualValues(t, "keya0009", string(model.ParseKey(it.Key())))
 
-		it.Seek(model.KeyWithTs([]byte("keyb0009b")))
+		it.Seek(model.KeyWithTs([]byte("keyb0009b"), 1))
 		require.EqualValues(t, "keyb0009", string(model.ParseKey(it.Key())))
 
-		it.Seek(model.KeyWithTs([]byte("keyd")))
+		it.Seek(model.KeyWithTs([]byte("keyd"), 1))
 		require.EqualValues(t, "keyc0009", string(model.ParseKey(it.Key())))
 	}
 }
@@ -291,9 +292,9 @@ func TestMergingIterator(t *testing.T) {
 		{"k5", "a5"},
 	}
 
-	it1 := tbl1.NewTableIterator(&model.Options{IsAsc: true})
-	it2 := NewConcatIterator([]*Table{tbl2}, &model.Options{IsAsc: true})
-	it := NewMergeIterator([]model.Iterator{it1, it2}, false)
+	it1 := tbl1.NewTableIterator(&interfaces.Options{IsAsc: true})
+	it2 := NewConcatIterator([]*Table{tbl2}, &interfaces.Options{IsAsc: true})
+	it := NewMergeIterator([]interfaces.Iterator{it1, it2}, false)
 	defer it.Close()
 
 	var i int

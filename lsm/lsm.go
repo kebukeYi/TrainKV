@@ -10,13 +10,12 @@ import (
 
 type LSM struct {
 	sync.RWMutex
-	memoryTable    *memoryTable
-	immemoryTables []*memoryTable
+	memoryTable    *MemoryTable
+	immemoryTables []*MemoryTable
 	LevelManger    *LevelsManger
 	option         *Options
-	maxMemFID      uint32
 
-	flushMemTable chan *memoryTable
+	flushMemTable chan *MemoryTable
 
 	ExpiredValPtrChan chan model.ValuePtr // compact`MergeIterator`fix() to lsm;
 	ExpiredValNum     int
@@ -26,7 +25,7 @@ type LSM struct {
 func NewLSM(opt *Options, closer *utils.Closer) *LSM {
 	lsm := &LSM{
 		option:        opt,
-		flushMemTable: make(chan *memoryTable, opt.NumFlushMemtables),
+		flushMemTable: make(chan *MemoryTable, opt.WaitFlushMemTables),
 	}
 	// 1. 更新 lm.maxID
 	lsm.LevelManger = lsm.InitLevelManger(opt)
@@ -47,7 +46,7 @@ func (lsm *LSM) Put(entry *model.Entry) (err error) {
 	}
 
 	if int64(lsm.memoryTable.wal.Size())+int64(EstimateWalEncodeSize(entry)) > lsm.option.MemTableSize {
-		//fmt.Printf("memtable is full, rotate memtable when cur entry key:%s | meta:%d | value: %s ;\n", model.ParseKey(entry.Key), entry.Meta, entry.Value)
+		// fmt.Printf("memtable is full, rotate memtable when cur entry key:%s | meta:%d | value: %s ;\n", model.ParseKey(entry.Key), entry.Meta, entry.Value)
 		lsm.Rotate()
 	}
 
@@ -67,22 +66,65 @@ func (lsm *LSM) Get(keyTs []byte) (model.Entry, error) {
 		return model.Entry{Version: 0}, common.ErrEmptyKey
 	}
 	var (
-		entry model.Entry
-		err   error
+		maxEntryTs model.Entry
 	)
-	// 1. 跳表中,对返回的near节点进行对比时, key 是去掉Ts时间戳的, 相同直接返回,将不再继续向level层寻找;否则继续向level层寻找;
-	entry, err = lsm.memoryTable.Get(keyTs)
-	if entry.Version != 0 {
-		return entry, err
-	}
-	// 2. 在等待持久化 immemoryTables 中进行寻找;
-	for i := len(lsm.immemoryTables) - 1; i >= 0; i-- {
-		if entry, err = lsm.immemoryTables[i].Get(keyTs); entry.Version != 0 {
-			return entry, err
+	memoryTales, callBack := lsm.getAllMemoryTales()
+	defer callBack()
+	startTs := model.ParseTsVersion(keyTs)
+	for _, memoryTable := range memoryTales {
+		// 1. 跳表中对返回的near节点进行对比时, key 是去掉Ts时间戳的, 相同直接返回,将不再继续向level层寻找;
+		// 否则向level--层寻找;
+		entry, _ := memoryTable.Get(keyTs)
+		if entry.Version == 0 {
+			continue
+		}
+		if entry.Version == startTs {
+			return entry, nil
+		}
+		if entry.Version > maxEntryTs.Version {
+			maxEntryTs = entry
+		}
+	} // skipList over
+	// 2. level 0-7 层 进行寻找;
+	return lsm.LevelManger.Get(keyTs, &maxEntryTs)
+}
+
+func (lsm *LSM) MaxVersion() uint64 {
+	var maxVersion uint64
+	maxVersion = lsm.memoryTable.maxVersion
+	for _, table := range lsm.immemoryTables {
+		if table.maxVersion > maxVersion {
+			maxVersion = table.maxVersion
 		}
 	}
-	// 3. level 0-7层 进行寻找;
-	return lsm.LevelManger.Get(keyTs)
+	for i := 0; i < common.MaxLevelNum; i++ {
+		tables := lsm.LevelManger.levelHandlers[i].tables
+		for _, table := range tables {
+			if table.MaxVersion() > maxVersion {
+				maxVersion = table.MaxVersion()
+			}
+		}
+	}
+	return maxVersion
+}
+
+func (lsm *LSM) getAllMemoryTales() ([]*MemoryTable, func()) {
+	lsm.Lock()
+	defer lsm.Unlock()
+	tables := make([]*MemoryTable, 0)
+	tables = append(tables, lsm.memoryTable)
+	lsm.memoryTable.IncrRef()
+
+	last := len(lsm.immemoryTables) - 1
+	for i := last; i >= 0; i-- {
+		tables = append(tables, lsm.immemoryTables[i])
+		lsm.immemoryTables[i].IncrRef()
+	}
+	return tables, func() {
+		for _, t := range tables {
+			t.DecrRef()
+		}
+	}
 }
 
 func (lsm *LSM) MemSize() int64 {
@@ -103,12 +145,13 @@ func (lsm *LSM) Rotate() {
 	lsm.immemoryTables = append(lsm.immemoryTables, lsm.memoryTable)
 	lsm.memoryTable = lsm.NewMemoryTable()
 	lsm.Unlock()
+	// 通道有可能阻塞;
 	lsm.flushMemTable <- im
 }
 
 func (lsm *LSM) StartFlushMemTable(closer *utils.Closer) {
 	defer closer.Done()
-	flushIMemoryTable := func(im *memoryTable) {
+	flushIMemoryTable := func(im *MemoryTable) {
 		if im == nil {
 			return
 		}
@@ -120,6 +163,7 @@ func (lsm *LSM) StartFlushMemTable(closer *utils.Closer) {
 		im.skipList.DecrRef()
 		lsm.Unlock()
 	}
+
 	for {
 		select {
 		case im := <-lsm.flushMemTable:
@@ -139,7 +183,7 @@ func (lsm *LSM) CloseFlushIMemChan() {
 
 func (lsm *LSM) StartCompacter(closer *utils.Closer) {
 	n := lsm.option.NumCompactors
-	closer.Add(n - 1)
+	closer.Add(n)
 	for coroutineID := 0; coroutineID < n; coroutineID++ {
 		go lsm.LevelManger.runCompacter(coroutineID, closer)
 	}

@@ -45,9 +45,9 @@ type LimitMark struct {
 	doneIndex atomic.Uint64
 }
 
-func (lm *LimitMark) Init(closer *Closer) {
+func (lm *LimitMark) Init(closer *Closer, doneIndexCh chan uint64) {
 	lm.markCh = make(chan mark, 100)
-	go lm.processOn(closer)
+	go lm.processOn(closer, doneIndexCh)
 }
 
 func (lm *LimitMark) Begin(x uint64) {
@@ -94,7 +94,7 @@ func (lm *LimitMark) WaitForIndexDone(ctx context.Context, index uint64) error {
 	}
 }
 
-func (lm *LimitMark) processOn(closer *Closer) {
+func (lm *LimitMark) processOn(closer *Closer, doneIndexCh chan uint64) {
 	defer closer.Done()
 
 	var minHeap minHeap
@@ -140,6 +140,11 @@ func (lm *LimitMark) processOn(closer *Closer) {
 		if curIndex != doneIndex {
 			swapped := lm.doneIndex.CompareAndSwap(doneIndex, curIndex)
 			AssertTrue(swapped)
+			if doneIndexCh != nil {
+				go func() {
+					doneIndexCh <- curIndex
+				}()
+			}
 		}
 
 		notifyAndRemove := func(index uint64, toNotify []chan struct{}) {

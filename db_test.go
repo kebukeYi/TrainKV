@@ -1,9 +1,9 @@
 package TrainKV
 
 import (
-	"encoding/binary"
 	"fmt"
 	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/interfaces"
 	"github.com/kebukeYi/TrainKV/lsm"
 	"github.com/kebukeYi/TrainKV/model"
 	"github.com/kebukeYi/TrainKV/utils"
@@ -19,7 +19,7 @@ var dbTestPath = "/usr/golanddata/trainkv/db"
 var dbTestOpt = &lsm.Options{
 	WorkDir:             dbTestPath,
 	MemTableSize:        10 << 10, // 10KB; 64 << 20(64MB)
-	NumFlushMemtables:   10,       // 默认:15;
+	WaitFlushMemTables:  10,       // 默认:15;
 	BlockSize:           2 * 1024, // 4 * 1024;
 	BloomFalsePositive:  0.01,     // 误差率;
 	CacheNums:           1 * 1024, // 10240个
@@ -64,7 +64,7 @@ func TestOpenTrainDBOpt(t *testing.T) {
 		}
 	}()
 	fmt.Println("=============db.Iterator=========================================")
-	iter := db.NewDBIterator(&model.Options{IsAsc: true})
+	iter := db.NewDBIterator(&interfaces.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
 	iter.Rewind()
 	for iter.Valid() {
@@ -156,7 +156,7 @@ func TestAPI(t *testing.T) {
 	}
 
 	fmt.Println("=========================iter(41-60 70-90)===========================")
-	iter := db.NewDBIterator(&model.Options{IsAsc: true})
+	iter := db.NewDBIterator(&interfaces.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
 	iter.Rewind()
 	for iter.Valid() {
@@ -190,7 +190,7 @@ func TestReStart(t *testing.T) {
 		}
 	}
 	fmt.Println("=============db.Iterator=========================================")
-	iter := db.NewDBIterator(&model.Options{IsAsc: true})
+	iter := db.NewDBIterator(&interfaces.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
 	iter.Rewind()
 	for iter.Valid() {
@@ -230,7 +230,7 @@ func TestWriteRequest(t *testing.T) {
 		e.Version = 1
 		e.Key = model.KeyWithTs(e.Key, model.NewCurVersion())
 		request := BuildRequest([]*model.Entry{e})
-		if err := db.WriteRequest([]*Request{request}); err != nil {
+		if err := db.WriteRequest([]*model.Request{request}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -252,7 +252,7 @@ func TestWriteRequest(t *testing.T) {
 		e := model.NewEntry([]byte(key), nil)
 		e.Key = model.KeyWithTs(e.Key, model.NewCurVersion())
 		e.Meta = common.BitDelete
-		if err := db.WriteRequest([]*Request{BuildRequest([]*model.Entry{e})}); err != nil {
+		if err := db.WriteRequest([]*model.Request{BuildRequest([]*model.Entry{e})}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -266,7 +266,7 @@ func TestWriteRequest(t *testing.T) {
 		e := model.NewEntry([]byte(key), []byte(val))
 		e.Version = 3
 		e.Key = model.KeyWithTs(e.Key, model.NewCurVersion())
-		if err := db.WriteRequest([]*Request{BuildRequest([]*model.Entry{e})}); err != nil {
+		if err := db.WriteRequest([]*model.Request{BuildRequest([]*model.Entry{e})}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -283,7 +283,7 @@ func TestWriteRequest(t *testing.T) {
 	}
 
 	fmt.Println("=========================iter(41-60 70-90)===========================")
-	iter := db.NewDBIterator(&model.Options{IsAsc: true})
+	iter := db.NewDBIterator(&interfaces.Options{IsAsc: true})
 	defer func() { _ = iter.Close() }()
 	iter.Rewind()
 	for iter.Valid() {
@@ -298,8 +298,7 @@ func TestWriteRequest(t *testing.T) {
 }
 
 func TestConcurrentWrite(t *testing.T) {
-	runBadgerTest(t, nil, func(t *testing.T, db *TrainKV) {
-		// Not a benchmark. Just a simple test for concurrent writes.
+	runTrainKVTest(t, nil, func(t *testing.T, db *TrainKV) {
 		n := 20
 		m := 500
 		var wg sync.WaitGroup
@@ -324,7 +323,7 @@ func TestConcurrentWrite(t *testing.T) {
 
 		t.Log("Starting iteration")
 
-		it := db.NewDBIterator(&model.Options{IsAsc: true})
+		it := db.NewDBIterator(&interfaces.Options{IsAsc: true})
 		defer it.Close()
 		var i, j int
 		it.Rewind()
@@ -352,7 +351,7 @@ func TestConcurrentWrite(t *testing.T) {
 	})
 }
 
-func runBadgerTest(t *testing.T, opts *lsm.Options, test func(t *testing.T, db *TrainKV)) {
+func runTrainKVTest(t *testing.T, opts *lsm.Options, test func(t *testing.T, db *TrainKV)) {
 	if opts == nil {
 		opts = &lsm.Options{}
 		opts = lsm.GetDefaultOpt("")
@@ -360,7 +359,7 @@ func runBadgerTest(t *testing.T, opts *lsm.Options, test func(t *testing.T, db *
 	var err error
 	var dir string
 	if opts.WorkDir == "" {
-		dir, err = os.MkdirTemp("F:\\ProjectsData\\golang\\TrainDB\\test\\db", "runBadgerTest-")
+		dir, err = os.MkdirTemp("F:\\ProjectsData\\golang\\TrainKV\\test\\db", "runTrainKVTest-")
 		opts.WorkDir = dir
 	} else {
 		dir = opts.WorkDir
@@ -375,17 +374,13 @@ func runBadgerTest(t *testing.T, opts *lsm.Options, test func(t *testing.T, db *
 	test(t, db)
 }
 
-// createTableWithRange function is used in TestCompactionFilePicking. It creates
-// a table with key starting from start and ending with end.
-func CreateTableWithRange(t *testing.T, db *TrainKV, start, end int) *lsm.Table {
+func CreateTableWithRange(t *testing.T, db *TrainKV, key []byte, start, end int) *lsm.Table {
 	builder := lsm.NewSSTBuilder(db.Opt)
 	nums := []int{start, end}
 	for _, i := range nums {
-		Key := make([]byte, 8)
-		binary.BigEndian.PutUint64(Key[:], uint64(i))
-		Key = model.KeyWithTs(Key, model.NewCurVersion())
-		val := []byte(fmt.Sprintf("%d", i))
-		e := &model.Entry{Key: Key, Value: val}
+		key = model.KeyWithTs(key, uint64(i))
+		val := []byte(fmt.Sprintf("value-%d", i))
+		e := &model.Entry{Key: key, Value: val}
 		builder.Add(e, false)
 	}
 

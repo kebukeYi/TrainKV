@@ -3,6 +3,7 @@ package lsm
 import (
 	"errors"
 	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/interfaces"
 	"github.com/kebukeYi/TrainKV/model"
 	"github.com/stretchr/testify/require"
 	"testing"
@@ -16,7 +17,7 @@ var compactTestPath = "/usr/golanddata/trainkv/compact"
 var compactOptions = &Options{
 	WorkDir:             compactTestPath,
 	MemTableSize:        10 << 10, // 10KB; 64 << 20(64MB)
-	NumFlushMemtables:   1,        // 默认：15;
+	WaitFlushMemTables:  1,        // 默认：15;
 	BlockSize:           2 * 1024, // 4 * 1024
 	BloomFalsePositive:  0.01,     // 误差率
 	CacheNums:           1 * 1024, // 10240个
@@ -696,7 +697,7 @@ func TestCompaction(t *testing.T) {
 }
 
 func getAllAndCheck(t *testing.T, lsm *LSM, expected []keyValVersion) {
-	newLsmIterator := lsm.NewLsmIterator(&model.Options{IsAsc: true})
+	newLsmIterator := lsm.NewLsmIterator(&interfaces.Options{IsAsc: true})
 	it := NewMergeIterator(newLsmIterator, false)
 	defer it.Close()
 	i := 0

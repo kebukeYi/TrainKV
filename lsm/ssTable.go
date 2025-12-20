@@ -22,6 +22,7 @@ type SSTable struct {
 	file           *file.MmapFile
 	maxKey         []byte
 	minKey         []byte
+	MaxVersion     uint64
 	tableIndex     *pb.TableIndex
 	hasBloomFilter bool
 	idxOffset      int
@@ -82,6 +83,7 @@ func (sst *SSTable) initTable() (firstBlock *pb.BlockOffset, err error) {
 		return nil, err
 	}
 	sst.tableIndex = indexTable
+	sst.MaxVersion = sst.tableIndex.MaxVersion
 	sst.hasBloomFilter = len(indexTable.BloomFilter) > 0
 	if len(indexTable.GetOffsets()) > 0 {
 		return indexTable.GetOffsets()[0], nil

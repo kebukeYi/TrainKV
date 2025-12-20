@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/interfaces"
 	"github.com/kebukeYi/TrainKV/model"
 	"github.com/kebukeYi/TrainKV/pb"
 	"github.com/kebukeYi/TrainKV/utils"
@@ -26,8 +27,8 @@ type compactionPriority struct {
 
 type targets struct {
 	dstLevelId       int
-	levelTargetSSize []int64 // 对应层中所有 .sst 文件的期望总大小; 用于计算 每层的优先级;
-	fileSize         []int64 // 对应层中单个 .sst 文件的期望大小; 用于设定 合并的生成的目标 sst 文件大小;
+	levelTargetSSize []int64 // 对应 层中所有 .sst 文件的期望总大小; 用于计算 每层的优先级;
+	fileSize         []int64 // 对应 层中单个 .sst 文件的期望大小; 用于设定 合并的生成的目标 sst 文件大小;
 }
 
 type compactDef struct {
@@ -59,6 +60,13 @@ func (cd *compactDef) unlockLevel() {
 	cd.nextLevel.mux.RUnlock()
 }
 
+func (cd *compactDef) allTables() []*Table {
+	tables := make([]*Table, len(cd.thisTables)+len(cd.nextTables))
+	tables = append(tables, cd.thisTables...)
+	tables = append(tables, cd.nextTables...)
+	return tables
+}
+
 // 1. 启动压缩
 func (lm *LevelsManger) runCompacter(compactorId int, closer *utils.Closer) {
 	defer closer.Done()
@@ -84,13 +92,15 @@ func (lm *LevelsManger) runCompacter(compactorId int, closer *utils.Closer) {
 }
 
 func (lm *LevelsManger) runOnce(compactorId int) bool {
+	// 计算各个level的待合并分数; 按照大小排列,
 	prios := lm.pickCompactLevels()
+	// 如果是0号协程, 那么就优先合并 l0 层;
 	if compactorId == 0 {
+		// 将 合并level-0层的优先级调高;
 		prios = moveL0toFront(prios)
 	}
 	for _, prio := range prios {
 		if prio.levelId == 0 && compactorId == 0 {
-
 		} else if prio.adjusted < 1.0 {
 			break
 		}
@@ -119,7 +129,7 @@ func moveL0toFront(prios []compactionPriority) []compactionPriority {
 }
 
 func (lm *LevelsManger) run(compactorId int, prio compactionPriority) bool {
-	// id是协程id, for:p 是将要参与合并的 X层源头层级, 此时目标 Y层 已经找好了;
+	// compactorId, for:p 是将要参与合并的 X层源头层级, 此时目标 Y层 已经找好了;
 	// X层: l0层
 	// X层: ln层
 	err := lm.doCompact(compactorId, prio)
@@ -141,15 +151,19 @@ func (lm *LevelsManger) levelTargets() targets {
 		}
 		return sz
 	}
+
 	dst := targets{
 		levelTargetSSize: make([]int64, len(lm.levelHandlers)),
 		fileSize:         make([]int64, len(lm.levelHandlers)),
 	}
+
 	totalSize := lm.lastLevel().getTotalSize()
 	// 从下层向上递减;
 	for i := len(lm.levelHandlers) - 1; i > 0; i-- {
 		levelTargetSize := adjusted(totalSize)
+		// 反推上面各层“理论上”该有多大;
 		dst.levelTargetSSize[i] = levelTargetSize
+		// 从下往上,谁先缩到 BaseLevelSize 以下, 谁就站出来当 base level
 		if dst.dstLevelId == 0 && levelTargetSize <= lm.opt.BaseLevelSize {
 			dst.dstLevelId = i
 		}
@@ -188,6 +202,7 @@ func (lm *LevelsManger) levelTargets() targets {
 
 	dstLevelId := dst.dstLevelId
 	lvl := lm.levelHandlers
+	// 既然本层空、下一层又吃得下，那就干脆再往下跳一层，让数据一次沉到位，省得以后再搬;
 	if dstLevelId < len(lvl)-1 && lvl[dstLevelId].getTotalSize() == 0 &&
 		lvl[dstLevelId+1].getTotalSize() < dst.fileSize[dstLevelId+1] {
 		dst.dstLevelId++
@@ -198,6 +213,7 @@ func (lm *LevelsManger) levelTargets() targets {
 // 3. 为每一层创建一个压缩信息
 func (lm *LevelsManger) pickCompactLevels() (prios []compactionPriority) {
 	levelTargets := lm.levelTargets()
+
 	addPriority := func(level int, score float64) {
 		prio := compactionPriority{
 			levelId:  level,
@@ -219,9 +235,13 @@ func (lm *LevelsManger) pickCompactLevels() (prios []compactionPriority) {
 	common.CondPanic(len(prios) != len(lm.levelHandlers),
 		errors.New("[pickCompactLevels] len(prios) != len(lm.levels)"))
 
+	// 如果 Li-1 的score > 1.0 ; 那么 Li-1 = Li-1/Li; 否则下探;
+	// 假如 Li.score >= 1.0, Li-1.score 就会变小, 那么我们就倾向于 Li层的压缩;
+	// 假如 Li.score < 1.0,  Li-1.score 就会变大, 那么我们就倾向于 Li-1层的压缩;
 	var preLevel int
 	for level := levelTargets.dstLevelId; level < len(lm.levelHandlers); level++ {
 		if prios[preLevel].adjusted > 1.0 {
+			// 如果当前层分数太小（<0.01），就改用 0.01 当分母，防止除出一个爆炸大数
 			const minScore = 0.01
 			if prios[level].score >= minScore {
 				prios[preLevel].adjusted = prios[preLevel].adjusted / prios[level].adjusted
@@ -261,6 +281,7 @@ func (lm *LevelsManger) doCompact(id int, prio compactionPriority) error {
 		thisLevel:   lm.levelHandlers[prio.levelId],
 	}
 
+	// 当前 level0层 需要合并;
 	if prio.levelId == 0 {
 		cd.nextLevel = lm.levelHandlers[prio.dst.dstLevelId]
 		if !lm.findTablesL0(&cd) {
@@ -282,7 +303,8 @@ func (lm *LevelsManger) doCompact(id int, prio compactionPriority) error {
 		log.Printf("[Compactor: %d] LOG Compact FAILED with error: %+v: %+v", id, err, cd)
 		return err
 	}
-	log.Printf("[Compactor: %d] Compaction for level: %d DONE", id, cd.thisLevel.levelID)
+	log.Printf("[Compactor: %d] Compaction for level: %d to %d DONE",
+		id, cd.thisLevel.levelID, cd.nextLevel.levelID)
 
 	return nil
 }
@@ -307,25 +329,27 @@ func (lm *LevelsManger) findTablesL0ToDstLevel(cd *compactDef) bool {
 		return false
 	}
 
-	var out []*Table
+	var xInTables []*Table
 	var kr keyRange
 	for _, t := range xTables {
 		tkr := getKeyRange(t)
 		if kr.overlapWith(tkr) {
-			out = append(out, t)
+			xInTables = append(xInTables, t)
 			kr.extend(tkr)
 		} else {
 			break
 		}
 	}
-	cd.thisRange = getKeyRange(out...)
-	cd.thisTables = out
+	cd.thisRange = getKeyRange(xInTables...)
+	cd.thisTables = xInTables
 
 	left, right := cd.nextLevel.findOverLappingTables(levelHandlerRLocked{}, cd.thisRange)
 	cd.nextTables = make([]*Table, right-left)
 	copy(cd.nextTables, cd.nextLevel.tables[left:right])
 
 	if len(cd.nextTables) == 0 {
+		// 当下层（bot，通常是下一层）没有需要合并的文件时,
+		// 此设置目的是让下一次压缩的范围不允许为当前压缩的范围, 当前继续压缩;
 		cd.nextRange = cd.thisRange
 	} else {
 		cd.nextRange = getKeyRange(cd.nextTables...)
@@ -352,7 +376,7 @@ func (lm *LevelsManger) findTablesL0ToL0(cd *compactDef) bool {
 	defer lm.compactIngStatus.mux.Unlock()
 
 	top := cd.thisLevel.tables
-	var out []*Table
+	var xInTables []*Table
 	now := time.Now()
 	for _, t := range top {
 		if t.Size() >= 2*cd.dst.fileSize[0] {
@@ -361,25 +385,25 @@ func (lm *LevelsManger) findTablesL0ToL0(cd *compactDef) bool {
 		if now.Sub(*t.GetCreatedAt()) < 10*time.Second {
 			continue
 		}
-		if _, ok := lm.compactIngStatus.tables[t.fid]; ok {
+		if _, has := lm.compactIngStatus.tables[t.fid]; has {
 			continue
 		}
-		out = append(out, t)
+		xInTables = append(xInTables, t)
 	}
-	if len(out) < 4 {
+	if len(xInTables) < 4 {
 		return false
 	}
-
+	// 强制重叠;
 	cd.thisRange = keyRange{inf: true}
-	cd.thisTables = out
+	cd.thisTables = xInTables
 
 	compactStatus := lm.compactIngStatus.levels[cd.thisLevel.levelID]
 	compactStatus.ranges = append(compactStatus.ranges, cd.thisRange)
 
-	for _, t := range out {
+	for _, t := range xInTables {
 		lm.compactIngStatus.tables[t.fid] = struct{}{}
 	}
-
+	// LO->L0: 把一堆重叠的小文件合并成一个大文件, 减少文件数量;
 	cd.dst.fileSize[0] = math.MaxUint32
 	return true
 }
@@ -389,7 +413,8 @@ func (lm *LevelsManger) findTablesL0ToL0(cd *compactDef) bool {
 func (lm *LevelsManger) findTables(cd *compactDef) bool {
 	cd.lockLevel()
 	defer cd.unlockLevel()
-	tables := make([]*Table, cd.thisLevel.numTables())
+
+	tables := make([]*Table, len(cd.thisLevel.tables))
 	copy(tables, cd.thisLevel.tables)
 	if len(tables) == 0 {
 		return false
@@ -398,7 +423,8 @@ func (lm *LevelsManger) findTables(cd *compactDef) bool {
 	if cd.thisLevel.isLastLevel() {
 		return lm.findMaxLevelTables(tables, cd)
 	}
-
+	// 所有文件先按照 版本号升序排序;(默认认为版本号越低,数据越老,越该合并清理掉)
+	lm.sortByMaxVersion(tables, cd)
 	for _, t := range tables {
 		cd.thisSize = t.Size()
 		cd.thisRange = getKeyRange(t)
@@ -412,29 +438,44 @@ func (lm *LevelsManger) findTables(cd *compactDef) bool {
 		cd.nextTables = make([]*Table, right-left)
 		copy(cd.nextTables, cd.nextLevel.tables[left:right])
 
+		// 当前 t 在下层没有 相关的 .sst 文件;
 		if len(cd.nextTables) == 0 {
 			cd.nextTables = []*Table{}
 			cd.nextRange = cd.thisRange
+			// 设置当前层和下层的合并区间信息;
 			if !lm.compactIngStatus.compareAndAdd(thisAndNextLevelRLocked{}, *cd) {
-				// cas 失败代表: 说明当前表参与合并了, 跳过当前t;
+				// cas 失败代表: 说明两层区间,在其他协程中参与合并了, 跳过当前t;
 				continue
 			}
-			// cas 成功代表:说明当前表没有参与合并,但是为什么直接返回了呢?
-			// 答: 当下一层没有重叠的表时，这个表可以被移动到下一层中;
+			// cas 成功代表: 说明当前表没有参与合并, 但是为什么直接返回了呢?
+			// 答: 当下一层没有重叠的表时, 说明这个表也可以被移动到下一层中;
 			return true
 		}
 
 		cd.nextRange = getKeyRange(cd.nextTables...)
+
+		// 再次检测 是否存在重叠的合并表;
 		if lm.compactIngStatus.overlapsWith(cd.nextLevel.levelID, cd.nextRange) {
 			continue
 		}
 
+		// 不存在重叠的合并表, 那就执行cas;
 		if !lm.compactIngStatus.compareAndAdd(thisAndNextLevelRLocked{}, *cd) {
 			continue
 		}
+		// cas 成功代表: 说明当前表没有参与合并,返回;
 		return true
 	}
 	return false
+}
+
+func (lm *LevelsManger) sortByMaxVersion(table []*Table, cd *compactDef) {
+	if len(table) == 0 || cd.nextLevel == nil {
+		return
+	}
+	sort.Slice(table, func(i, j int) bool {
+		return table[i].MaxVersion() < table[j].MaxVersion()
+	})
 }
 
 func (lm *LevelsManger) findMaxLevelTables(tables []*Table, cd *compactDef) bool {
@@ -447,29 +488,33 @@ func (lm *LevelsManger) findMaxLevelTables(tables []*Table, cd *compactDef) bool
 
 	cd.nextTables = []*Table{}
 	collectNextTables := func(t *Table, needSz int64) {
-		idx := sort.Search(len(tables), func(i int) bool {
-			return model.CompareKeyNoTs(tables[i].sst.minKey, t.sst.minKey) >= 0
+		nextIdx := sort.Search(len(tables), func(i int) bool {
+			return model.CompareKeyWithTs(tables[i].sst.minKey, t.sst.minKey) >= 0
 		})
-		common.CondPanic(tables[idx].fid != t.fid, errors.New("tables[j].ID() != t.ID()"))
+		common.CondPanic(tables[nextIdx].fid != t.fid, errors.New("tables[j].ID() != t.ID()"))
 		totalSize := t.Size()
-		idx++
-		for idx < len(tables) {
-			totalSize += tables[idx].Size()
+		nextIdx++
+		for nextIdx < len(tables) {
+			totalSize += tables[nextIdx].Size()
 			if totalSize >= needSz {
 				break
 			}
-			cd.nextTables = append(cd.nextTables, tables[idx])
-			cd.nextRange.extend(getKeyRange(tables[idx]))
-			idx++
+			cd.nextTables = append(cd.nextTables, tables[nextIdx])
+			cd.nextRange.extend(getKeyRange(tables[nextIdx]))
+			nextIdx++
 		}
 	}
 
 	now := time.Now()
 	for _, t := range sortedTables {
+		if t.MaxVersion() > lm.getDiscardTs() {
+			continue
+		}
 		if now.Sub(*t.GetCreatedAt()) < time.Hour {
 			continue
 		}
-		if t.getStaleDataSize() < uint32(lm.opt.ValueLogFileSize) {
+		// 小于 10MB 不合并;
+		if t.getStaleDataSize() < common.LevelMaxStaleDataSize {
 			continue
 		}
 		cd.thisSize = t.Size()
@@ -484,9 +529,11 @@ func (lm *LevelsManger) findMaxLevelTables(tables []*Table, cd *compactDef) bool
 		cd.thisTables = []*Table{t}
 
 		needFileSize := cd.dst.fileSize[cd.thisLevel.levelID]
+		// tableSize 已经足够大了, 找到就返回;
 		if t.Size() >= needFileSize {
 			break
 		}
+		// 文件不够大, 继续搜寻;
 		collectNextTables(t, needFileSize)
 		if !lm.compactIngStatus.compareAndAdd(thisAndNextLevelRLocked{}, *cd) {
 			cd.nextTables = cd.nextTables[:0]
@@ -494,7 +541,7 @@ func (lm *LevelsManger) findMaxLevelTables(tables []*Table, cd *compactDef) bool
 			continue
 		}
 		return true
-	}
+	} // for over
 
 	if len(cd.thisTables) == 0 {
 		return false
@@ -516,7 +563,7 @@ func (lm *LevelsManger) runCompactDef(id int, level int, cd compactDef) error {
 		return errors.New("#runCompactDef() FileSizes cannot be zero. Targets are not set")
 	}
 	timeStart := time.Now()
-	common.CondPanic(len(cd.splits) != 0, errors.New("runCompactDef, len(cd.splits) != 0"))
+	common.CondPanic(len(cd.splits) != 0, errors.New("#runCompactDef, len(cd.splits) != 0"))
 	thisLevel := cd.thisLevel
 	nextLevel := cd.nextLevel
 	if thisLevel == nextLevel {
@@ -572,14 +619,15 @@ func (lm *LevelsManger) runCompactDef(id int, level int, cd compactDef) error {
 func (lm *LevelsManger) compactBuildTables(level int, cd compactDef) ([]*Table, func() error, error) {
 	thisTables := cd.thisTables
 	nextTables := cd.nextTables
-	options := &model.Options{IsAsc: true}
+	options := &interfaces.Options{IsAsc: true, IsSetCache: false}
 
-	newIterator := func() []model.Iterator {
-		var iters []model.Iterator
+	newIterator := func() []interfaces.Iterator {
+		var iters []interfaces.Iterator
 		switch {
 		case level == 0:
 			iters = append(iters, iteratorsReversed(thisTables, options)...)
 		case len(thisTables) > 0:
+			utils.AssertTrue(len(thisTables) == 1)
 			iters = append(iters, thisTables[0].NewTableIterator(options))
 		}
 		return append(iters, NewConcatIterator(nextTables, options))
@@ -595,8 +643,9 @@ func (lm *LevelsManger) compactBuildTables(level int, cd compactDef) ([]*Table, 
 		}
 		go func(kr keyRange) {
 			defer inflightBuilders.Done(nil)
-			iterators := newIterator() // 全量表参与迭代
-			iterator := NewMergeIterator(iterators, false)
+			iterators := newIterator() // 全量表参与迭代;
+			//iterator := NewMergeIterator(iterators, false)
+			iterator := NewMergingIterator(iterators, options)
 			defer iterator.Close() // 逐个解开 table 引用
 			lm.subCompact(iterator, kr, cd, inflightBuilders, res)
 		}(kr)
@@ -625,23 +674,39 @@ func (lm *LevelsManger) compactBuildTables(level int, cd compactDef) ([]*Table, 
 		return nil, nil, fmt.Errorf("compactBuildTables while running compactions for: %+v, %v", cd, err)
 	}
 	sort.Slice(newTables, func(i, j int) bool {
-		return model.CompareKeyNoTs(newTables[i].sst.MaxKey(), newTables[j].sst.MaxKey()) < 0
+		return model.CompareKeyWithTs(newTables[i].sst.MaxKey(), newTables[j].sst.MaxKey()) < 0
 	})
 	return newTables, func() error {
 		return decrRefs(newTables)
 	}, nil
 }
 
-func (lm *LevelsManger) subCompact(iterator model.Iterator, kr keyRange, cd compactDef,
+func (lm *LevelsManger) subCompact(iterator interfaces.Iterator, kr keyRange, cd compactDef,
 	inflightBuilders *utils.Throttle, res chan<- *Table) {
 	discardStats := make(map[uint32]int64)
 	defer func() {
 		go lm.updateDiscardStats(discardStats) // 重新开一个go协程,让其去阻塞,不要耽搁函数返回;
 	}()
-	var lastKey []byte
-	var lastEntry model.Entry
 
-	// 统计 需要通知 vlogGC的 无效key数据;
+	// 存在的话, 不能轻易删除数据, 比如高版本的 delete 标记, 随便删除的话, 后续可能读到下层的旧数据;
+	hasOverlap := lm.checkOverlap(cd.allTables(), cd.nextLevel.levelID+1)
+
+	// 判断是否可提前 进行sst 构造; 这有助于避免在Li上生成与Li+1有大量重叠的表;
+	exceedsAllowedOverlap := func(kr keyRange) bool {
+		nextNextLevel := cd.nextLevel.levelID + 1
+		if nextNextLevel <= 1 || nextNextLevel >= lm.opt.MaxLevelNum {
+			return false
+		}
+		nnl := lm.levelHandlers[nextNextLevel]
+		nnl.mux.RLock()
+		defer nnl.mux.RUnlock()
+		// 判断 和将要参与合并的下下一层 table 数量重叠次数是否 过多;
+		// 避免重叠区间太多, 引发写放大;
+		left, right := nnl.findOverLappingTables(levelHandlerRLocked{}, kr)
+		return right-left >= 10
+	}
+
+	// 统计 需要通知 vlogGC 的 无效key数据;
 	updateDiscardStats := func(e model.Entry) {
 		if e.Meta&common.BitValuePointer > 0 {
 			var vp model.ValuePtr
@@ -650,67 +715,91 @@ func (lm *LevelsManger) subCompact(iterator model.Iterator, kr keyRange, cd comp
 		}
 	}
 
-	// 经过判断,得到最后真正需要保留的key;
-	builderAdd := func(builder *sstBuilder, e model.Entry) {
-		isDeletedOrExpired := IsDeletedOrExpired(&e)
-		switch {
-		case isDeletedOrExpired:
-			builder.AddStaleKey(&e)
-		default:
-			builder.AddKey(&e)
-		}
-	}
+	var (
+		lastKey, skipKey []byte
+		keyNumVersions   int // 相同key,不同版本的个数;
+	)
 
-	// 1. 判断key是否需要保留
-	// 2. 判断key是否需要通知 vlogGC
-	judgeKeys := func(builder *sstBuilder) {
-		var tableKr keyRange
+	// 1. 判断key是否需要保留;
+	// 2. 判断key是否需要通知 vlogGC;
+	addKeys := func(builder *sstBuilder) {
+		timeStart := time.Now()
+		var tableRange keyRange
+		var numKeys, numSkips uint64
+		var rangeCheck int
 		for ; iterator.Valid(); iterator.Next() {
-			curKey := iterator.Item().Item.Key
-			// 1) sst aaa:1
-			// 2) sst aaa:1 aaa:5 aaa:8 bbb:6 bbb:8 ccc:5
-			// 3) sst aaa:1 bbb:3 ddd:8(out)
-			if lastKey == nil {
-				lastKey = model.SafeCopy(lastKey, curKey)
-				lastEntry = iterator.Item().Item
-			}
-
-			if len(kr.right) > 0 && model.CompareKeyNoTs(curKey, kr.right) >= 0 {
-				break
-			}
-			if builder.ReachedCapacity() {
-				break
-			}
-			if len(tableKr.left) == 0 {
-				tableKr.left = model.SafeCopy(tableKr.left, curKey)
-			}
-			tableKr.right = model.SafeCopy(tableKr.right, curKey)
-
-			// lastKey: nil     curKey: bbb:5
-			// lastKey: aaa:5   curKey: bbb:5
-			if !model.SameKeyNoTs(curKey, lastKey) {
-				builderAdd(builder, lastEntry)
-				lastKey = model.SafeCopy(lastKey, curKey)
-				lastEntry = iterator.Item().Item
-			} else {
-				// lastKey: aaa:1  curKey: aaa:5  nextKey: aaa:9
-				if model.ParseTsVersion(curKey) > model.ParseTsVersion(lastKey) {
-					// skip lastKey
-					updateDiscardStats(lastEntry)
-					lastKey = model.SafeCopy(lastKey, curKey)
-					lastEntry = iterator.Item().Item
-				} else {
-					// model.ParseTsVersion(curKey) <= model.ParseTsVersion(lastKey)
-					// don`t do anything; continue to next key;
+			entry := iterator.Item().Item
+			if skipKey != nil || len(skipKey) > 0 {
+				if model.SameKeyNoTs(entry.Key, skipKey) {
+					numSkips++
+					updateDiscardStats(entry)
+					continue
 				}
+			} else {
+				skipKey = skipKey[:0]
+			}
+
+			if !model.SameKeyNoTs(entry.Key, lastKey) {
+				if len(kr.right) > 0 && bytes.Compare(entry.Key, kr.right) >= 0 {
+					break
+				}
+				if builder.ReachedCapacity() {
+					break
+				}
+				lastKey = model.SafeCopy(lastKey, entry.Key)
+				if len(tableRange.left) == 0 {
+					tableRange.left = model.SafeCopy(tableRange.left, entry.Key)
+				}
+				tableRange.right = lastKey
+				keyNumVersions = 0
+				rangeCheck++
+				if rangeCheck%lm.opt.SSTKeyRangCheckNums == 0 {
+					if exceedsAllowedOverlap(tableRange) {
+						break
+					}
+				}
+			} // different key over;
+
+			version := model.ParseTsVersion(entry.Key)
+			expired := IsDeletedOrExpired(&entry)
+
+			if version <= lm.getDiscardTs() {
+				// 跟踪此键遇到的低版本数量, 只考虑 startMark 以下的版本;
+				// 否则, 我们可能会丢弃正在运行的事务的唯一有效版本;
+				keyNumVersions++
+				lastKeyVersion := keyNumVersions == lm.opt.NumVersionsToKeep
+				// 进行判断是否需要保留:
+				if expired || lastKeyVersion {
+					// 只有在遇到 删除标记 或者 key的保留数量达到阈值时, 才会跳过后面的不同版本key(原生key相同);
+					skipKey = model.SafeCopy(skipKey, entry.Key)
+					// 设置后续的key需要跳过后, 再进行判断 当前key 是否需要保留:
+					switch {
+					case !expired && lastKeyVersion:
+					// 情况1: 不是删除标记 && 但是key版本数量够了; 当前key不用删除, 把后续的版本key清除即可;
+					// 保留;
+					case hasOverlap:
+						// 情况2: (是删除标记 || (不是删除标记 && key版本保留可够也可不够) && 和nnL层有重叠区间;
+						// 保留;
+					default:
+						// 其余情况: 删除标记 || 重叠区间不多 || key保留版本数量足够;
+						numSkips++
+						updateDiscardStats(entry)
+						continue
+					}
+				}
+			} // version <= startMarkTs
+
+			// version > startMarkTs; 不跳过 任何版本有效的 key;
+			numKeys++
+			switch {
+			case expired:
+				builder.AddStaleKey(&entry)
+			default:
+				builder.AddKey(&entry)
 			}
 		} // for over
-		// 额外情况: 假如当前 .sst 中只含有一个 entry , 那么也需要进行保存;
-		if lastEntry.Key != nil {
-			tableKr.right = model.SafeCopy(tableKr.right, lastEntry.Key)
-			builderAdd(builder, lastEntry)
-		}
-	} // addKeys Over;
+		fmt.Printf("[%d] LOG Compact. Added %d keys. Skipped %d keys. Iteration took: %v", cd.compactorId, numKeys, numSkips, time.Since(timeStart).Round(time.Millisecond))
+	} // addKeys Over
 
 	if len(kr.left) > 0 {
 		iterator.Seek(kr.left)
@@ -720,13 +809,12 @@ func (lm *LevelsManger) subCompact(iterator model.Iterator, kr keyRange, cd comp
 
 	for iterator.Valid() {
 		key := iterator.Item().Item.Key
-		// 末尾 keyRange 最右侧 kr.right == 0
-		if len(kr.right) > 0 && model.CompareKeyNoTs(key, kr.right) >= 0 {
+		// 如果存在 右区间 && 当前 key > 右区间, 说明遍历到头, 跳出循环;
+		if len(kr.right) > 0 && model.CompareKeyWithTs(key, kr.right) >= 0 {
 			break
 		}
-
 		builder := newSSTBuilderWithSSTableSize(lm.opt, cd.dst.fileSize[cd.nextLevel.levelID])
-		judgeKeys(builder)
+		addKeys(builder)
 
 		if builder.empty() {
 			builder.Finish()
@@ -755,9 +843,6 @@ func IsDeletedOrExpired(e *model.Entry) bool {
 	if e.Meta&common.BitDelete > 0 {
 		return true
 	}
-	if e.Version == 0 {
-		return true
-	}
 	if e.Meta == 0 && e.Value == nil {
 		return true
 	}
@@ -771,8 +856,8 @@ func (lm *LevelsManger) updateDiscardStats(discardStats map[uint32]int64) {
 	case *lm.lsm.option.DiscardStatsCh <- discardStats:
 	}
 }
-func iteratorsReversed(tables []*Table, options *model.Options) []model.Iterator {
-	out := make([]model.Iterator, 0)
+func iteratorsReversed(tables []*Table, options *interfaces.Options) []interfaces.Iterator {
+	out := make([]interfaces.Iterator, 0)
 	for i := len(tables) - 1; i >= 0; i-- {
 		out = append(out, tables[i].NewTableIterator(options))
 	}
@@ -788,7 +873,8 @@ func tablesToString(tables []*Table) []string {
 }
 func (lm *LevelsManger) addSplits(cd *compactDef) {
 	cd.splits = cd.splits[:0]
-	width := len(cd.nextTables) / 2.0
+	// 向上去整
+	width := int(math.Ceil(float64(len(cd.nextTables)) / 5.0))
 	if width < 3 {
 		width = 3
 	}
@@ -804,8 +890,9 @@ func (lm *LevelsManger) addSplits(cd *compactDef) {
 			addRange([]byte{})
 			return
 		}
+		// 每个区间的右边界, 包含右界的所有记录(无论版本号是多少);
 		if i%width == width-1 {
-			right := t.sst.MaxKey()
+			right := model.KeyWithTs(model.ParseKey(t.sst.MaxKey()), 0)
 			addRange(right)
 		}
 	}
@@ -841,14 +928,14 @@ func newCreateChange(id uint64, level int) *pb.ManifestChange {
 
 // compactIngStatus 所有层的压缩状态信息
 type compactIngStatus struct {
-	mux    sync.Mutex
+	mux    sync.RWMutex
 	levels []*levelCompactStatus
 	tables map[uint64]struct{}
 }
 
 func (lsm *LSM) newCompactStatus() *compactIngStatus {
 	cs := &compactIngStatus{
-		mux:    sync.Mutex{},
+		mux:    sync.RWMutex{},
 		levels: make([]*levelCompactStatus, 0),
 		tables: make(map[uint64]struct{}),
 	}
@@ -859,34 +946,40 @@ func (lsm *LSM) newCompactStatus() *compactIngStatus {
 	return cs
 }
 func (cs *compactIngStatus) overlapsWith(level int, key keyRange) bool {
-	cs.mux.Lock()
-	defer cs.mux.Unlock()
+	cs.mux.RLock()
+	defer cs.mux.RUnlock()
 	compactStatus := cs.levels[level]
 	return compactStatus.overlapsWith(key)
 }
 func (cs *compactIngStatus) getLevelDelSize(level int) int64 {
+	cs.mux.RLock()
+	defer cs.mux.RUnlock()
 	return cs.levels[level].delSize
 }
 func (cs *compactIngStatus) deleteCompactionDef(cd compactDef) {
 	cs.mux.Lock()
 	defer cs.mux.Unlock()
+
 	levelID := cd.thisLevel.levelID
 	thisLevelStatus := cs.levels[cd.thisLevel.levelID]
 	nextLevelStatus := cs.levels[cd.nextLevel.levelID]
 
 	thisLevelStatus.delSize -= cd.thisSize
 	found := thisLevelStatus.removeRange(cd.thisRange)
+
+	// 跨层压缩;
 	if cd.thisLevel != cd.nextLevel && !cd.nextRange.isEmpty() {
 		found = nextLevelStatus.removeRange(cd.nextRange) && found
 	}
+
 	if !found {
 		thisR := cd.thisRange
 		nextR := cd.nextRange
-		fmt.Printf("Looking for: %s in this level %d.\n", thisR, levelID)
-		fmt.Printf("This Level:\n%s\n", thisLevelStatus.debugPrint())
+		fmt.Printf("Looking for XRange: %s in this level %d.\n", thisR, levelID)
+		fmt.Printf("This LevelStatus:\n%s\n", thisLevelStatus.debugPrint())
 		fmt.Println()
-		fmt.Printf("Looking for: %s in next level %d.\n", nextR, cd.nextLevel.levelID)
-		fmt.Printf("Next Level:\n%s\n", nextLevelStatus.debugPrint())
+		fmt.Printf("Looking for YRange: %s in next level %d.\n", nextR, cd.nextLevel.levelID)
+		fmt.Printf("Next LevelStatus:\n%s\n", nextLevelStatus.debugPrint())
 		log.Fatal("keyRange not found")
 	}
 
@@ -894,7 +987,7 @@ func (cs *compactIngStatus) deleteCompactionDef(cd compactDef) {
 		if _, ok := cs.tables[t.fid]; ok {
 			delete(cs.tables, t.fid)
 		} else {
-			common.CondPanic(!ok, fmt.Errorf("cs.tables is nil"))
+			common.CondPanic(!ok, fmt.Errorf("#deleteCompactionDef cs.tables is nil"))
 		}
 	}
 }
@@ -909,7 +1002,9 @@ func (cs *compactIngStatus) compareAndAdd(_ thisAndNextLevelRLocked, cd compactD
 	if nextLevelStatus.overlapsWith(cd.nextRange) {
 		return false
 	}
+
 	thisLevelStatus.ranges = append(thisLevelStatus.ranges, cd.thisRange)
+	// cd.nextRange 有可能为 cd.thisRange;
 	nextLevelStatus.ranges = append(nextLevelStatus.ranges, cd.nextRange)
 	thisLevelStatus.delSize += cd.thisSize
 	for _, t := range append(cd.thisTables, cd.nextTables...) {
@@ -957,7 +1052,7 @@ func (lcs *levelCompactStatus) debugPrint() string {
 type keyRange struct {
 	left  []byte
 	right []byte
-	inf   bool  // 是否合并过
+	inf   bool  // 强制认为一定重叠;
 	size  int64 // size is used for Key splits.
 }
 
@@ -965,17 +1060,20 @@ func getKeyRange(tables ...*Table) keyRange {
 	if len(tables) == 0 {
 		return keyRange{}
 	}
-	// 此时的key 是带有 ts 时间戳;
+	// 此时的 key 是带有 ts 时间戳;
 	minKey := tables[0].sst.MinKey()
 	maxKey := tables[0].sst.MaxKey()
 	for i := 1; i < len(tables); i++ {
-		if model.CompareKeyNoTs(tables[i].sst.MinKey(), minKey) < 0 {
+		if model.CompareKeyWithTs(tables[i].sst.MinKey(), minKey) < 0 {
 			minKey = tables[i].sst.MinKey()
 		}
-		if model.CompareKeyNoTs(tables[i].sst.MaxKey(), maxKey) > 0 {
+		if model.CompareKeyWithTs(tables[i].sst.MaxKey(), maxKey) > 0 {
 			maxKey = tables[i].sst.MaxKey()
 		}
 	}
+	// 这个‘超区间’，就能把最小到最大 key 之间的所有版本（无论新旧）一次性圈进来，不会漏掉任何一条记录;
+	minKey = model.KeyWithTs(model.ParseKey(minKey), math.MaxUint64)
+	maxKey = model.KeyWithTs(model.ParseKey(maxKey), 0)
 	return keyRange{
 		left:  minKey,
 		right: maxKey,
@@ -997,10 +1095,10 @@ func (key *keyRange) extend(dst keyRange) {
 	if key.isEmpty() {
 		*key = dst
 	}
-	if len(key.left) == 0 || model.CompareKeyNoTs(dst.left, key.left) < 0 {
+	if len(key.left) == 0 || model.CompareKeyWithTs(dst.left, key.left) < 0 {
 		key.left = dst.left
 	}
-	if len(key.right) == 0 || model.CompareKeyNoTs(dst.right, key.right) > 0 {
+	if len(key.right) == 0 || model.CompareKeyWithTs(dst.right, key.right) > 0 {
 		key.right = dst.right
 	}
 	if dst.inf {
@@ -1018,10 +1116,10 @@ func (key keyRange) overlapWith(dst keyRange) bool {
 		return true
 	}
 
-	if model.CompareKeyNoTs(key.left, dst.right) > 0 {
+	if model.CompareKeyWithTs(key.left, dst.right) > 0 {
 		return false
 	}
-	if model.CompareKeyNoTs(key.right, dst.left) < 0 {
+	if model.CompareKeyWithTs(key.right, dst.left) < 0 {
 		return false
 	}
 	return true

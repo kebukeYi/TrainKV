@@ -2,13 +2,13 @@ package model
 
 import "encoding/binary"
 
-// ValueExt 把有关value的扩展信息,再封装一次; 使其方便一次性编码在 arena空间中, 返回len和offset;
+// ValueExt 把有关value的扩展信息,再封装一次; 使其方便一次性编码在 arena 空间中, 返回len和offset;
 type ValueExt struct {
 	Meta      byte // delete:1 or normal:0  or BitValuePointer:2
 	Value     []byte
 	ExpiresAt uint64
 
-	Version int64 // 注意: 此字段,实际上并没有存储到磁盘中;
+	Version uint64 // 注意: 此字段实际上并没有存储到磁盘中;
 }
 
 func (val *ValueExt) EncodeValSize() uint32 {

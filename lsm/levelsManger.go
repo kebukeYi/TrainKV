@@ -2,6 +2,7 @@ package lsm
 
 import (
 	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/interfaces"
 	"github.com/kebukeYi/TrainKV/model"
 	"github.com/kebukeYi/TrainKV/utils"
 	"strconv"
@@ -10,10 +11,11 @@ import (
 )
 
 type LevelsManger struct {
-	maxFID           atomic.Uint64   // sst 已经分配出去的最大fid,只要创建了 memoryTable 就算已分配;
+	maxFID           atomic.Uint64   // sst 已经分配出去的最大fid,只要创建了 MemoryTable 就算已分配;
 	levelHandlers    []*levelHandler // 每层的处理器
 	opt              *Options
-	lsm              *LSM          // 上层引用
+	lsm              *LSM // 上层引用
+	txnDoneIndex     atomic.Uint64
 	cache            *LevelsCache  // 缓存 block 和 sst.index() 数据
 	manifestFile     *ManifestFile // 增删 sst 元信息
 	compactIngStatus *compactIngStatus
@@ -33,10 +35,26 @@ func (lsm *LSM) InitLevelManger(opt *Options) *LevelsManger {
 	if err := lm.loadManifestFile(); err != nil {
 		common.Panic(err)
 	}
+	go lm.getTxnDoneIndexFromCh()
 	if err := lm.build(); err != nil {
 		common.Panic(err)
 	}
 	return lm
+}
+
+func (lm *LevelsManger) getTxnDoneIndexFromCh() {
+	for {
+		select {
+		case r := <-lm.opt.TxnDoneIndexCh:
+			if r != 0 {
+				lm.txnDoneIndex.Store(r)
+			}
+		}
+	}
+}
+
+func (lm *LevelsManger) getDiscardTs() uint64 {
+	return lm.txnDoneIndex.Load()
 }
 
 func (lm *LevelsManger) loadManifestFile() (err error) {
@@ -90,29 +108,43 @@ func (lm *LevelsManger) lastLevel() *levelHandler {
 	return lm.levelHandlers[len(lm.levelHandlers)-1]
 }
 
-func (lm *LevelsManger) iterators(opt *model.Options) []model.Iterator {
-	iters := make([]model.Iterator, 0)
+func (lm *LevelsManger) iterators(opt *interfaces.Options) []interfaces.Iterator {
+	iters := make([]interfaces.Iterator, 0)
 	for _, handler := range lm.levelHandlers {
 		iters = append(iters, handler.iterators(opt)...)
 	}
 	return iters
 }
 
-func (lm *LevelsManger) Get(keyTs []byte) (model.Entry, error) {
+func (lm *LevelsManger) Get(keyTs []byte, skipListEntryMaxTs *model.Entry) (model.Entry, error) {
 	var (
 		entry model.Entry
-		err   error
 	)
-	entry.Version = 0
-	if entry, err = lm.levelHandlers[0].Get(keyTs); entry.Version != 0 {
-		return entry, err
-	}
-	for i := 1; i < lm.opt.MaxLevelNum; i++ {
-		if entry, err = lm.levelHandlers[i].Get(keyTs); entry.Version != 0 {
-			return entry, err
+	startTs := model.ParseTsVersion(keyTs)
+	// 对 level-0层的所有table进行搜寻,返回其中最高版本的数据;
+	entry, _ = lm.levelHandlers[0].Get(keyTs)
+	if entry.Version != 0 {
+		if entry.Version == startTs {
+			return entry, nil
+		}
+		if entry.Version > skipListEntryMaxTs.Version {
+			skipListEntryMaxTs = &entry
 		}
 	}
-	return entry, common.ErrKeyNotFound
+	for i := 1; i < lm.opt.MaxLevelNum; i++ {
+		entry, _ = lm.levelHandlers[i].Get(keyTs)
+		if entry.Version != 0 {
+			if entry.Version == startTs {
+				return entry, nil
+			}
+			if entry.Version > skipListEntryMaxTs.Version {
+				skipListEntryMaxTs = &entry
+			}
+		}
+	}
+	safeCopy := skipListEntryMaxTs.SafeCopy()
+	// 否则到最后, 返回 存储的最高版本的数据;
+	return safeCopy, nil
 }
 
 func (lm *LevelsManger) checkOverlap(tables []*Table, lev int) bool {
@@ -132,7 +164,7 @@ func (lm *LevelsManger) checkOverlap(tables []*Table, lev int) bool {
 	return false
 }
 
-func (lm *LevelsManger) flush(imm *memoryTable) (err error) {
+func (lm *LevelsManger) flush(imm *MemoryTable) (err error) {
 	fid := imm.wal.Fid()
 	sstName := utils.FileNameSSTable(lm.opt.WorkDir, fid)
 
