@@ -102,7 +102,7 @@ func BenchmarkWriteRequest(b *testing.B) {
 		e := model.NewEntry([]byte(key), []byte(val))
 		e.Key = model.KeyWithTs(e.Key, uint64(time.Now().UnixNano()))
 		request := TrainKV.BuildRequest([]*model.Entry{e})
-		if err := traindb.WriteRequest([]*TrainKV.Request{request}); err != nil {
+		if err := traindb.WriteRequest([]*model.Request{request}); err != nil {
 			assert.Nil(b, err)
 		} else {
 			err := request.Wait()
