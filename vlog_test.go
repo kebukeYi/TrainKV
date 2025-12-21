@@ -177,7 +177,7 @@ func TestValueGC(t *testing.T) {
 	db.vlog.gcReWriteLog(db.vlog.filesMap[0])
 
 	for _, e := range kvList {
-		item, err := db.Get(e.Key) // 无 ts
+		item, err := db.get(e.Key) // 无 ts
 		if err != nil {
 			fmt.Printf("err:%s when key is:%s\n", err, e.Key)
 		}

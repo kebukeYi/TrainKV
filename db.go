@@ -86,7 +86,7 @@ func (db *TrainKV) GetTransactionManager() *TransactionManager {
 	return db.transactionManager
 }
 
-func (db *TrainKV) Get(keyMaxStartTs []byte) (*model.Entry, error) {
+func (db *TrainKV) get(keyMaxStartTs []byte) (*model.Entry, error) {
 	if keyMaxStartTs == nil || len(keyMaxStartTs) == 0 {
 		return nil, common.ErrEmptyKey
 	}

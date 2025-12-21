@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/kebukeYi/TrainKV"
 	"github.com/kebukeYi/TrainKV/lsm"
-	"github.com/kebukeYi/TrainKV/model"
 	"testing"
 )
 
@@ -25,23 +24,37 @@ func initTrainDB() {
 func Benchmark_PutValue_TrainDB(b *testing.B) {
 	initTrainDB()
 	defer triandb.Close()
+
+	txn := triandb.NewTransaction(true)
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		entry := model.NewEntry(GetKey(i), GetValue())
-		err := triandb.set(entry)
+		err := txn.Set(GetKey(i), GetValue())
 		if err != nil {
 			panic(err)
 			return
 		}
 	}
+	_, err := txn.Commit()
+	if err != nil {
+		panic(err)
+		return
+	}
 }
 
 func initTrainDBData() {
+	txn := triandb.NewTransaction(false)
 	for i := 0; i < 500000; i++ {
-		entry := model.NewEntry(GetKey(i), GetValue())
-		err := triandb.set(entry)
+		if i%5000 == 0 {
+			_, err := txn.Commit()
+			if err != nil {
+				panic(err)
+				return
+			}
+			txn = triandb.NewTransaction(false)
+		}
+		err := txn.Set(GetKey(i), GetValue())
 		if err != nil {
 			panic(err)
 			return
@@ -56,9 +69,9 @@ func Benchmark_GetValue_TrainDB(b *testing.B) {
 
 	b.ResetTimer()
 	b.ReportAllocs()
-
+	txn := triandb.NewTransaction(false)
 	for i := 0; i < b.N; i++ {
-		_, err := triandb.Get(GetKey(i))
+		_, err := txn.Get(GetKey(i))
 		if err != nil {
 			panic(err)
 		}

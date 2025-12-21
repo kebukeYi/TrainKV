@@ -96,7 +96,7 @@ func TestCache_ConcurrentAccess(t *testing.T) {
 	cache.Set("key1", "value1")
 	cache.Set("key2", "value2")
 
-	// Get values concurrently (simulated)
+	// get values concurrently (simulated)
 	result1, ok1 := cache.Get("key1")
 	result2, ok2 := cache.Get("key2")
 

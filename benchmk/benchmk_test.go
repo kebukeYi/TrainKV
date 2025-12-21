@@ -64,6 +64,7 @@ func BenchmarkNormalEntry(b *testing.B) {
 	clearDir(benchMarkOpt.WorkDir)
 	//traindb, _, _ := TrainDB.Open(benchMarkOpt)
 	traindb, _, _ := TrainKV.Open(lsm.GetDefaultOpt(benchMarkOpt.WorkDir))
+	txn := traindb.NewTransaction(true)
 	defer traindb.Close()
 
 	for i := 0; i < b.N; i++ {
@@ -73,26 +74,29 @@ func BenchmarkNormalEntry(b *testing.B) {
 		valSize := 127 + 1 // val: 12B
 		//valSize := 10<<20 + 1 // val: 10.01MB
 		//valSize := 64<<20 + 1 // val: 64.01MB
-		err := traindb.set(model.BuildBigEntry(key, uint64(valSize)))
+		entry := model.BuildBigEntry(key, uint64(valSize))
+		err := txn.Set(entry.Key, entry.Value)
 		assert.Nil(b, err)
 	}
+	txn.Commit()
 
+	txn = traindb.NewTransaction(true)
 	for i := 0; i < b.N; i++ {
 		key := []byte(fmt.Sprintf("key=%d", i))
-		_, err := traindb.Get(key)
+		_, err := txn.Get(key)
 		assert.Nil(b, err)
 
 		key = []byte(randStr(18))
-		_, err = traindb.Get(key)
+		_, err = txn.Get(key)
 		assert.Error(b, err)
 	}
+	txn.Commit()
 }
 
 func BenchmarkWriteRequest(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	clearDir(benchMarkOpt.WorkDir)
-	//traindb, _, _ := TrainDB.Open(benchMarkOpt)
 	traindb, _, _ := TrainKV.Open(lsm.GetDefaultOpt(benchMarkOpt.WorkDir))
 	defer traindb.Close()
 	for i := 0; i < b.N; i++ {
@@ -100,7 +104,7 @@ func BenchmarkWriteRequest(b *testing.B) {
 		val := fmt.Sprintf("val%d", i)
 		//val := make([]byte, 10<<20+1)
 		e := model.NewEntry([]byte(key), []byte(val))
-		e.Key = model.KeyWithTs(e.Key, uint64(time.Now().UnixNano()))
+		e.Key = model.KeyWithTs(e.Key, 0)
 		request := TrainKV.BuildRequest([]*model.Entry{e})
 		if err := traindb.WriteRequest([]*model.Request{request}); err != nil {
 			assert.Nil(b, err)
@@ -109,14 +113,15 @@ func BenchmarkWriteRequest(b *testing.B) {
 			assert.Nil(b, err)
 		}
 	}
-
+	txn := traindb.NewTransaction(false)
+	defer txn.Discard()
 	for i := 0; i < b.N; i++ {
 		key := []byte(fmt.Sprintf("key=%d", i))
-		_, err := traindb.Get(key)
+		_, err := txn.Get(key)
 		assert.Nil(b, err)
 
 		key = []byte(randStr(18))
-		_, err = traindb.Get(key)
+		_, err = txn.Get(key)
 		assert.Error(b, err)
 	}
 }
@@ -125,8 +130,8 @@ func TestNormalEntry(b *testing.T) {
 	clearDir(benchMarkOpt.WorkDir)
 	go utils.StartHttpDebugger()
 	traindb, _, _ := TrainKV.Open(benchMarkOpt)
-	//traindb, _, _ := TrainDB.Open(lsm.GetDefaultOpt(benchMarkOpt.WorkDir))
 	defer traindb.Close()
+	txn := traindb.NewTransaction(false)
 	n := 8000
 	for i := 0; i < n; i++ {
 		key := []byte(fmt.Sprintf("key=%d", i))
@@ -135,18 +140,18 @@ func TestNormalEntry(b *testing.T) {
 		valSize := 127 + 1 // val: 12B
 		//valSize := 10<<20 + 1 // val: 10.01MB
 		//valSize := 64<<20 + 1 // val: 64.01MB
-		err := traindb.set(model.BuildBigEntry(key, uint64(valSize)))
+		entry := model.BuildBigEntry(key, uint64(valSize))
+		err := txn.Set(entry.Key, entry.Value)
 		assert.Nil(b, err)
 	}
 
 	for i := 0; i < n; i++ {
 		key := []byte(fmt.Sprintf("key=%d", i))
-		key = model.KeyWithTs(key, uint64(time.Now().UnixNano()))
-		_, err := traindb.Get(key)
+		_, err := txn.Get(key)
 		assert.Nil(b, err)
 
 		key = []byte(randStr(18))
-		_, err = traindb.Get(key)
+		_, err = txn.Get(key)
 		assert.Error(b, err)
 	}
 }

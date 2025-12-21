@@ -230,7 +230,7 @@ func (t *Transaction) Get(key []byte) (*model.Entry, error) {
 		t.addReadKey(key)
 	}
 	keyMaxStartTs := model.KeyWithTs(key, t.startTs)
-	entry, err := t.db.Get(keyMaxStartTs)
+	entry, err := t.db.get(keyMaxStartTs)
 	if err != nil {
 		return nil, err
 	}

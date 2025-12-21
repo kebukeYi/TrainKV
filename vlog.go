@@ -766,7 +766,7 @@ func (vlog *ValueLog) gcReWriteLog(logFile *VLogFile) error {
 func (vlog *ValueLog) sendDiscardStats() error {
 	key := []byte(common.VlogFileDiscardStatsKey)
 	keyTs := model.KeyWithTs(key, math.MaxUint64)
-	entry, err := vlog.Db.Get(keyTs)
+	entry, err := vlog.Db.get(keyTs)
 	if err != nil || entry == nil {
 		return err
 	}

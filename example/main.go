@@ -47,11 +47,11 @@ func main() {
 		panic(err)
 	}
 
-	// Get key.
+	// get key.
 	if entry, err := txn1.Get(key); err != nil || entry == nil {
-		fmt.Printf("err:%v; txn.Get(key): %s;\n", err, key)
+		fmt.Printf("err:%v; txn.get(key): %s;\n", err, key)
 	} else {
-		fmt.Printf("txn.Get(%s), value=%s, meta:%d, version=%d;\n",
+		fmt.Printf("txn.get(%s), value=%s, meta:%d, version=%d;\n",
 			model.ParseKey(entry.Key), entry.Value, entry.Meta, entry.Version)
 	}
 
@@ -60,11 +60,11 @@ func main() {
 		panic(err)
 	}
 
-	// Get key again.
+	// get key again.
 	if entry, err := txn1.Get(key); err != nil || entry == nil {
-		fmt.Printf("err: %v; txn.Get(%s);\n", err, key)
+		fmt.Printf("err: %v; txn.get(%s);\n", err, key)
 	} else {
-		fmt.Printf("txn.Get(%s), value=%s, meta:%d, version=%d;\n",
+		fmt.Printf("txn.get(%s), value=%s, meta:%d, version=%d;\n",
 			model.ParseKey(entry.Key), entry.Value, entry.Meta, entry.Version)
 	}
 

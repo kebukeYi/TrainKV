@@ -58,7 +58,7 @@ func TestSkipListUpdate(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		list.Put(model.NewEntry([]byte(RandString(10)), []byte(RandString(10))))
 	}
-	//Put & Get
+	//Put & get
 	key := fmt.Sprintf("key%d", 60)
 	val := fmt.Sprintf("val%d", 60)
 	e := model.NewEntry([]byte(key), []byte(val))
@@ -88,7 +88,7 @@ func TestSkipListUpdate(t *testing.T) {
 	vs = list.Get(entry2.Key)
 	assert.Equal(t, entry2.Value, vs.Value)
 
-	//Get a not exist entry.
+	//get a not exist entry.
 	assert.Nil(t, list.Get([]byte(RandString(10))).Value)
 
 	//Update a entry
@@ -181,7 +181,7 @@ func Benchmark_ConcurrentBasic(b *testing.B) {
 func TestSkipListIterator(t *testing.T) {
 	list := NewSkipList(100000)
 
-	//Put & Get
+	//Put & get
 	entry1 := model.NewEntry(model.KeyWithTs([]byte(RandString(10)), 1), []byte(RandString(10)))
 	list.Put(entry1)
 	assert.Equal(t, entry1.Value, list.Get(entry1.Key).Value)

@@ -55,7 +55,7 @@ func TestDBBasicOperations(t *testing.T) {
 		_ = callBack()
 	}()
 
-	// 测试基本的 Set/Get 操作
+	// 测试基本的 Set/get 操作
 	key := []byte("test-key")
 	value := []byte("test-value")
 
