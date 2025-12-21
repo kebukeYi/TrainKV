@@ -17,6 +17,13 @@ func CompareKeyWithTs(key1, key2 []byte) int {
 	return bytes.Compare(key1Version, key2Version)
 }
 
+func KeyWithTs(key []byte, ts uint64) []byte {
+	out := make([]byte, len(key)+8)
+	copy(out, key)
+	binary.BigEndian.PutUint64(out[len(key):], math.MaxUint64-ts)
+	return out
+}
+
 func ParseTsVersion(key []byte) uint64 {
 	if len(key) <= 8 {
 		return 0
@@ -38,13 +45,6 @@ func SameKeyNoTs(src, dst []byte) bool {
 		return false
 	}
 	return bytes.Equal(ParseKey(src), ParseKey(dst))
-}
-
-func KeyWithTs(key []byte, ts uint64) []byte {
-	out := make([]byte, len(key)+8)
-	copy(out, key)
-	binary.BigEndian.PutUint64(out[len(key):], math.MaxUint64-ts)
-	return out
 }
 
 func KeyWithTestTs(key []byte, version uint64) []byte {

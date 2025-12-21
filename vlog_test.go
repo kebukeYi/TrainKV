@@ -70,7 +70,7 @@ func TestValueLog_Entry(t *testing.T) {
 
 func TestVlogBase(t *testing.T) {
 	// 清理目录
-	clearDir(vlogOpt.WorkDir)
+	removeAll(vlogOpt.WorkDir)
 	// 打开DB
 	db, _, callBack := Open(vlogOpt)
 	defer func() {
@@ -142,7 +142,7 @@ func TestVlogBase(t *testing.T) {
 }
 
 func TestValueGC(t *testing.T) {
-	clearDir(vlogOpt.WorkDir)
+	removeAll(vlogOpt.WorkDir)
 	vlogOpt.ValueLogFileSize = 1 << 20
 	db, _, callBack := Open(vlogOpt)
 	defer func() {
@@ -161,13 +161,13 @@ func TestValueGC(t *testing.T) {
 			Meta:      e.Meta,
 			ExpiresAt: e.ExpiresAt,
 		})
-		require.NoError(t, db.Set(e))
+		require.NoError(t, db.set(e))
 	}
 	time.Sleep(2 * time.Second)
 	for i := 0; i < 10; i++ {
 		entry := model.NewEntry(kvList[i].Key, nil)
 		entry.Meta |= common.BitDelete
-		require.NoError(t, db.Set(entry))
+		require.NoError(t, db.set(entry))
 	}
 
 	// 直接开始GC, 1.pickVlog需要和合并联动; 2.启动 vlog.file 的rewrite();

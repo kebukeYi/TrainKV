@@ -43,6 +43,9 @@ func (lsm *LSM) InitLevelManger(opt *Options) *LevelsManger {
 }
 
 func (lm *LevelsManger) getTxnDoneIndexFromCh() {
+	if lm.opt.TxnDoneIndexCh == nil {
+		return
+	}
 	for {
 		select {
 		case r := <-lm.opt.TxnDoneIndexCh:
@@ -141,6 +144,9 @@ func (lm *LevelsManger) Get(keyTs []byte, skipListEntryMaxTs *model.Entry) (mode
 				skipListEntryMaxTs = &entry
 			}
 		}
+	}
+	if skipListEntryMaxTs.Version == 0 {
+		return model.Entry{}, common.ErrKeyNotFound
 	}
 	safeCopy := skipListEntryMaxTs.SafeCopy()
 	// 否则到最后, 返回 存储的最高版本的数据;

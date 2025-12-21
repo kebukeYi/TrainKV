@@ -21,60 +21,68 @@ func main() {
 		_ = callBack()
 	}()
 
-	keyTs1 := model.KeyWithTs([]byte("name"), 1)
-	val1 := "TrainKV-1"
+	key := []byte("key")
+	val := []byte("value1")
 
-	// Set key.
-	e1 := model.NewEntry(keyTs1, []byte(val1))
-	if err := db.Set(e1); err != nil {
+	txn1 := db.NewTransaction(true)
+
+	// set key.
+	if err = txn1.Set(key, val); err != nil {
 		panic(err)
 	}
 
 	// update key again.
-	keyTs2 := model.KeyWithTs([]byte("name"), 2)
-	val2 := "TrainKV-2"
-	e2 := model.NewEntry(keyTs2, []byte(val2))
-	if err := db.Set(e2); err != nil {
+	val2 := []byte("value2")
+	if err = txn1.Set(key, val2); err != nil {
 		panic(err)
 	}
 
-	// To test a valid key for the following iterator.
-	newE := model.NewEntry(model.KeyWithTs([]byte("newName"), 1), []byte("newValidVal"))
-	if err := db.Set(newE); err != nil {
+	txn2 := db.NewTransaction(true)
+	// To test a valid key.
+	if err = txn2.Set([]byte("newKey"), []byte("newValue")); err != nil {
+		panic(err)
+	}
+	_, err = txn2.Commit()
+	if err != nil {
 		panic(err)
 	}
 
 	// Get key.
-	if entry, err := db.Get(keyTs1); err != nil || entry == nil {
-		fmt.Printf("err:%v; db.Get(key): %s;\n", err, keyTs1)
+	if entry, err := txn1.Get(key); err != nil || entry == nil {
+		fmt.Printf("err:%v; txn.Get(key): %s;\n", err, key)
 	} else {
-		fmt.Printf("db.Get(%s), value=%s, meta:%d, version=%d; \n",
+		fmt.Printf("txn.Get(%s), value=%s, meta:%d, version=%d;\n",
 			model.ParseKey(entry.Key), entry.Value, entry.Meta, entry.Version)
 	}
 
 	// Delete key.
-	if err := db.Del(keyTs1); err != nil {
+	if err := txn1.Delete(key); err != nil {
 		panic(err)
 	}
 
 	// Get key again.
-	if entry, err := db.Get(keyTs1); err != nil || entry == nil {
-		fmt.Printf("err: %v; db.Get(%s);\n", err, model.ParseKey(keyTs1))
+	if entry, err := txn1.Get(key); err != nil || entry == nil {
+		fmt.Printf("err: %v; txn.Get(%s);\n", err, key)
 	} else {
-		fmt.Printf("db.Get(%s), value=%s, meta:%d, version=%d; \n",
+		fmt.Printf("txn.Get(%s), value=%s, meta:%d, version=%d;\n",
 			model.ParseKey(entry.Key), entry.Value, entry.Meta, entry.Version)
 	}
 
 	// Iterator keys(Only valid values are returned).
-	iter := db.NewDBIterator(&interfaces.Options{IsAsc: true, IsSetCache: false})
-	defer func() { _ = iter.Close() }()
+	iter := txn1.NewIterator(&interfaces.Options{IsAsc: true, IsSetCache: false})
+	defer func() { err = iter.Close() }()
 	iter.Rewind()
 	for iter.Valid() {
 		it := iter.Item()
 		if it.Item.Version != 0 {
-			fmt.Printf("db.Iterator key=%s, value=%s, meta:%d, version=%d;\n",
+			fmt.Printf("txn.Iterator key=%s, value=%s, meta:%d, version=%d;\n",
 				model.ParseKey(it.Item.Key), it.Item.Value, it.Item.Meta, it.Item.Version)
 		}
 		iter.Next()
 	}
+	commitTs, err := txn1.Commit()
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("txn.Commit(), commitTs=%d;\n", commitTs)
 }

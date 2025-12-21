@@ -644,7 +644,6 @@ func (lm *LevelsManger) compactBuildTables(level int, cd compactDef) ([]*Table, 
 		go func(kr keyRange) {
 			defer inflightBuilders.Done(nil)
 			iterators := newIterator() // 全量表参与迭代;
-			//iterator := NewMergeIterator(iterators, false)
 			iterator := NewMergingIterator(iterators, options)
 			defer iterator.Close() // 逐个解开 table 引用
 			lm.subCompact(iterator, kr, cd, inflightBuilders, res)

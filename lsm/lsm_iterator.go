@@ -154,10 +154,17 @@ func (hp IteratorHeap) Len() int {
 	return len(hp)
 }
 func (hp IteratorHeap) Less(i, j int) bool {
-	if hp[i].Valid() && hp[j].Valid() {
-		return bytes.Compare(hp[i].Item().Item.Key, hp[j].Item().Item.Key) < 0
+	// 处理无效迭代器：有效迭代器应该排在无效迭代器前面
+	if hp[i].Valid() != hp[j].Valid() {
+		return hp[i].Valid() // 只有i有效时才返回true
 	}
-	return true
+	// 现在，要么两个都有效，要么两个都无效
+	if !hp[i].Valid() {
+		// 两个都无效，顺序无所谓，返回false保持稳定
+		return false
+	}
+	// 两个都有效，比较键
+	return bytes.Compare(hp[i].Item().Item.Key, hp[j].Item().Item.Key) < 0
 }
 func (hp IteratorHeap) Swap(i, j int) {
 	hp[i], hp[j] = hp[j], hp[i]
@@ -180,7 +187,6 @@ type MergingIterator struct {
 func NewMergingIterator(iters []interfaces.Iterator, opt *interfaces.Options) *MergingIterator {
 	hp := make(IteratorHeap, 0)
 	for _, iter := range iters {
-		//if iter != nil && iter.Valid() {
 		if iter != nil {
 			hp = append(hp, iter)
 		}
@@ -203,6 +209,9 @@ func (m *MergingIterator) Valid() bool {
 }
 
 func (m *MergingIterator) Item() interfaces.Item {
+	if !m.Valid() {
+		return interfaces.Item{} // 或者返回错误
+	}
 	item := m.itHeap[0].Item()
 	safeCopy := item.Item.SafeCopy()
 	return interfaces.Item{Item: safeCopy}
@@ -218,7 +227,6 @@ func (m *MergingIterator) Next() {
 	minIterator.Next()
 	// 如果这个迭代器有效, 则继续迭代;
 	if minIterator.Valid() {
-
 		heap.Push(&m.itHeap, minIterator)
 	}
 }

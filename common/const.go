@@ -29,8 +29,8 @@ const MaxAllocatorInitialSize = 256 << 20
 
 // entry meta
 const (
-	BitDelete       byte = 1 << 0 //1 Set if the key has been deleted.
-	BitValuePointer byte = 1 << 2 //2 Set if the value is NOT stored directly next to key.
+	BitDelete       byte = 1 << 0 //1 set if the key has been deleted.
+	BitValuePointer byte = 1 << 2 //2 set if the value is NOT stored directly next to key.
 	BitTxn          byte = 1 << 3
 	BitFinTxn       byte = 1 << 4
 )

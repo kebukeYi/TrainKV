@@ -8,7 +8,7 @@ import (
 
 type Cache struct {
 	m         sync.RWMutex
-	wlru      *winLRU
+	wlru      *winLRU // 接收新插入，快速淘汰
 	slru      *segmentedLRU
 	door      *BloomFilter
 	cmkt      *cmSketch
@@ -20,14 +20,26 @@ type Cache struct {
 func NewCache(numEntries int) *Cache {
 	const winlruPct = 10
 	winlruSz := (winlruPct * numEntries) / 100
+	if winlruSz < 1 {
+		winlruSz = 1
+	}
 	slruSz := int(float64(numEntries) * ((100 - winlruPct) / 100.0))
+	if slruSz < 1 {
+		slruSz = 1
+	}
 	slruOne := int(0.2 * float64(slruSz))
+	if slruOne < 1 {
+		slruOne = 1
+	}
+	slruTwo := slruSz - slruOne
+	if slruTwo < 1 {
+		slruTwo = 1
+	}
 	data := make(map[uint64]*list.Element, numEntries)
-
 	return &Cache{
 		m:         sync.RWMutex{},
 		wlru:      NewWinLRU(winlruSz, data),
-		slru:      newSLRU(data, slruOne, slruSz-slruOne),
+		slru:      newSLRU(data, slruOne, slruTwo),
 		door:      newBloomFilter(numEntries, 0.01),
 		cmkt:      newCmSketch(int64(numEntries)),
 		total:     0,
@@ -44,12 +56,12 @@ func (c *Cache) Set(key, val interface{}) bool {
 
 func (c *Cache) set(key, val interface{}) bool {
 	keyToHash, _ := utils.KeyToHash(key)
-	itme := storeItem{
+	item := storeItem{
 		keyHash: keyToHash,
 		value:   val,
 		stage:   0,
 	}
-	eitem, evicted := c.wlru.add(itme)
+	eitem, evicted := c.wlru.add(item)
 	if !evicted {
 		return true
 	}
@@ -72,7 +84,7 @@ func (c *Cache) set(key, val interface{}) bool {
 		return true
 	}
 
-	// 执行到这里 说明 winlru的值频率>= slru的值频率; 需要留下winlru的值
+	// 执行到这里 说明 winlru 的值频率>= slru的值频率; 需要留下winlru的值
 	// 留下来的 进入 stageOne, 但是此时 victim 并没有剔除掉, 但是add()方法的逻辑中会进行剔除判断;
 	c.slru.add(eitem)
 	return true
@@ -130,7 +142,6 @@ func (c *Cache) del(key interface{}) (interface{}, bool) {
 	if !ok {
 		return 0, false
 	}
-	//item := element.Value.(*storeItem)
 	delete(c.data, keyToHash)
 	return keyToHash, true
 }

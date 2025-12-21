@@ -182,6 +182,7 @@ func (t *Transaction) modify(e *model.Entry) error {
 	case len(e.Key) > common.MaxKeySize:
 		return exceedsSize("Key", common.MaxKeySize, e.Key)
 	}
+
 	if err := t.checkSize(e); err != nil {
 		return err
 	}
@@ -254,16 +255,22 @@ func (t *Transaction) addReadKey(key []byte) {
 		t.readKeys = append(t.readKeys, hash)
 	}
 }
-func (t *Transaction) Commit() error {
+func (t *Transaction) Commit() (uint64, error) {
+	if t.discard {
+		return 0, common.ErrDiscardedTxn
+	}
 	defer t.Discard()
 	callBack, err := t.commitAndSendToDB()
 	if err != nil {
-		return err
+		return 0, err
 	}
-	err = callBack()
-	return err
+	commitTs, err := callBack()
+	if err != nil {
+		return 0, err
+	}
+	return commitTs, nil
 }
-func (t *Transaction) commitAndSendToDB() (func() error, error) {
+func (t *Transaction) commitAndSendToDB() (func() (uint64, error), error) {
 	manager := t.db.transactionManager
 	manager.writeChLock.Lock()
 	defer manager.writeChLock.Unlock()
@@ -272,7 +279,7 @@ func (t *Transaction) commitAndSendToDB() (func() error, error) {
 		return nil, common.ErrConflict
 	}
 	keepTogether := true
-	entries := make([]*model.Entry, len(t.pendingKeys))
+	entries := make([]*model.Entry, 0, len(t.pendingKeys))
 	for _, entry := range t.pendingKeys {
 		if entry.Version == 0 {
 			entry.Version = commitTs
@@ -299,11 +306,11 @@ func (t *Transaction) commitAndSendToDB() (func() error, error) {
 		return nil, err
 	}
 
-	ret := func() error {
+	ret := func() (uint64, error) {
 		// 阻塞等待, 写入lsm结果, 然后才允许, 结束当前水印;
 		err := req.Wait()
 		manager.doneCommit(commitTs)
-		return err
+		return commitTs, err
 	}
 	return ret, nil
 }
@@ -315,8 +322,8 @@ func (t *Transaction) Discard() {
 		panic("Unclosed iterator at time of Txn.Discard.")
 	}
 	t.discard = true
-	t.RollBack()
 	t.db.transactionManager.doneStart(t)
+	t.RollBack()
 }
 func (t *Transaction) RollBack() {
 	t.pendingKeys = nil

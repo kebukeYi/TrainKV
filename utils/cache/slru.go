@@ -7,8 +7,9 @@ import (
 
 type segmentedLRU struct {
 	data                     map[uint64]*list.Element
-	stageOneCap, stageCapTwo int
-	stageOne, stageTwo       *list.List
+	stageOneCap, stageTwoCap int
+	stageOne                 *list.List // 刚从 winlru 晋升，但还没“转正”
+	stageTwo                 *list.List // 热点数据，长期保留
 }
 
 const (
@@ -20,7 +21,7 @@ func newSLRU(data map[uint64]*list.Element, stageOneCap, stageTwoCap int) *segme
 	return &segmentedLRU{
 		data:        data,
 		stageOneCap: stageOneCap,
-		stageCapTwo: stageTwoCap,
+		stageTwoCap: stageTwoCap,
 		stageOne:    list.New(),
 		stageTwo:    list.New(),
 	}
@@ -33,7 +34,7 @@ func (slru *segmentedLRU) add(newitem storeItem) {
 		return
 	}
 	// 待定; stageOne满了,但是stageTwo未满, 那么在add逻辑中先都添加在stageOne中,后续再添加,那就淘汰stageOne中最后一个数据;
-	if slru.Len() < slru.stageCapTwo+slru.stageOneCap {
+	if slru.Len() < slru.stageTwoCap+slru.stageOneCap {
 		slru.data[newitem.keyHash] = slru.stageOne.PushFront(&newitem)
 		return
 	}
@@ -47,7 +48,7 @@ func (slru *segmentedLRU) add(newitem storeItem) {
 	slru.stageOne.MoveToFront(e)
 }
 
-func (slru segmentedLRU) get(v *list.Element) {
+func (slru *segmentedLRU) get(v *list.Element) {
 	item := v.Value.(*storeItem)
 	if item.stage == STAGE_TWO {
 		slru.stageTwo.MoveToFront(v)
@@ -56,7 +57,7 @@ func (slru segmentedLRU) get(v *list.Element) {
 	// 访问的数据在 StageOne, 那么再次被访问到, 就需要提升到 StageTwo 中
 
 	// 假如 StageTwo 没满, 那么直接添加数据
-	if slru.stageTwo.Len() < slru.stageCapTwo {
+	if slru.stageTwo.Len() < slru.stageTwoCap {
 		slru.stageOne.Remove(v)
 		item.stage = STAGE_TWO
 		slru.data[item.keyHash] = slru.stageTwo.PushFront(item)
@@ -84,7 +85,7 @@ func (slru segmentedLRU) get(v *list.Element) {
 }
 
 func (slru *segmentedLRU) victim() *storeItem {
-	if slru.Len() < slru.stageCapTwo+slru.stageOneCap {
+	if slru.Len() < slru.stageTwoCap+slru.stageOneCap {
 		return nil
 	}
 	element := slru.stageOne.Back()

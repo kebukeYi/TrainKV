@@ -73,7 +73,7 @@ func BenchmarkNormalEntry(b *testing.B) {
 		valSize := 127 + 1 // val: 12B
 		//valSize := 10<<20 + 1 // val: 10.01MB
 		//valSize := 64<<20 + 1 // val: 64.01MB
-		err := traindb.Set(model.BuildBigEntry(key, uint64(valSize)))
+		err := traindb.set(model.BuildBigEntry(key, uint64(valSize)))
 		assert.Nil(b, err)
 	}
 
@@ -135,7 +135,7 @@ func TestNormalEntry(b *testing.T) {
 		valSize := 127 + 1 // val: 12B
 		//valSize := 10<<20 + 1 // val: 10.01MB
 		//valSize := 64<<20 + 1 // val: 64.01MB
-		err := traindb.Set(model.BuildBigEntry(key, uint64(valSize)))
+		err := traindb.set(model.BuildBigEntry(key, uint64(valSize)))
 		assert.Nil(b, err)
 	}
 

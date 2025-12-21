@@ -100,25 +100,25 @@ type keyValVersion struct {
 // TestCheckOverlap 测试重叠表区间
 func TestCheckOverlap(t *testing.T) {
 	t.Run("overlap", func(t *testing.T) {
-		// This test consists of one table on level 0 and one on level 1.
-		// There is an overlap amongst the tables but there is no overlap with rest of the levels.
+
 		t.Run("same keys", func(t *testing.T) {
-			runBadgerTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
+			runKVTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
 				l0 := []keyValVersion{{"foo", "bar", 3, 0}}
 				l1 := []keyValVersion{{"foo", "bar", 2, 0}}
 				createAndSetLevel(lsm, l0, 0) // 0层的是高版本
 				createAndSetLevel(lsm, l1, 1) // 1层的是低版本
 
-				// Level 0 should overlap with level 0 tables.
+				// level 0 和 level 0 有重叠;
 				require.True(t, lsm.LevelManger.checkOverlap(lsm.LevelManger.levelHandlers[0].tables, 0))
 
-				// Level 1 should overlap with level 0 tables (they have the same keys).
+				// level 0 和 level 1  有重叠;
 				require.True(t, lsm.LevelManger.checkOverlap(lsm.LevelManger.levelHandlers[0].tables, 1))
 
-				// Level 2 and 3 should not overlap with level 0 tables.
+				// level 0 和 level 2  无有重叠;
+				// level 1 和 level 2  无有重叠;
 				require.False(t, lsm.LevelManger.checkOverlap(lsm.LevelManger.levelHandlers[0].tables, 2))
 				require.False(t, lsm.LevelManger.checkOverlap(lsm.LevelManger.levelHandlers[1].tables, 2))
-
+				// 同上;
 				require.False(t, lsm.LevelManger.checkOverlap(lsm.LevelManger.levelHandlers[0].tables, 3))
 				require.False(t, lsm.LevelManger.checkOverlap(lsm.LevelManger.levelHandlers[1].tables, 3))
 
@@ -126,7 +126,7 @@ func TestCheckOverlap(t *testing.T) {
 		})
 
 		t.Run("overlapping keys", func(t *testing.T) {
-			runBadgerTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
+			runKVTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
 				l0 := []keyValVersion{
 					{"aa", "x", 1, 0},
 					{"bb", "x", 1, 0},
@@ -137,14 +137,14 @@ func TestCheckOverlap(t *testing.T) {
 				createAndSetLevel(lsm, l0, 0)
 				createAndSetLevel(lsm, l1, 1)
 
-				// Level 0 should overlap with level 0 tables.
+				// level 0 和 level 0 1 有重叠;
 				require.True(t, lsm.LevelManger.checkOverlap(lsm.LevelManger.levelHandlers[0].tables, 0))
 				require.True(t, lsm.LevelManger.checkOverlap(lsm.LevelManger.levelHandlers[1].tables, 1))
 
-				// Level 1 should overlap with level 0 tables, "foo" key is common.
+				// level 1 和 level 0 有重叠; "foo" key;
 				require.True(t, lsm.LevelManger.checkOverlap(lsm.LevelManger.levelHandlers[0].tables, 1))
 
-				// Level 2 and 3 should not overlap with level 0 tables.
+				// level 2 3  和 level 0 无重叠;
 				require.False(t, lsm.LevelManger.checkOverlap(lsm.LevelManger.levelHandlers[0].tables, 2))
 				require.False(t, lsm.LevelManger.checkOverlap(lsm.LevelManger.levelHandlers[0].tables, 3))
 			})
@@ -152,7 +152,7 @@ func TestCheckOverlap(t *testing.T) {
 	})
 
 	t.Run("non-overlapping", func(t *testing.T) {
-		runBadgerTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
+		runKVTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
 			l0 := []keyValVersion{
 				{"aa", "x", 1, 0},
 				{"bb", "x", 1, 0},
@@ -162,10 +162,10 @@ func TestCheckOverlap(t *testing.T) {
 			createAndSetLevel(lsm, l0, 0)
 			createAndSetLevel(lsm, l1, 1)
 
-			// Level 1 should not overlap with level 0 tables
+			// level 0 和 level 1 无重叠;
 			require.False(t, lsm.LevelManger.checkOverlap(lsm.LevelManger.levelHandlers[0].tables, 1))
 
-			// Level 2 and 3 should not overlap with level 0 tables.
+			// level 2 3 和 level 0 无重叠;
 			require.False(t, lsm.LevelManger.checkOverlap(lsm.LevelManger.levelHandlers[0].tables, 2))
 			require.False(t, lsm.LevelManger.checkOverlap(lsm.LevelManger.levelHandlers[0].tables, 3))
 		})
@@ -175,7 +175,7 @@ func TestCheckOverlap(t *testing.T) {
 func TestCompaction(t *testing.T) {
 	// 简单测试 l0中的数据合并到l1, 只保留相同key的最高版本单个数据;
 	t.Run("level 0 to level 1", func(t *testing.T) {
-		runBadgerTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
+		runKVTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
 			l0 := []keyValVersion{
 				{"foo", "bar", 3, 0},
 				{"fooz", "baz", 1, 0}}
@@ -190,7 +190,7 @@ func TestCompaction(t *testing.T) {
 
 			// Level 1 has table l1.
 			createAndSetLevel(lsm, l1, 1) // 88B
-			//  起始数据状态
+			// 起始数据状态
 			getAllAndCheck(t, lsm, []keyValVersion{
 				{"foo", "bar", 1, 0},
 				{"foo", "bar", 2, 0},
@@ -205,19 +205,22 @@ func TestCompaction(t *testing.T) {
 				nextTables: lsm.LevelManger.levelHandlers[1].tables,
 				dst:        lsm.LevelManger.levelTargets(), // 计算的 baseLevel 会直接到6层;
 			}
+			// 手动设置到 l1 层;
 			cdef.dst.dstLevelId = 1
+			lsm.LevelManger.txnDoneIndex.Store(10)
+			// 执行 l0 -> l1 层 合并计划;
 			require.NoError(t, lsm.LevelManger.runCompactDef(-1, 0, cdef))
-			// foo version 2,1 should be dropped after compaction.
+			// foo version 2,3 将会被剔除掉;
 			// 合并后的库中数据状态:
 			getAllAndCheck(t, lsm, []keyValVersion{
-				{"foo", "bar", 3, 0},
+				{"foo", "bar", 1, 0},
 				{"fooz", "baz", 1, 0}})
 		})
 	})
 
 	// 简单测试 l0中的数据合并到l1, 只保留相同key的最高版本单个数据;
 	t.Run("level 0 to level 1 with duplicates", func(t *testing.T) {
-		runBadgerTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
+		runKVTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
 			l0 := []keyValVersion{
 				{"fooz", "baz", 1, 0}}
 			l01 := []keyValVersion{
@@ -231,13 +234,12 @@ func TestCompaction(t *testing.T) {
 			// Level 1 has table l1.
 			createAndSetLevel(lsm, l1, 1)
 
-			// lsm层面的迭代器会返回数据库中所有数据,按照版本号递增,包括低版本数据;
-			// db层面的迭代器会返回数据库中所有最高版本数据,不包括低版本无效数据;
 			getAllAndCheck(t, lsm, []keyValVersion{
 				{"foo", "bar", 3, 0},
 				{"foo", "bar", 4, 0},
 				{"fooz", "baz", 1, 0},
 			})
+
 			cdef := compactDef{
 				thisLevel:  lsm.LevelManger.levelHandlers[0],
 				nextLevel:  lsm.LevelManger.levelHandlers[1],
@@ -246,17 +248,18 @@ func TestCompaction(t *testing.T) {
 				dst:        lsm.LevelManger.levelTargets(),
 			}
 			cdef.dst.dstLevelId = 1
+			lsm.LevelManger.txnDoneIndex.Store(10)
 			require.NoError(t, lsm.LevelManger.runCompactDef(-1, 0, cdef))
-			// foo version 3 (both) should be dropped after compaction.
+			// foo version 4 (both) should be dropped after compaction.
 			getAllAndCheck(t, lsm, []keyValVersion{
-				{"foo", "bar", 4, 0},
+				{"foo", "bar", 3, 0},
 				{"fooz", "baz", 1, 0}})
 		})
 	})
 
 	// 简单测试 l0中的数据合并到l1, 只保留相同key的最高版本单个数据;
 	t.Run("level 0 to level 1 with lower overlap", func(t *testing.T) {
-		runBadgerTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
+		runKVTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
 			l0 := []keyValVersion{
 				{"foo", "bar", 4, 0},
 				{"fooz", "baz", 1, 0}}
@@ -264,11 +267,13 @@ func TestCompaction(t *testing.T) {
 				{"foo", "bar", 3, 0}}
 			l1 := []keyValVersion{
 				{"foo", "bar", 2, 0}}
+
 			l2 := []keyValVersion{
 				{"foo", "bar", 1, 0}}
 			// Level 0 has table l0 and l01.
 			createAndSetLevel(lsm, l0, 0)
 			createAndSetLevel(lsm, l01, 0)
+
 			// Level 1 has table l1.
 			createAndSetLevel(lsm, l1, 1)
 			// Level 2 has table l2.
@@ -289,11 +294,11 @@ func TestCompaction(t *testing.T) {
 				dst:        lsm.LevelManger.levelTargets(),
 			}
 			cdef.dst.dstLevelId = 1
+			lsm.LevelManger.txnDoneIndex.Store(10)
 			require.NoError(t, lsm.LevelManger.runCompactDef(-1, 0, cdef))
-			// foo version 2 and version 1 should be dropped after compaction.
 			getAllAndCheck(t, lsm, []keyValVersion{
-				{"foo", "bar", 1, 0}, // 在level2层,没有参与 l0->l1 的合并;
-				{"foo", "bar", 4, 0},
+				{"foo", "bar", 1, 0}, // 在level2层,l2 没有参与 l0->l1 的合并;
+				{"foo", "bar", 2, 0},
 				{"fooz", "baz", 1, 0},
 			})
 		})
@@ -301,7 +306,7 @@ func TestCompaction(t *testing.T) {
 
 	// 简单测试 l1中的数据合并到l2, 只保留相同key的最高版本单个数据;
 	t.Run("level 1 to level 2", func(t *testing.T) {
-		runBadgerTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
+		runKVTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
 			l1 := []keyValVersion{
 				{"foo", "bar", 3, 0},
 				{"fooz", "baz", 1, 0}}
@@ -324,11 +329,11 @@ func TestCompaction(t *testing.T) {
 				dst:        lsm.LevelManger.levelTargets(),
 			}
 			cdef.dst.dstLevelId = 2
+			lsm.LevelManger.txnDoneIndex.Store(10)
 			require.NoError(t, lsm.LevelManger.runCompactDef(-1, 1, cdef))
-			// foo version 2 should be dropped after compaction.
 			getAllAndCheck(t, lsm, []keyValVersion{
-				{"foo", "bar", 3, 0},
-				{"fooz", "baz", 1, 0}}) // 理解
+				{"foo", "bar", 2, 0},
+				{"fooz", "baz", 1, 0}})
 		})
 	})
 
@@ -336,24 +341,25 @@ func TestCompaction(t *testing.T) {
 
 		// 简单测试 l0中的数据合并到l1, 只保留相同key的最高版本单个数据,尽管是删除类型数据;
 		t.Run("with overlap", func(t *testing.T) {
-			runBadgerTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
+			runKVTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
 				l1 := []keyValVersion{
-					{"foo", "bar", 3, common.BitDelete},
+					{"foo", "bar", 1, common.BitDelete},
 					{"fooz", "baz", 1, common.BitDelete}}
 				l2 := []keyValVersion{
 					{"foo", "bar", 2, 0},
 				}
+
 				l3 := []keyValVersion{
-					{"foo", "bar", 1, 0},
+					{"foo", "bar", 3, 0},
 				}
 				createAndSetLevel(lsm, l1, 1)
 				createAndSetLevel(lsm, l2, 2)
 				createAndSetLevel(lsm, l3, 3)
 
 				getAllAndCheck(t, lsm, []keyValVersion{
-					{"foo", "bar", 1, 0},
+					{"foo", "bar", 1, common.BitDelete},
 					{"foo", "bar", 2, 0},
-					{"foo", "bar", 3, common.BitDelete},
+					{"foo", "bar", 3, 0},
 					{"fooz", "baz", 1, common.BitDelete},
 				})
 				// l1 -> l2
@@ -365,17 +371,13 @@ func TestCompaction(t *testing.T) {
 					dst:        lsm.LevelManger.levelTargets(),
 				}
 				cdef.dst.dstLevelId = 2
+				lsm.LevelManger.txnDoneIndex.Store(10)
 				require.NoError(t, lsm.LevelManger.runCompactDef(-1, 1, cdef))
-				// foo bar version 2 should be dropped after compaction.
-				// fooz baz version 1 will remain because overlap exists, which is
-				// expected because `hasOverlap` is only checked once at the
-				// beginning of `compactBuildTables` method.
 				// 处在l1,l2 层中的 fooz 并没有和下层l3 有overlap, 按照常规下, 是会被清理掉的, 但是为什么没有清理掉?
-				// 但是处在 l1,l2 层中的 foo,和l3层有重合, 因此 hasOverlap ,也就被置为 true; 因此属于是连带效应,没有被铲除;
-				// everything from level 1 is now in level 2.
+				// 但是处在 l1,l2 层中的 foo 和l3层有重合, 因此 hasOverlap, 也就被置为 true; 因此属于是连带效应,没有被铲除;
 				getAllAndCheck(t, lsm, []keyValVersion{
-					{"foo", "bar", 1, 0},                 // 在l3层
-					{"foo", "bar", 3, common.BitDelete},  // 在l2层
+					{"foo", "bar", 1, common.BitDelete},  // 在l2层
+					{"foo", "bar", 3, 0},                 // 在l3层
 					{"fooz", "baz", 1, common.BitDelete}, // 在l2层
 				})
 
@@ -388,16 +390,13 @@ func TestCompaction(t *testing.T) {
 					dst:        lsm.LevelManger.levelTargets()}
 				cdef.dst.dstLevelId = 3
 				require.NoError(t, lsm.LevelManger.runCompactDef(-1, 2, cdef))
-				// everything should be removed now
-				getAllAndCheck(t, lsm, []keyValVersion{
-					{"foo", "bar", 3, common.BitDelete},  // 在l3层
-					{"fooz", "baz", 1, common.BitDelete}, // 在l2层
-				}) // 理解
+				//  什么都没有了;
+				getAllAndCheck(t, lsm, []keyValVersion{})
 			})
 		})
 
 		t.Run("with bottom overlap", func(t *testing.T) {
-			runBadgerTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
+			runKVTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
 				l1 := []keyValVersion{
 					{"foo", "bar", 3, common.BitDelete}}
 				l2 := []keyValVersion{
@@ -424,6 +423,7 @@ func TestCompaction(t *testing.T) {
 					dst:        lsm.LevelManger.levelTargets(),
 				}
 				cdef.dst.dstLevelId = 2
+				lsm.LevelManger.txnDoneIndex.Store(10)
 				require.NoError(t, lsm.LevelManger.runCompactDef(-1, 1, cdef))
 				// the top table at L1 doesn't overlap L3, but the bottom table at L2
 				// does, delete keys should not be removed. 理解
@@ -436,7 +436,7 @@ func TestCompaction(t *testing.T) {
 		})
 
 		t.Run("without overlap", func(t *testing.T) {
-			runBadgerTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
+			runKVTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
 				l1 := []keyValVersion{
 					{"foo", "bar", 3, common.BitDelete},
 					{"fooz", "baz", 1, common.BitDelete}}
@@ -459,6 +459,7 @@ func TestCompaction(t *testing.T) {
 					dst:        lsm.LevelManger.levelTargets(),
 				}
 				cdef.dst.dstLevelId = 2
+				lsm.LevelManger.txnDoneIndex.Store(10)
 				require.NoError(t, lsm.LevelManger.runCompactDef(-1, 1, cdef))
 				// foo version 2 should be dropped after compaction.
 				// 没有出现 重合, 删除标记,还存在;
@@ -471,7 +472,7 @@ func TestCompaction(t *testing.T) {
 		})
 
 		t.Run("with splits", func(t *testing.T) {
-			runBadgerTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
+			runKVTest(t, compactOptions, func(t *testing.T, lsm *LSM) {
 				// l1 -> l2
 				// l1 层表; l2 多个表;
 				// 1.sst[a-z]
@@ -608,6 +609,7 @@ func TestCompaction(t *testing.T) {
 				cdef.nextRange = getKeyRange(lsm.LevelManger.levelHandlers[2].tables...)
 				cdef.dst = lsm.LevelManger.levelTargets()
 				cdef.dst.dstLevelId = 2
+				lsm.LevelManger.txnDoneIndex.Store(10)
 				require.NoError(t, lsm.LevelManger.runCompactDef(-1, 1, cdef))
 
 				getAllAndCheck(t, lsm, []keyValVersion{
@@ -704,7 +706,6 @@ func getAllAndCheck(t *testing.T, lsm *LSM, expected []keyValVersion) {
 	for it.Rewind(); it.Valid(); it.Next() {
 		item := it.Item().Item
 		item.Key = model.ParseKey(item.Key)
-		//fmt.Printf("key:%s ,val:%s,varsion:%d, meta:%d\n", string(item.Key), string(item.Value), item.Version, item.Meta)
 		require.Less(t, i, len(expected), "DB has more number of key than expected")
 		expect := expected[i]
 		require.Equal(t, expect.key, string(item.Key), "expected key: %s actual key: %s", expect.key, item.Key)
@@ -716,7 +717,7 @@ func getAllAndCheck(t *testing.T, lsm *LSM, expected []keyValVersion) {
 	require.Equal(t, len(expected), i, "keys examined should be equal to keys expected")
 }
 
-func runBadgerTest(t *testing.T, opts *Options, test func(t *testing.T, lsm *LSM)) {
+func runKVTest(t *testing.T, opts *Options, test func(t *testing.T, lsm *LSM)) {
 	if opts == nil {
 		opts = compactOptions
 	}

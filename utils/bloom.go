@@ -8,8 +8,6 @@ func (f Filter) MayContainKey(k []byte) bool {
 	return f.MayContain(Hash(k))
 }
 
-// MayContain returns whether the filter may contain given key. False positives
-// are possible, where it returns true for keys not in the original set.
 func (f Filter) MayContain(h uint32) bool {
 	if len(f) < 2 {
 		return false
@@ -32,17 +30,10 @@ func (f Filter) MayContain(h uint32) bool {
 	return true
 }
 
-// NewFilter returns a new Bloom filter that encodes a set of []byte keys with
-// the given number of bits per key, approximately.
-//
-// A good bitsPerKey value is 10, which yields a filter with ~ 1% false
-// positive rate.
 func NewFilter(keys []uint32, bitsPerKey int) Filter {
 	return appendFilter(keys, bitsPerKey)
 }
 
-// BloomBitsPerKey returns the bits per key required by bloomfilter based on
-// the false positive rate.
 func BloomBitsPerKey(numEntries int, fp float64) int {
 	size := -1 * float64(numEntries) * math.Log(fp) / math.Pow(float64(0.69314718056), 2)
 	locs := math.Ceil(size / float64(numEntries))
@@ -53,7 +44,6 @@ func appendFilter(keys []uint32, bitsPerKey int) []byte {
 	if bitsPerKey < 0 {
 		bitsPerKey = 0
 	}
-	// 0.69 is approximately ln(2).
 	k := uint32(float64(bitsPerKey) * 0.69)
 	if k < 1 {
 		k = 1
@@ -63,8 +53,7 @@ func appendFilter(keys []uint32, bitsPerKey int) []byte {
 	}
 
 	nBits := len(keys) * int(bitsPerKey)
-	// For small len(keys), we can see a very high false positive rate. Fix it
-	// by enforcing a minimum bloom filter length.
+
 	if nBits < 64 {
 		nBits = 64
 	}
@@ -81,7 +70,6 @@ func appendFilter(keys []uint32, bitsPerKey int) []byte {
 		}
 	}
 
-	//record the K value of this Bloom Filter
 	filter[nBytes] = uint8(k)
 
 	return filter

@@ -83,7 +83,7 @@ func (vlog *ValueLog) Open(replayFn model.LogEntry) error {
 	common.CondPanic(!ok, errors.New("vlog.filesMap[vlog.maxFid] not found"))
 	endOffset, err := vlog.iterator(lastVLogFile, 0, replayFn)
 	if err != nil {
-		return errors.Wrapf(err, fmt.Sprintf("file.Seek to end path:[%s]", lastVLogFile.FileName()))
+		return errors.Wrapf(err, "file.Seek to end path:[%s]", lastVLogFile.FileName())
 	}
 	atomic.StoreUint32(&vlog.writableFileOffset, endOffset)
 	if err = vlog.sendDiscardStats(); err != nil {
@@ -209,7 +209,7 @@ func (vlog *ValueLog) validateWrites(reqs []*model.Request) error {
 		size := estimateRequestSize(req)
 		estimatedVlogOffset := writableFileOffset + size
 		if estimatedVlogOffset > uint64(vlog.Opt.ValueLogFileMaxSize) {
-			return errors.Errorf("Request size offset %d is bigger than maximum offset %d",
+			return errors.Errorf("Request size offset %d is bigger than ValueLogFileMaxSize %d",
 				estimatedVlogOffset, vlog.Opt.ValueLogFileMaxSize)
 		}
 		if estimatedVlogOffset >= uint64(vlog.Opt.ValueLogFileMaxSize) {

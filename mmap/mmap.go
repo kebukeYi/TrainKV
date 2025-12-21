@@ -12,7 +12,7 @@ func Unmap(b []byte) error {
 }
 
 // Madvise uses the madvise system call to give advise about the use of memory
-// when using a slice that is memory-mapped to a file. Set the readahead flag to
+// when using a slice that is memory-mapped to a file. set the readahead flag to
 // false if page references are expected in random order.
 func Madvise(b []byte, readahead bool) error {
 	return mmapadvise(b, readahead)

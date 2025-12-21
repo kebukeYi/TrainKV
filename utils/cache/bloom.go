@@ -18,8 +18,6 @@ func (b *BloomFilter) MayContain(keyHash uint32) bool {
 	}
 	k := b.hashs
 	if k > 30 {
-		// This is reserved for potentially new encodings for short Bloom filters.
-		// Consider it a match.
 		return true
 	}
 	nBits := uint32(8 * (b.Len() - 1))
@@ -56,7 +54,6 @@ func (b *BloomFilter) AllowKey(key []byte) bool {
 	}
 	already := b.mayContainKey(key)
 	if !already {
-		//b.Insert(utils.Hash(key))
 		keyToHash, _ := utils.KeyToHash(key)
 		b.Insert(uint32(keyToHash))
 	}

@@ -5,7 +5,6 @@ import (
 )
 
 type LevelsCache struct {
-	indexData *cache.Cache
 	blockData *cache.Cache
 }
 
@@ -16,7 +15,6 @@ func newLevelsCache(opt *Options) *LevelsCache {
 		opt.CacheNums = defaultCacheNums
 	}
 	return &LevelsCache{
-		indexData: cache.NewCache(opt.CacheNums),
 		blockData: cache.NewCache(opt.CacheNums),
 	}
 }

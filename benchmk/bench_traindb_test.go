@@ -30,7 +30,7 @@ func Benchmark_PutValue_TrainDB(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		entry := model.NewEntry(GetKey(i), GetValue())
-		err := triandb.Set(entry)
+		err := triandb.set(entry)
 		if err != nil {
 			panic(err)
 			return
@@ -41,7 +41,7 @@ func Benchmark_PutValue_TrainDB(b *testing.B) {
 func initTrainDBData() {
 	for i := 0; i < 500000; i++ {
 		entry := model.NewEntry(GetKey(i), GetValue())
-		err := triandb.Set(entry)
+		err := triandb.set(entry)
 		if err != nil {
 			panic(err)
 			return

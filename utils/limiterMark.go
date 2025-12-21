@@ -4,7 +4,6 @@ import (
 	"container/heap"
 	"context"
 	"sync/atomic"
-	"time"
 )
 
 type minHeap []uint64
@@ -106,7 +105,6 @@ func (lm *LimitMark) processOn(closer *Closer, doneIndexCh chan uint64) {
 	indexWaiters := make(map[uint64][]chan struct{})
 
 	processOne := func(index uint64, done bool) {
-		time.Sleep(3 * time.Second)
 		prev, ok := indexDoneNum[index]
 		if !ok {
 			heap.Push(&minHeap, index)

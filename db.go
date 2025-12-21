@@ -121,7 +121,7 @@ func (db *TrainKV) MaxVersion() uint64 {
 	return db.Lsm.MaxVersion()
 }
 
-func (db *TrainKV) Set(entry *model.Entry) error {
+func (db *TrainKV) set(entry *model.Entry) error {
 	if entry.Key == nil || len(entry.Key) == 0 {
 		return common.ErrEmptyKey
 	}
@@ -130,8 +130,8 @@ func (db *TrainKV) Set(entry *model.Entry) error {
 	return err
 }
 
-func (db *TrainKV) Del(key []byte) error {
-	return db.Set(&model.Entry{
+func (db *TrainKV) del(key []byte) error {
+	return db.set(&model.Entry{
 		Key:       key,
 		Value:     nil,
 		Meta:      common.BitDelete,
@@ -417,42 +417,40 @@ func BuildRequest(entries []*model.Entry) *model.Request {
 	return request
 }
 
-type DBIterator struct {
-	iter      interfaces.Iterator
-	vlog      *ValueLog
-	lastKey   []byte
-	lastEntry model.Entry
+type TxnIterator struct {
+	iter interfaces.Iterator
+	vlog *ValueLog
 }
 
-func (db *TrainKV) NewDBIterator(opt *interfaces.Options) *DBIterator {
-	db.vlog.incrIteratorCount()
+func (txn *Transaction) NewIterator(opt *interfaces.Options) *TxnIterator {
+	txn.db.vlog.incrIteratorCount()
 	iters := make([]interfaces.Iterator, 0)
-	iters = append(iters, db.Lsm.NewLsmIterator(opt)...)
-	res := &DBIterator{
+	iters = append(iters, txn.db.Lsm.NewLsmIterator(opt)...)
+	res := &TxnIterator{
 		iter: lsm.NewMergingIterator(iters, opt),
-		vlog: db.vlog,
+		vlog: txn.db.vlog,
 	}
 	return res
 }
-func (dbIter *DBIterator) Name() string {
-	return "DBIterator"
+func (dbIter *TxnIterator) Name() string {
+	return "TxnIterator"
 }
-func (dbIter *DBIterator) Next() {
+func (dbIter *TxnIterator) Next() {
 	dbIter.iter.Next()
 }
-func (dbIter *DBIterator) Seek(key []byte) {
+func (dbIter *TxnIterator) Seek(key []byte) {
 	dbIter.iter.Seek(key)
 }
-func (dbIter *DBIterator) Rewind() {
+func (dbIter *TxnIterator) Rewind() {
 	dbIter.iter.Rewind()
 }
-func (dbIter *DBIterator) Valid() bool {
+func (dbIter *TxnIterator) Valid() bool {
 	return dbIter.iter.Valid()
 }
-func (dbIter *DBIterator) Item() interfaces.Item {
+func (dbIter *TxnIterator) Item() interfaces.Item {
 	return dbIter.iter.Item()
 }
-func (dbIter *DBIterator) Close() error {
+func (dbIter *TxnIterator) Close() error {
 	err := dbIter.vlog.decrIteratorCount()
 	if err != nil {
 		return err
