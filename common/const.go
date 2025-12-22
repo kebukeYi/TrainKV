@@ -10,7 +10,7 @@ const (
 	VlogFileDiscardStatsKey           = "VlogFileDiscard" // For storing lfDiscardStats
 	ManifestFilename                  = "MANIFEST"
 	ManifestRewriteFilename           = "REWRITEMANIFEST"
-	TxnKey                            = "!train!txn"
+	TxnKey                            = "!train!txn!fin"
 	LockFile                          = "LOCKFILE"
 	ManifestDeletionsRewriteThreshold = 10000 // 次
 	MaxKeySize                        = 65000 // B

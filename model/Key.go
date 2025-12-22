@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// CompareKeyWithTs MergeIterator.fix()使用; ok
+// CompareKeyWithTs MergingIterator.Less()使用;
 func CompareKeyWithTs(key1, key2 []byte) int {
 	if cmp := bytes.Compare(key1[:len(key1)-8], key2[:len(key2)-8]); cmp != 0 {
 		return cmp
@@ -52,6 +52,14 @@ func KeyWithTestTs(key []byte, version uint64) []byte {
 	copy(out, key)
 	binary.BigEndian.PutUint64(out[len(key):], version)
 	return out
+}
+
+func ParseTestTsVersion(key []byte) uint64 {
+	if len(key) <= 8 {
+		return 0
+	}
+	ts := binary.BigEndian.Uint64(key[len(key)-8:])
+	return ts
 }
 
 func SafeCopy(dst, src []byte) []byte {

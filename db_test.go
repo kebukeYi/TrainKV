@@ -5,17 +5,66 @@ import (
 	"github.com/kebukeYi/TrainKV/common"
 	"github.com/kebukeYi/TrainKV/interfaces"
 	"github.com/kebukeYi/TrainKV/lsm"
-	"github.com/kebukeYi/TrainKV/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"os"
+	"sync"
 	"testing"
 )
 
-func TestDBOpenAndClose(t *testing.T) {
-	dir, err := os.MkdirTemp("", "trainkv-test")
+var dbTestPath = "/usr/golanddata/trainkv/db"
+
+func TestReOpen(t *testing.T) {
+	dir := dbTestPath
+	removeAll(dir)
+
+	opt := lsm.GetDefaultOpt(dir)
+	db, err, _ := Open(opt)
 	require.NoError(t, err)
-	defer removeAll(dir)
+	require.NotNil(t, db)
+
+	txn := db.NewTransaction(true)
+	// 创建多个条目进行批量操作测试
+	for i := 0; i < 10; i++ {
+		key := []byte(fmt.Sprintf("batch-key-%d", i))
+		value := []byte(fmt.Sprintf("batch-value-%d", i))
+		err = txn.Set(key, value)
+		assert.NoError(t, err)
+	}
+	_, err = txn.Commit()
+	assert.NoError(t, err)
+	err = db.Close()
+	if err != nil {
+		panic(err)
+		return
+	}
+
+	reDB, err, _ := Open(opt)
+	defer reDB.Close()
+	require.NoError(t, err)
+	require.NotNil(t, db)
+	txn1 := reDB.NewTransaction(true)
+	defer txn1.Discard()
+	iter := txn1.NewIterator(&interfaces.Options{IsAsc: true, IsSetCache: false})
+	defer func() {
+		err := iter.Close()
+		assert.NoError(t, err)
+	}()
+
+	count := 0
+	for iter.Rewind(); iter.Valid(); iter.Next() {
+		item := iter.Item()
+		assert.NotNil(t, item.Item)
+		assert.NotNil(t, item.Item.Key)
+		assert.NotNil(t, item.Item.Value)
+		count++
+	}
+
+	assert.Equal(t, 10, count)
+}
+
+func TestDBOpenAndClose(t *testing.T) {
+	dir := dbTestPath
+	removeAll(dir)
 
 	opt := lsm.GetDefaultOpt(dir)
 	db, err, callBack := Open(opt)
@@ -43,9 +92,8 @@ func TestDBOpenAndClose(t *testing.T) {
 }
 
 func TestDBBasicOperations(t *testing.T) {
-	dir, err := os.MkdirTemp("", "trainkv-test")
-	require.NoError(t, err)
-	defer removeAll(dir)
+	dir := dbTestPath
+	removeAll(dir)
 
 	opt := lsm.GetDefaultOpt(dir)
 	db, err, callBack := Open(opt)
@@ -76,13 +124,12 @@ func TestDBBasicOperations(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, entry)
 	assert.Equal(t, value, entry.Value)
-	assert.Equal(t, key, model.ParseKey(entry.Key))
+	assert.Equal(t, key, entry.Key)
 }
 
 func TestDBDeleteOperation(t *testing.T) {
-	dir, err := os.MkdirTemp("", "trainkv-test")
-	require.NoError(t, err)
-	defer removeAll(dir)
+	dir := dbTestPath
+	removeAll(dir)
 
 	opt := lsm.GetDefaultOpt(dir)
 	db, err, callBack := Open(opt)
@@ -126,9 +173,8 @@ func TestDBDeleteOperation(t *testing.T) {
 }
 
 func TestDBBatchOperations(t *testing.T) {
-	dir, err := os.MkdirTemp("", "trainkv-test")
-	require.NoError(t, err)
-	defer removeAll(dir)
+	dir := dbTestPath
+	removeAll(dir)
 
 	opt := lsm.GetDefaultOpt(dir)
 	db, err, callBack := Open(opt)
@@ -137,7 +183,7 @@ func TestDBBatchOperations(t *testing.T) {
 		_ = db.Close()
 		_ = callBack()
 	}()
-	txn := db.NewTransaction(false)
+	txn := db.NewTransaction(true)
 	// 创建多个条目进行批量操作测试
 	for i := 0; i < 10; i++ {
 		key := []byte(fmt.Sprintf("batch-key-%d", i))
@@ -160,10 +206,9 @@ func TestDBBatchOperations(t *testing.T) {
 	}
 }
 
-func TestDBIterator(t *testing.T) {
-	dir, err := os.MkdirTemp("", "trainkv-test")
-	require.NoError(t, err)
-	defer removeAll(dir)
+func TestIterator(t *testing.T) {
+	dir := dbTestPath
+	removeAll(dir)
 
 	opt := lsm.GetDefaultOpt(dir)
 	db, err, callBack := Open(opt)
@@ -207,9 +252,8 @@ func TestDBIterator(t *testing.T) {
 }
 
 func TestDBMaxVersion(t *testing.T) {
-	dir, err := os.MkdirTemp("", "trainkv-test")
-	require.NoError(t, err)
-	defer removeAll(dir)
+	dir := dbTestPath
+	removeAll(dir)
 
 	opt := lsm.GetDefaultOpt(dir)
 	db, err, callBack := Open(opt)
@@ -239,9 +283,8 @@ func TestDBMaxVersion(t *testing.T) {
 }
 
 func TestDBValueLogGC(t *testing.T) {
-	dir, err := os.MkdirTemp("", "trainkv-test")
-	require.NoError(t, err)
-	defer removeAll(dir)
+	dir := dbTestPath
+	removeAll(dir)
 
 	opt := lsm.GetDefaultOpt(dir)
 	opt.ValueThreshold = 100 // 100B
@@ -257,10 +300,10 @@ func TestDBValueLogGC(t *testing.T) {
 	}()
 
 	// 插入一些大数据条目以填充值日志
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 300; i++ {
 		key := []byte(fmt.Sprintf("gc-key-%d", i))
 		// 创建较大的值以确保存储在值日志中
-		value := make([]byte, 1000) // 1KB
+		value := make([]byte, 20000) // 20KB
 		for j := range value {
 			value[j] = byte(j % 256)
 		}
@@ -281,47 +324,41 @@ func TestDBValueLogGC(t *testing.T) {
 }
 
 func TestDBConcurrentOperations(t *testing.T) {
-	dir, err := os.MkdirTemp("", "trainkv-test")
-	require.NoError(t, err)
-	defer removeAll(dir)
+	dir := dbTestPath
+	removeAll(dir)
 
 	opt := lsm.GetDefaultOpt(dir)
-	db, err, callBack := Open(opt)
+	db, err, _ := Open(opt)
 	require.NoError(t, err)
-	defer func() {
-		_ = db.Close()
-		_ = callBack()
-	}()
+	defer db.Close()
 
-	// 并发写入测试
-	done := make(chan bool)
-	for i := 0; i < 10; i++ {
-		go func(id int) {
-			key := []byte(fmt.Sprintf("concurrent-key-%d", id))
-			value := []byte(fmt.Sprintf("concurrent-value-%d", id))
+	var wg sync.WaitGroup
+	n := 10
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			key := []byte(fmt.Sprintf("concurrent-key-%d", i))
+			value := []byte(fmt.Sprintf("concurrent-value-%d", i))
 
 			txn := db.NewTransaction(true)
-			err := txn.Set(key, value)
-			assert.NoError(t, err)
-			_, err = txn.Commit()
-			assert.NoError(t, err)
-			done <- true
+			require.NoError(t, txn.Set(key, value))
+			_, err := txn.Commit()
+			require.NoError(t, err)
 		}(i)
 	}
 
-	// 等待所有goroutine完成
-	for i := 0; i < 10; i++ {
-		<-done
-	}
+	wg.Wait()
 
-	// 验证所有数据都被正确写入
-	for i := 0; i < 10; i++ {
+	for i := 0; i < n; i++ {
 		key := []byte(fmt.Sprintf("concurrent-key-%d", i))
 		txn := db.NewTransaction(false)
 		entry, err := txn.Get(key)
-		assert.NoError(t, err)
-		assert.NotNil(t, entry)
-		assert.Equal(t, fmt.Sprintf("concurrent-value-%d", i), string(entry.Value))
+		require.NoError(t, err)
+		require.Equal(t,
+			fmt.Sprintf("concurrent-value-%d", i),
+			string(entry.Value),
+		)
 		txn.Discard()
 	}
 }

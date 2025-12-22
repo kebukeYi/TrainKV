@@ -434,7 +434,7 @@ func (s *SkipListIterator) SeekForPrev(target []byte) {
 	s.curr, _ = s.list.findNear(target, true, true)
 }
 func (s *SkipListIterator) SeekToFirst() {
-	s.curr = s.list.getNextNode(s.list.getHead(), 0) // 有可能是 nil
+	s.curr = s.list.getNextNode(s.list.getHead(), 0) // 有可能是 nil;
 }
 func (s *SkipListIterator) SeekToLast() {
 	s.curr = s.list.findLast()

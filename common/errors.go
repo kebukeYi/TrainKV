@@ -22,6 +22,7 @@ var (
 	ErrOutOffset     = errors.New("out offset")
 	ErrNotFoundTable = errors.New("not found table of key")
 	ErrKeyNotFound   = errors.New("err not found key")
+	ErrBlockEOF      = errors.New("block out of index")
 
 	ErrWalInvalidCrc = errors.New("walFile: invalid crc")
 	ErrBadTxn        = errors.New("walFile: bad txn")

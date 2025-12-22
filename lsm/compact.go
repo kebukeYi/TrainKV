@@ -61,7 +61,7 @@ func (cd *compactDef) unlockLevel() {
 }
 
 func (cd *compactDef) allTables() []*Table {
-	tables := make([]*Table, len(cd.thisTables)+len(cd.nextTables))
+	tables := make([]*Table, 0, len(cd.thisTables)+len(cd.nextTables))
 	tables = append(tables, cd.thisTables...)
 	tables = append(tables, cd.nextTables...)
 	return tables
@@ -1059,7 +1059,7 @@ func getKeyRange(tables ...*Table) keyRange {
 	if len(tables) == 0 {
 		return keyRange{}
 	}
-	// 此时的 key 是带有 ts 时间戳;
+	// 此时的 key 是带有 ts 版本;
 	minKey := tables[0].sst.MinKey()
 	maxKey := tables[0].sst.MaxKey()
 	for i := 1; i < len(tables); i++ {

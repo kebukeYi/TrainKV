@@ -257,8 +257,7 @@ func (vlog *ValueLog) Write(reqs []*model.Request) error {
 			return err
 		}
 		// 因为 vlogFile 会自动扩容, 因此在 flushToFile() 写完后, 我们还需要再进一步判断是否需要创建新的文件;
-		if vlog.getWriteOffset() > uint32(vlog.Opt.ValueLogFileSize) ||
-			vlog.entriesWrittenNum > vlog.Opt.ValueLogMaxEntries {
+		if vlog.getWriteOffset() > uint32(vlog.Opt.ValueLogFileSize) || vlog.entriesWrittenNum > vlog.Opt.ValueLogMaxEntries {
 			// 截断当前达到阈值的文件;
 			if err := curVlogFile.DoneWriting(vlog.getWriteOffset()); err != nil {
 				return err
@@ -301,7 +300,7 @@ func (vlog *ValueLog) Write(reqs []*model.Request) error {
 			writeNums++
 			// 如果 buf 长度够了, 那么就写入文件;
 			if int32(vlog.buf.Len()) > vlog.Db.Opt.ValueLogFileSize {
-				if err = flushToFile(); err != nil {
+				if err = toWrite(); err != nil {
 					return err
 				}
 			}
@@ -422,7 +421,7 @@ func (vlog *ValueLog) handleDiscardStats() {
 
 func (vlog *ValueLog) createVlogFile(fid uint32) (*VLogFile, error) {
 	fpath := vlog.fpath(fid)
-	vlogFile := &VLogFile{FID: fid, Lock: sync.RWMutex{}}
+	vlogFile := &VLogFile{FID: fid, Lock: sync.RWMutex{}, opt: vlog.Opt}
 	if err := vlogFile.Open(&utils.FileOptions{
 		FID:      uint64(fid),
 		FileName: fpath,
@@ -680,7 +679,7 @@ func (vlog *ValueLog) gcReWriteLog(logFile *VLogFile) error {
 			return errors.Errorf("#gcReWriteLog(): Empty lsmEntry.value: %+v  from lsm;", lsmEntry)
 		}
 
-		var vp *model.ValuePtr
+		var vp model.ValuePtr
 		vp.Decode(lsmEntry.Value)
 
 		// 当前entry被安排在了新的文件 || 当前entry被安排在了当前文件的后面 offset 处;
@@ -730,7 +729,7 @@ func (vlog *ValueLog) gcReWriteLog(logFile *VLogFile) error {
 		if end > len(tempArray) {
 			end = len(tempArray)
 		}
-		if err := vlog.Db.BatchSet(tempArray[i:end]); err != nil {
+		if err = vlog.Db.BatchSet(tempArray[i:end]); err != nil {
 			if err == common.ErrTxnTooBig {
 				batchSize /= 2
 				continue

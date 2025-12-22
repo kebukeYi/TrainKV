@@ -64,23 +64,23 @@ func BenchmarkNormalEntry(b *testing.B) {
 	clearDir(benchMarkOpt.WorkDir)
 	//traindb, _, _ := TrainDB.Open(benchMarkOpt)
 	traindb, _, _ := TrainKV.Open(lsm.GetDefaultOpt(benchMarkOpt.WorkDir))
-	txn := traindb.NewTransaction(true)
 	defer traindb.Close()
 
 	for i := 0; i < b.N; i++ {
 		key := []byte(fmt.Sprintf("key=%d", i))
-		key = model.KeyWithTs(key, uint64(time.Now().UnixNano()))
 		//valSize := 5 + 1 // val: 6B
 		valSize := 127 + 1 // val: 12B
 		//valSize := 10<<20 + 1 // val: 10.01MB
 		//valSize := 64<<20 + 1 // val: 64.01MB
+		txn := traindb.NewTransaction(true)
 		entry := model.BuildBigEntry(key, uint64(valSize))
 		err := txn.Set(entry.Key, entry.Value)
 		assert.Nil(b, err)
+		_, err = txn.Commit()
+		common.Panic(err)
 	}
-	txn.Commit()
 
-	txn = traindb.NewTransaction(true)
+	txn := traindb.NewTransaction(false)
 	for i := 0; i < b.N; i++ {
 		key := []byte(fmt.Sprintf("key=%d", i))
 		_, err := txn.Get(key)
@@ -90,7 +90,7 @@ func BenchmarkNormalEntry(b *testing.B) {
 		_, err = txn.Get(key)
 		assert.Error(b, err)
 	}
-	txn.Commit()
+	txn.Discard()
 }
 
 func BenchmarkWriteRequest(b *testing.B) {

@@ -25,21 +25,21 @@ func Benchmark_PutValue_TrainDB(b *testing.B) {
 	initTrainDB()
 	defer triandb.Close()
 
-	txn := triandb.NewTransaction(true)
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
+		txn := triandb.NewTransaction(true)
 		err := txn.Set(GetKey(i), GetValue())
 		if err != nil {
 			panic(err)
 			return
 		}
-	}
-	_, err := txn.Commit()
-	if err != nil {
-		panic(err)
-		return
+		_, err = txn.Commit()
+		if err != nil {
+			panic(err)
+			return
+		}
 	}
 }
 

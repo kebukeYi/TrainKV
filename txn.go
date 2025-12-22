@@ -323,7 +323,6 @@ func (t *Transaction) Discard() {
 	}
 	t.discard = true
 	t.db.transactionManager.doneStart(t)
-	t.RollBack()
 }
 func (t *Transaction) RollBack() {
 	t.pendingKeys = nil
@@ -346,7 +345,7 @@ func (t *Transaction) newPendingWritesIterator(reversed bool) *pendingWritesIter
 	if !t.update || len(t.pendingKeys) == 0 {
 		return nil
 	}
-	entries := make([]*model.Entry, len(t.pendingKeys))
+	entries := make([]*model.Entry, 0, len(t.pendingKeys))
 	for _, entry := range t.pendingKeys {
 		entries = append(entries, entry)
 	}

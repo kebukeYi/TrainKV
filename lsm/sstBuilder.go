@@ -8,7 +8,6 @@ import (
 	"github.com/kebukeYi/TrainKV/pb"
 	"github.com/kebukeYi/TrainKV/utils"
 	"github.com/pkg/errors"
-	"io"
 	"math"
 	"os"
 	"sort"
@@ -400,7 +399,7 @@ func (itr *blockIterator) Seek(key []byte) {
 func (itr *blockIterator) setIndex(idx int) {
 	itr.idx = idx // v2.0
 	if idx >= len(itr.entryOffsets) || idx < 0 {
-		itr.err = io.EOF
+		itr.err = common.ErrBlockEOF
 		return
 	}
 	itr.err = nil
@@ -447,7 +446,7 @@ func (itr *blockIterator) Prev() {
 	itr.setIndex(itr.idx - 1)
 }
 func (itr *blockIterator) Valid() bool {
-	return itr.err != io.EOF
+	return !errors.Is(itr.err, common.ErrBlockEOF)
 }
 func (itr *blockIterator) Rewind() {
 	itr.setIndex(0)

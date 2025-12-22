@@ -199,6 +199,9 @@ func (m *MemoryTable) recovery2SkipList() (uint32, error) {
 	for {
 		var e *model.Entry
 		e, readAt = m.wal.Read(m.wal.file.Fd)
+		if e == nil {
+			return validEndOffset, nil
+		}
 		switch {
 		case e.Meta&common.BitTxn > 0:
 			txnTs := model.ParseTsVersion(e.Key)

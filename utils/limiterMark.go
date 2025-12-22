@@ -8,10 +8,18 @@ import (
 
 type minHeap []uint64
 
+func (h minHeap) Len() int {
+	return len(h)
+}
 func (h minHeap) Less(i, j int) bool {
 	return h[i] < h[j]
 }
-
+func (h minHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+}
+func (h *minHeap) Push(x interface{}) {
+	*h = append(*h, x.(uint64))
+}
 func (h *minHeap) Pop() interface{} {
 	old := *h
 	n := len(old)
@@ -19,22 +27,12 @@ func (h *minHeap) Pop() interface{} {
 	*h = old[0 : n-1]
 	return ret
 }
-func (h *minHeap) Push(x interface{}) {
-	*h = append(*h, x.(uint64))
-}
-func (h minHeap) Swap(i, j int) {
-	h[i], h[j] = h[j], h[i]
-}
-
-func (h minHeap) Len() int {
-	return len(h)
-}
 
 type mark struct {
 	index   uint64
+	waiter  chan struct{}
 	done    bool
 	indices []uint64
-	waiter  chan struct{}
 }
 
 type LimitMark struct {
@@ -77,7 +75,8 @@ func (lm *LimitMark) GetLastIndex() uint64 {
 }
 
 func (lm *LimitMark) WaitForIndexDone(ctx context.Context, index uint64) error {
-	if index <= lm.GetDoneIndex() {
+	doneIndex := lm.GetDoneIndex()
+	if doneIndex >= index {
 		return nil
 	}
 	waitCh := make(chan struct{})
@@ -109,12 +108,10 @@ func (lm *LimitMark) processOn(closer *Closer, doneIndexCh chan uint64) {
 		if !ok {
 			heap.Push(&minHeap, index)
 		}
-
 		delta := 1
 		if done {
 			delta = -1
 		}
-
 		indexDoneNum[index] = prev + delta
 		doneIndex := lm.GetDoneIndex()
 		if doneIndex > index {
@@ -123,7 +120,6 @@ func (lm *LimitMark) processOn(closer *Closer, doneIndexCh chan uint64) {
 
 		curIndex := doneIndex
 		loops := 0
-
 		for len(minHeap) > 0 {
 			minIndex := minHeap[0]
 			if dones := indexDoneNum[minIndex]; dones > 0 {
@@ -138,11 +134,11 @@ func (lm *LimitMark) processOn(closer *Closer, doneIndexCh chan uint64) {
 		if curIndex != doneIndex {
 			swapped := lm.doneIndex.CompareAndSwap(doneIndex, curIndex)
 			AssertTrue(swapped)
-			if doneIndexCh != nil {
-				go func() {
-					doneIndexCh <- curIndex
-				}()
-			}
+			//if doneIndexCh != nil {
+			//	go func() {
+			//		doneIndexCh <- curIndex
+			//	}()
+			//}
 		}
 
 		notifyAndRemove := func(index uint64, toNotify []chan struct{}) {
@@ -161,7 +157,6 @@ func (lm *LimitMark) processOn(closer *Closer, doneIndexCh chan uint64) {
 		// 如果处于等待的 index 区间 >= 刚刚更新的结束区间 => 有可能被通知到;
 		// 如果处于等待的 index 区间 < 刚刚更新的结束区间 => 一定能被通知到;
 		if uint64(len(indexWaiters)) >= curIndex-doneIndex {
-
 			for i := doneIndex + 1; i <= curIndex; i++ {
 				if waiters, ok := indexWaiters[i]; ok {
 					notifyAndRemove(i, waiters)
@@ -169,7 +164,7 @@ func (lm *LimitMark) processOn(closer *Closer, doneIndexCh chan uint64) {
 			}
 		} else {
 			for idx, waiters := range indexWaiters {
-				if idx <= doneIndex {
+				if idx <= curIndex {
 					notifyAndRemove(index, waiters)
 				}
 			}

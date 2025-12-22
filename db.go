@@ -19,6 +19,7 @@ type TrainKV struct {
 	Mux                sync.Mutex
 	Lsm                *lsm.LSM
 	vlog               *ValueLog
+	fileLock           *flock.Flock
 	Opt                *lsm.Options
 	transactionManager *TransactionManager
 	writeCh            chan *model.Request
@@ -41,9 +42,11 @@ func Open(opt *lsm.Options) (*TrainKV, error, func() error) {
 	}
 	callBack, _ := lsm.CheckOpt(opt)
 	db := &TrainKV{Opt: opt}
-	fileLock := flock.New(filepath.Join(opt.WorkDir, common.LockFile))
-	hold, err := fileLock.TryLock()
-	if err != nil || !hold {
+	join := filepath.Join(opt.WorkDir, common.LockFile)
+	fileLock := flock.New(join)
+	db.fileLock = fileLock
+	err := fileLock.Lock()
+	if err != nil {
 		return nil, common.ErrLockDB, callBack
 	}
 
@@ -403,6 +406,10 @@ func (db *TrainKV) Close() error {
 	}
 
 	if err := db.vlog.Close(); err != nil {
+		return err
+	}
+
+	if err := db.fileLock.Unlock(); err != nil {
 		return err
 	}
 	return nil

@@ -68,6 +68,7 @@ func (conIter *ConcatIterator) setIdx(inx int) {
 }
 func (conIter *ConcatIterator) Rewind() {
 	if len(conIter.iters) == 0 {
+		conIter.curIer = nil
 		return
 	}
 	if conIter.opt.IsAsc {
@@ -163,8 +164,8 @@ func (hp IteratorHeap) Less(i, j int) bool {
 		// 两个都无效，顺序无所谓，返回false保持稳定
 		return false
 	}
-	// 两个都有效，比较键
-	return bytes.Compare(hp[i].Item().Item.Key, hp[j].Item().Item.Key) < 0
+	// 两个都有效, 比较键;
+	return model.CompareKeyWithTs(hp[i].Item().Item.Key, hp[j].Item().Item.Key) < 0
 }
 func (hp IteratorHeap) Swap(i, j int) {
 	hp[i], hp[j] = hp[j], hp[i]
@@ -188,7 +189,10 @@ func NewMergingIterator(iters []interfaces.Iterator, opt *interfaces.Options) *M
 	hp := make(IteratorHeap, 0)
 	for _, iter := range iters {
 		if iter != nil {
-			hp = append(hp, iter)
+			iter.Rewind()
+			if iter.Valid() {
+				hp = append(hp, iter)
+			}
 		}
 	}
 	return &MergingIterator{
