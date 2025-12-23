@@ -171,6 +171,14 @@ func (db *TrainKV) NewTransaction(update bool) *Transaction {
 	txn.startTs = db.transactionManager.startTs()
 	return txn
 }
+
+func (txn *Transaction) IsVisible(e *model.Entry) bool {
+	if e == nil {
+		return false
+	}
+	tsVersion := model.ParseTsVersion(e.Key)
+	return txn.startTs >= tsVersion
+}
 func (t *Transaction) modify(e *model.Entry) error {
 	switch {
 	case !t.update:

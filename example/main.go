@@ -75,8 +75,7 @@ func main() {
 	for iter.Valid() {
 		it := iter.Item()
 		if it.Item.Version != 0 {
-			fmt.Printf("txn.Iterator key=%s, value=%s, meta:%d, version=%d;\n",
-				model.ParseKey(it.Item.Key), it.Item.Value, it.Item.Meta, it.Item.Version)
+			fmt.Printf("txn.Iterator key=%s, value=%s, meta:%d, version=%d;\n", model.ParseKey(it.Item.Key), it.Item.Value, it.Item.Meta, it.Item.Version)
 		}
 		iter.Next()
 	}

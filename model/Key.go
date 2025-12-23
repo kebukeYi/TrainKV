@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math"
-	"time"
 )
 
 // CompareKeyWithTs MergingIterator.Less()使用;
@@ -47,27 +46,8 @@ func SameKeyNoTs(src, dst []byte) bool {
 	return bytes.Equal(ParseKey(src), ParseKey(dst))
 }
 
-func KeyWithTestTs(key []byte, version uint64) []byte {
-	out := make([]byte, len(key)+8)
-	copy(out, key)
-	binary.BigEndian.PutUint64(out[len(key):], version)
-	return out
-}
-
-func ParseTestTsVersion(key []byte) uint64 {
-	if len(key) <= 8 {
-		return 0
-	}
-	ts := binary.BigEndian.Uint64(key[len(key)-8:])
-	return ts
-}
-
 func SafeCopy(dst, src []byte) []byte {
 	dst = make([]byte, len(src))
 	copy(dst, src)
 	return dst
-}
-
-func NewCurVersion() uint64 {
-	return uint64(time.Now().UnixNano())
 }

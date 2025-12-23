@@ -220,6 +220,9 @@ func (m *MergingIterator) Item() interfaces.Item {
 }
 
 func (m *MergingIterator) Next() {
+	if !m.Valid() {
+		return
+	}
 	// sst文件内key排序规则: 不同key, 按照字典排序; 相同key, 按照版本号升序排序;
 	// sst_1: foo3, foo4, foo5, zoo8, zoo9;
 	// sst_2: foo1, foo7, foo8, zoo1, zoo5;

@@ -427,6 +427,7 @@ func BuildRequest(entries []*model.Entry) *model.Request {
 type TxnIterator struct {
 	iter interfaces.Iterator
 	vlog *ValueLog
+	txn  *Transaction
 }
 
 func (txn *Transaction) NewIterator(opt *interfaces.Options) *TxnIterator {
@@ -436,9 +437,11 @@ func (txn *Transaction) NewIterator(opt *interfaces.Options) *TxnIterator {
 	res := &TxnIterator{
 		iter: lsm.NewMergingIterator(iters, opt),
 		vlog: txn.db.vlog,
+		txn:  txn,
 	}
 	return res
 }
+
 func (dbIter *TxnIterator) Name() string {
 	return "TxnIterator"
 }
@@ -455,7 +458,14 @@ func (dbIter *TxnIterator) Valid() bool {
 	return dbIter.iter.Valid()
 }
 func (dbIter *TxnIterator) Item() interfaces.Item {
-	return dbIter.iter.Item()
+	for dbIter.iter.Valid() {
+		entry := dbIter.iter.Item().Item
+		if dbIter.txn.IsVisible(&entry) {
+			return dbIter.iter.Item()
+		}
+		dbIter.iter.Next()
+	}
+	return interfaces.Item{Item: model.Entry{Version: 0}}
 }
 func (dbIter *TxnIterator) Close() error {
 	err := dbIter.vlog.decrIteratorCount()
