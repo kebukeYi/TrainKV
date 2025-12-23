@@ -120,37 +120,34 @@ func (lm *LevelsManger) iterators(opt *interfaces.Options) []interfaces.Iterator
 }
 
 func (lm *LevelsManger) Get(keyTs []byte, skipListEntryMaxTs *model.Entry) (model.Entry, error) {
-	var (
-		entry model.Entry
-	)
 	startTs := model.ParseTsVersion(keyTs)
 	// 对 level-0层的所有table进行搜寻,返回其中最高版本的数据;
-	entry, _ = lm.levelHandlers[0].Get(keyTs)
-	if entry.Version != 0 {
-		if entry.Version == startTs {
-			return entry, nil
+	l0_entry, _ := lm.levelHandlers[0].Get(keyTs)
+	if l0_entry.Value != nil || l0_entry.Version != 0 {
+		if l0_entry.Version == startTs {
+			return l0_entry, nil
 		}
-		if entry.Version > skipListEntryMaxTs.Version {
-			skipListEntryMaxTs = &entry
+		if l0_entry.Version > skipListEntryMaxTs.Version {
+			skipListEntryMaxTs = &l0_entry
 		}
 	}
+
 	for i := 1; i < lm.opt.MaxLevelNum; i++ {
-		entry, _ = lm.levelHandlers[i].Get(keyTs)
-		if entry.Version != 0 {
-			if entry.Version == startTs {
-				return entry, nil
+		lx_entry, _ := lm.levelHandlers[i].Get(keyTs)
+		if lx_entry.Value != nil || lx_entry.Version != 0 {
+			if lx_entry.Version == startTs {
+				return lx_entry, nil
 			}
-			if entry.Version > skipListEntryMaxTs.Version {
-				skipListEntryMaxTs = &entry
+			if lx_entry.Version > skipListEntryMaxTs.Version {
+				skipListEntryMaxTs = &lx_entry
 			}
 		}
 	}
-	if skipListEntryMaxTs.Version == 0 {
-		return model.Entry{}, common.ErrKeyNotFound
+	if skipListEntryMaxTs.Version == 0 || skipListEntryMaxTs.Value == nil {
+		return model.Entry{Version: 0}, common.ErrKeyNotFound
 	}
-	safeCopy := skipListEntryMaxTs.SafeCopy()
 	// 否则到最后, 返回 存储的最高版本的数据;
-	return safeCopy, nil
+	return *skipListEntryMaxTs, nil
 }
 
 func (lm *LevelsManger) checkOverlap(tables []*Table, lev int) bool {

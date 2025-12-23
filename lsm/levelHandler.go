@@ -63,7 +63,7 @@ func (leh *levelHandler) searchL0SST(keyTs []byte) (model.Entry, error) {
 		// 2. 等于找到;
 		// 3. 找到小于当前 ketTs的;
 		entry, _ := table.Search(keyTs)
-		if entry.Version != 0 {
+		if entry.Value != nil || entry.Version != 0 {
 			if entry.Version > maxEntry.Version {
 				maxEntry = entry
 				continue
@@ -84,7 +84,7 @@ func (leh *levelHandler) searchLnSST(keyTs []byte) (model.Entry, error) {
 	// 2. 等于找到;
 	// 3. 找到小于当前 ketTs的;
 	entry, _ := getTable.Search(keyTs)
-	if entry.Version != 0 {
+	if entry.Value != nil || entry.Version != 0 {
 		if entry.Version > maxEntry.Version {
 			maxEntry = entry
 		}

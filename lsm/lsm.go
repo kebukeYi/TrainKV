@@ -75,7 +75,7 @@ func (lsm *LSM) Get(keyTs []byte) (model.Entry, error) {
 		// 1. 跳表中对返回的near节点进行对比时, key 是去掉Ts时间戳的, 相同直接返回,将不再继续向level层寻找;
 		// 否则向level--层寻找;
 		entry, _ := memoryTable.Get(keyTs)
-		if entry.Version == 0 {
+		if entry.Version == 0 && entry.Value == nil {
 			continue
 		}
 		if entry.Version == startTs {

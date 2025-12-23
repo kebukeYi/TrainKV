@@ -49,11 +49,10 @@ func randStr(length int) string {
 
 func BuildBigEntry(key []byte, bigValSize uint64) *Entry {
 	value := make([]byte, bigValSize)
-	expiresAt := uint64(time.Now().Add(12*time.Hour).UnixNano() / 1e6)
 	return &Entry{
 		Key:       key,
 		Value:     value,
-		ExpiresAt: expiresAt,
+		ExpiresAt: 0,
 	}
 }
 
