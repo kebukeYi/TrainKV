@@ -292,9 +292,9 @@ func TestMergingIterator(t *testing.T) {
 		{"k5", "a5"},
 	}
 
-	it1 := tbl1.NewTableIterator(&interfaces.Options{IsAsc: true})
-	it2 := NewConcatIterator([]*Table{tbl2}, &interfaces.Options{IsAsc: true})
-	it := NewMergeIterator([]interfaces.Iterator{it1, it2}, false)
+	it1 := tbl1.NewTableIterator(&interfaces.Options{IsAsc: true, IsSetCache: false})
+	it2 := NewConcatIterator([]*Table{tbl2}, &interfaces.Options{IsAsc: true, IsSetCache: false})
+	it := NewMergingIterator([]interfaces.Iterator{it1, it2}, &interfaces.Options{IsAsc: true, IsSetCache: false})
 	defer it.Close()
 
 	var i int

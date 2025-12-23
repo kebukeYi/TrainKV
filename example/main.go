@@ -69,7 +69,7 @@ func main() {
 	}
 
 	// Iterator keys(Only valid values are returned).
-	iter := txn1.NewIterator(&interfaces.Options{IsAsc: true, IsSetCache: false})
+	iter := txn1.NewIterator(&interfaces.Options{IsAsc: true, IsSetCache: true})
 	defer func() { err = iter.Close() }()
 	iter.Rewind()
 	for iter.Valid() {

@@ -24,7 +24,7 @@ func RandString(len int) string {
 }
 
 func getDefaultFileOpt(walFilePath string) *utils.FileOptions {
-	opt := GetDefaultOpt("")
+	opt := GetDefaultOpt(walFilePath)
 	options := &utils.FileOptions{
 		FID:      0,
 		FileName: walFilePath,
@@ -32,7 +32,6 @@ func getDefaultFileOpt(walFilePath string) *utils.FileOptions {
 		Path:     walFilePath,
 		MaxSz:    int32(opt.MemTableSize),
 	}
-	//options.FileName = filepath.Join(walTestPath, options.FileName)
 	return options
 }
 func TestWAL_WalDecode(t *testing.T) {
@@ -53,7 +52,8 @@ func TestWAL_WalDecode(t *testing.T) {
 }
 
 func TestWAL_Write(t *testing.T) {
-	w := OpenWalFile(getDefaultFileOpt(""))
+	walFilePath := filepath.Join(walTestPath, "0.00005.wal")
+	w := OpenWalFile(getDefaultFileOpt(walFilePath))
 	for i := 0; i < 10; i++ {
 		var entry = model.Entry{
 			Key:       []byte(RandString(10)),

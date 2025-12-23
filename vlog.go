@@ -653,7 +653,7 @@ func (vlog *ValueLog) pickVlogFile(discardRatio float64) *VLogFile {
 	return nil
 }
 
-// GC: 对vlog中的每个kv进行判断: LSM中有的话说明有效数据,就再重新写到新文件中,否则就丢弃掉;
+// GC: 对vlog中的每个kv进行判断: LSM中有的话, 说明有效数据(哪怕有更高版本的删除标记); 就再重新写到新文件中,否则就丢弃掉;
 func (vlog *ValueLog) gcReWriteLog(logFile *VLogFile) error {
 	vlog.filesLock.RLock()
 	maxFid := vlog.maxFid

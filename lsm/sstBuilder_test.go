@@ -9,6 +9,7 @@ import (
 func TestEmptyBuilder(t *testing.T) {
 	opts := &Options{BloomFalsePositive: 0.1}
 	b := NewSSTBuilder(opts)
+	//b.Add(&model.Entry{}, false)
 	require.Equal(t, []byte{}, b.Finish())
 }
 

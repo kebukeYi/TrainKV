@@ -60,8 +60,8 @@ func (sst *SSTable) initTable() (firstBlock *pb.BlockOffset, err error) {
 	readPos -= 4
 	checkSumLenArr := sst.readCheckError(readPos, 4)
 	checksumLen := int(model.BytesToU32(checkSumLenArr))
-	if checksumLen < 0 {
-		return nil, errors.New("checksum length less than zero. Data corrupted")
+	if checksumLen <= 0 {
+		return nil, errors.New("#initTable checksum length less than zero.")
 	}
 
 	readPos -= checksumLen

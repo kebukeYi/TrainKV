@@ -55,7 +55,7 @@ func OpenTable(lm *LevelsManger, tableName string, builder *sstBuilder) (*Table,
 		return nil, err
 	}
 	// 获取sst的最大key 需要使用迭代器, 逆向获得;
-	itr := t.NewTableIterator(&interfaces.Options{IsAsc: false})
+	itr := t.NewTableIterator(&interfaces.Options{IsAsc: false, IsSetCache: false})
 	defer itr.Close()
 	itr.Rewind()
 	common.CondPanic(!itr.Valid(), pkg_err.Errorf("failed to read index, form maxKey,err:%s", itr.err))
@@ -73,7 +73,7 @@ func (t *Table) Search(keyTs []byte) (entry model.Entry, err error) {
 	if t.sst.HasBloomFilter() && !bloomFilter.MayContainKey(model.ParseKey(keyTs)) {
 		return model.Entry{Version: 0}, common.ErrKeyNotFound
 	}
-	iterator := t.NewTableIterator(&interfaces.Options{IsAsc: true})
+	iterator := t.NewTableIterator(&interfaces.Options{IsAsc: true, IsSetCache: true})
 	defer iterator.Close()
 	iterator.Seek(keyTs)
 	if !iterator.Valid() {

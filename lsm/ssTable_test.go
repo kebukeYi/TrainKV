@@ -16,7 +16,8 @@ var dirPath = "/usr/golanddata/trainkv/sst"
 
 func TestOpenSStable(t *testing.T) {
 	tableName := filepath.Join(dirPath, "00001.sst")
-	options := GetDefaultOpt("")
+	clearDir(dirPath)
+	options := GetDefaultOpt(dirPath)
 	fid := utils.FID(tableName)
 	levelManger := &LevelsManger{}
 	levelManger.cache = newLevelsCache(options)
@@ -24,14 +25,15 @@ func TestOpenSStable(t *testing.T) {
 	table.sst = OpenSStable(&utils.FileOptions{
 		FileName: tableName,
 		Flag:     os.O_CREATE | os.O_RDWR,
-		MaxSz:    0,
+		MaxSz:    int32(options.MemTableSize),
 		FID:      table.fid,
 	})
 	table.IncrRef()
 	if err := table.sst.Init(); err != nil {
 		common.Err(err)
 	}
-	iterator := table.NewTableIterator(&interfaces.Options{IsAsc: true})
+
+	iterator := table.NewTableIterator(&interfaces.Options{IsAsc: true, IsSetCache: false})
 	iterator.Rewind()
 	for iterator.Valid() {
 		entry := iterator.Item().Item

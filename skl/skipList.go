@@ -347,7 +347,7 @@ func (skipList *SkipList) Draw(align bool) {
 					break
 				}
 				if ele != reverseTree[level][pos] {
-					newStr := fmt.Sprintf(strings.Repeat("-", len(ele)))
+					newStr := strings.Repeat("-", len(ele))
 					reverseTree[level] = append(reverseTree[level][:pos+1], reverseTree[level][pos:]...)
 					reverseTree[level][pos] = newStr
 				}
@@ -397,7 +397,6 @@ func (s *SkipListIterator) ValueUint64() uint64 {
 	return s.curr.value
 }
 func (s *SkipListIterator) Next() {
-	//AssertTrue(s.Valid())
 	if s.Valid() {
 		s.curr = s.list.getNextNode(s.curr, 0)
 	} else {

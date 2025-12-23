@@ -5,6 +5,7 @@ import (
 	"github.com/kebukeYi/TrainKV/common"
 	"github.com/kebukeYi/TrainKV/lsm"
 	"github.com/kebukeYi/TrainKV/model"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"math/rand"
 	"testing"
@@ -13,34 +14,12 @@ import (
 
 var vlogTestPath = "/usr/golanddata/trainkv/vlog"
 
-var (
-	vlogOpt = &lsm.Options{
-		WorkDir:             vlogTestPath,
-		MemTableSize:        10 << 10, // 10KB; 64 << 20(64MB)
-		WaitFlushMemTables:  1,        // 默认：15;
-		BlockSize:           2 * 1024, // 4 * 1024
-		BloomFalsePositive:  0.01,     // 误差率
-		CacheNums:           1 * 1024, // 10240个
-		ValueThreshold:      1,        // 1B; 1 << 20(1MB)
-		ValueLogMaxEntries:  100,      // 1000000
-		ValueLogFileSize:    1 << 29,  // 512MB; 1<<30-1(1GB);
-		VerifyValueChecksum: false,    // false
-
-		MaxBatchCount: 1000,
-		MaxBatchSize:  10 << 20, // 10 << 20(10MB)
-
-		NumCompactors:       2,       // 4
-		BaseLevelSize:       8 << 20, //8MB; 10 << 20(10MB)
-		LevelSizeMultiplier: 10,
-		TableSizeMultiplier: 2,
-		BaseTableSize:       2 << 20, // 2 << 20(2MB)
-		NumLevelZeroTables:  5,
-		MaxLevelNum:         common.MaxLevelNum,
-	}
-)
-
 func TestValueLog_Entry(t *testing.T) {
-	db, _, callBack := Open(vlogOpt)
+	// 清理目录
+	removeAll(vlogTestPath)
+	opt := lsm.GetDefaultOpt(vlogTestPath)
+	opt.ValueThreshold = 10
+	db, _, callBack := Open(opt)
 	defer func() {
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
@@ -59,7 +38,8 @@ func TestValueLog_Entry(t *testing.T) {
 	b := new(model.Request)
 	b.Entries = []*model.Entry{e2}
 	// 直接写入vlog中
-	log.Write([]*model.Request{b})
+	err := log.Write([]*model.Request{b})
+	assert.Nil(t, err)
 	// 从vlog中使用 value ptr指针中查询写入的分段vlog文件
 	buf1, lf1, err1 := log.ReadValueBytes(b.ValPtr[0])
 	defer lf1.Lock.RUnlock()
@@ -70,9 +50,11 @@ func TestValueLog_Entry(t *testing.T) {
 
 func TestVlogBase(t *testing.T) {
 	// 清理目录
-	removeAll(vlogOpt.WorkDir)
+	removeAll(vlogTestPath)
+	opt := lsm.GetDefaultOpt(vlogTestPath)
+	opt.ValueThreshold = 10
 	// 打开DB
-	db, _, callBack := Open(vlogOpt)
+	db, _, callBack := Open(opt)
 	defer func() {
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
@@ -102,7 +84,9 @@ func TestVlogBase(t *testing.T) {
 	b.Entries = []*model.Entry{e1, e2}
 
 	// 直接写入vlog中
-	log.Write([]*model.Request{b})
+	err = log.Write([]*model.Request{b})
+	require.NoError(t, err)
+
 	require.Len(t, b.ValPtr, 2)
 	fmt.Printf("Pointer written: %+v %+v\n", b.ValPtr[0], b.ValPtr[1])
 
@@ -125,7 +109,7 @@ func TestVlogBase(t *testing.T) {
 
 	// 比较entry对象是否相等
 	readEntries := []*model.Entry{e1, e2}
-	require.EqualValues(t, []model.Entry{
+	require.EqualValues(t, []*model.Entry{
 		{
 			Key:    []byte("samplekey"),
 			Value:  []byte(val1),
@@ -142,8 +126,10 @@ func TestVlogBase(t *testing.T) {
 }
 
 func TestValueGC(t *testing.T) {
-	removeAll(vlogOpt.WorkDir)
-	vlogOpt.ValueLogFileSize = 1 << 20
+	removeAll(vlogTestPath)
+	vlogOpt := lsm.GetDefaultOpt(vlogTestPath)
+	vlogOpt.ValueLogFileSize = 10000
+	vlogOpt.ValueThreshold = 10
 	db, _, callBack := Open(vlogOpt)
 	defer func() {
 		if err := db.Close(); err != nil {
@@ -153,31 +139,49 @@ func TestValueGC(t *testing.T) {
 	}()
 	sz := 3 << 10
 	var kvList []*model.Entry
+	// 先写入 key_0 key_39
 	for i := 0; i < 40; i++ {
-		e := newRandEntry(sz)
+		sprintf := fmt.Sprintf("key_%d", i)
+		e := &model.Entry{
+			Key:   []byte(sprintf),
+			Value: make([]byte, sz),
+		}
 		kvList = append(kvList, &model.Entry{
 			Key:       e.Key,
 			Value:     e.Value,
 			Meta:      e.Meta,
 			ExpiresAt: e.ExpiresAt,
 		})
-		require.NoError(t, db.set(e))
+		txn := db.NewTransaction(true)
+		require.NoError(t, txn.SetEntry(e))
+		_, err := txn.Commit()
+		require.NoError(t, err)
 	}
 	time.Sleep(2 * time.Second)
+
+	// 删除 key_0 key_9
 	for i := 0; i < 10; i++ {
 		entry := model.NewEntry(kvList[i].Key, nil)
-		entry.Meta |= common.BitDelete
-		require.NoError(t, db.set(entry))
+		entry.Meta = common.BitDelete
+		txn := db.NewTransaction(true)
+		require.NoError(t, txn.SetEntry(entry))
+		_, err := txn.Commit()
+		require.NoError(t, err)
 	}
 
-	// 直接开始GC, 1.pickVlog需要和合并联动; 2.启动 vlog.file 的rewrite();
+	// 对vlog中的每个kv进行判断: LSM中有的话, 说明有效数据(哪怕有更高版本的删除标记); 就再重新写到新文件中,否则就丢弃掉;
+	// vlogGC严重依赖sst的通知;
+	// 1.pickVlog需要和合并联动; 2.启动 vlog.file 的rewrite();
 	// kv.RunValueLogGC(0.9)
 
 	// 指定 1.vlog 文件进行 GC;
-	db.vlog.gcReWriteLog(db.vlog.filesMap[0])
+	vLogFile := db.vlog.filesMap[1]
+	err := db.vlog.gcReWriteLog(vLogFile)
+	require.NoError(t, err)
 
+	txn := db.NewTransaction(false)
 	for _, e := range kvList {
-		item, err := db.get(e.Key) // 无 ts
+		item, err := txn.Get(e.Key) // 无 ts
 		if err != nil {
 			fmt.Printf("err:%s when key is:%s\n", err, e.Key)
 		}
@@ -187,6 +191,7 @@ func TestValueGC(t *testing.T) {
 		}
 		fmt.Printf("key:%s, val:%s, err:%s\n", e.Key, value, err)
 	}
+	txn.Discard()
 }
 
 func newRandEntry(sz int) *model.Entry {

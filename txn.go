@@ -212,6 +212,9 @@ func (t *Transaction) Set(key, value []byte) error {
 	entry := model.NewEntry(key, value)
 	return t.modify(entry)
 }
+func (t *Transaction) SetEntry(entry *model.Entry) error {
+	return t.modify(entry)
+}
 func (t *Transaction) Get(key []byte) (*model.Entry, error) {
 	if len(key) == 0 {
 		return nil, common.ErrEmptyKey

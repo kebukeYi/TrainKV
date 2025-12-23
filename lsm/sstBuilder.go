@@ -83,7 +83,7 @@ func newSSTBuilderWithSSTableSize(opt *Options, size int64) *sstBuilder {
 func NewSSTBuilder(opt *Options) *sstBuilder {
 	return &sstBuilder{
 		opt:     opt,
-		sstSize: int64(opt.BaseTableSize),
+		sstSize: opt.BaseTableSize,
 	}
 }
 
