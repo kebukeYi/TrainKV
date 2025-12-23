@@ -134,11 +134,11 @@ func (lm *LimitMark) processOn(closer *Closer, doneIndexCh chan uint64) {
 		if curIndex != doneIndex {
 			swapped := lm.doneIndex.CompareAndSwap(doneIndex, curIndex)
 			AssertTrue(swapped)
-			//if doneIndexCh != nil {
-			//	go func() {
-			//		doneIndexCh <- curIndex
-			//	}()
-			//}
+			if doneIndexCh != nil {
+				go func() {
+					doneIndexCh <- curIndex
+				}()
+			}
 		}
 
 		notifyAndRemove := func(index uint64, toNotify []chan struct{}) {

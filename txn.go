@@ -29,7 +29,7 @@ type TransactionManager struct {
 }
 
 type commitedTxn struct {
-	TxnID        uint64
+	TxnCommitTs  uint64
 	conflictKeys map[uint64]struct{}
 }
 
@@ -47,6 +47,7 @@ func NewTransactionManager(options *lsm.Options) *TransactionManager {
 func (m *TransactionManager) Stop() {
 	m.closer.CloseAndWait()
 }
+
 func (m *TransactionManager) startTs() uint64 {
 	m.tsLock.Lock()
 	startTs := m.nextTxnTs - 1
@@ -56,11 +57,6 @@ func (m *TransactionManager) startTs() uint64 {
 	common.Check(err)
 	return startTs
 }
-func (m *TransactionManager) nextTs() uint64 {
-	m.tsLock.Lock()
-	defer m.tsLock.Unlock()
-	return m.nextTxnTs
-}
 func (m *TransactionManager) incrementNextTs() {
 	m.tsLock.Lock()
 	m.nextTxnTs++
@@ -69,6 +65,7 @@ func (m *TransactionManager) incrementNextTs() {
 func (m *TransactionManager) DiscardTs() uint64 {
 	return m.startMark.GetDoneIndex()
 }
+
 func (m *TransactionManager) hasConflict(txn *Transaction) bool {
 	if !m.detectConflicts {
 		return false
@@ -77,10 +74,11 @@ func (m *TransactionManager) hasConflict(txn *Transaction) bool {
 		return false
 	}
 	for _, commit := range m.commitedTxns {
-		if txn.startTs >= commit.TxnID {
+		if txn.startTs >= commit.TxnCommitTs {
 			continue
 		}
-		// txn.startTs < commit.TxnID
+		// 找出当前事务开始之后提交的事务，判断自己读到的 key 中，是否存在于其他事务的写列表中;
+		// txn.startTs < commit.TxnCommitTs
 		for _, key := range txn.readKeys {
 			if _, ok := commit.conflictKeys[key]; ok {
 				return true
@@ -89,6 +87,7 @@ func (m *TransactionManager) hasConflict(txn *Transaction) bool {
 	}
 	return false
 }
+
 func (m *TransactionManager) newCommitTs(txn *Transaction) (uint64, bool) {
 	m.tsLock.Lock()
 	defer m.tsLock.Unlock()
@@ -97,6 +96,7 @@ func (m *TransactionManager) newCommitTs(txn *Transaction) (uint64, bool) {
 	}
 	var commitTs uint64
 	m.doneStart(txn)
+	// 利用它的堆数据结构来跟踪当前活跃的事务的时间戳范围，用于找出哪些事务可以过期回收
 	m.cleanCommitedTransaction()
 	commitTs = m.nextTxnTs
 	m.nextTxnTs++
@@ -104,7 +104,7 @@ func (m *TransactionManager) newCommitTs(txn *Transaction) (uint64, bool) {
 	utils.AssertTrue(commitTs >= m.lastCleanupTs)
 	if m.detectConflicts {
 		m.commitedTxns = append(m.commitedTxns, commitedTxn{
-			TxnID:        commitTs,
+			TxnCommitTs:  commitTs,
 			conflictKeys: txn.conflictKeys,
 		})
 	}
@@ -125,7 +125,9 @@ func (m *TransactionManager) cleanCommitedTransaction() {
 	m.lastCleanupTs = maxStartTs
 	tmp := m.commitedTxns[:0]
 	for _, txn := range m.commitedTxns {
-		if txn.TxnID <= maxStartTs {
+		// 如果历史事务的提交时间戳早于当前活跃的事务的开始时间戳，
+		// 冲突检查时就不需要考虑它了，也就可以在 committedTxns 中回收;
+		if txn.TxnCommitTs <= maxStartTs {
 			continue
 		} else {
 			tmp = append(tmp, txn)
@@ -266,6 +268,7 @@ func (t *Transaction) addReadKey(key []byte) {
 		t.readKeys = append(t.readKeys, hash)
 	}
 }
+
 func (t *Transaction) Commit() (uint64, error) {
 	if t.discard {
 		return 0, common.ErrDiscardedTxn
@@ -313,12 +316,14 @@ func (t *Transaction) commitAndSendToDB() (func() (uint64, error), error) {
 
 	req, err := t.db.SendToWriteCh(entries)
 	if err != nil {
+		// 整个数据写入失败, (不存在写入一半的错误);
+		// 结束标记位, 并释放锁, 允许其他事务写入;
 		manager.doneCommit(commitTs)
 		return nil, err
 	}
-
+	// 写入通道成功; 释放锁, 允许其他事务写入;
 	ret := func() (uint64, error) {
-		// 阻塞等待, 写入lsm结果, 然后才允许, 结束当前水印;
+		// 释放了锁后, 阻塞等待lsm结果; 然后才允许, 结束当前水印;
 		err := req.Wait()
 		manager.doneCommit(commitTs)
 		return commitTs, err
@@ -340,9 +345,6 @@ func (t *Transaction) RollBack() {
 	t.conflictKeys = nil
 	t.readKeys = nil
 	t.db = nil
-}
-func (t *Transaction) StartTs() uint64 {
-	return t.startTs
 }
 
 type pendingWritesIterator struct {

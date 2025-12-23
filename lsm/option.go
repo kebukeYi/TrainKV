@@ -50,7 +50,7 @@ type Options struct {
 	DiscardStatsCh *chan map[uint32]int64 // 用于 compact 组件向 vlog 组件传递信息;
 
 	// Txn
-	DetectConflicts bool // 是否开启事务冲突检查;
+	DetectConflicts bool // 是否开启事务 读-写 冲突检查;
 }
 
 const KvWriteChCapacity = 1000
