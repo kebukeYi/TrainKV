@@ -24,6 +24,7 @@ TrainKV 是一个基于 LSM-Tree 架构的轻量级支持kv分离的嵌入式 Ke
 - **Mmap I/O** - 内存映射文件，高效随机读取
 - **崩溃恢复** - WAL + CRC32 校验 + Manifest 元数据
 - **Value Log GC** - 基于废弃比例的自动垃圾回收
+- **事务支持** - 支持 ACID 特性的事务操作，可选冲突检测
 
 ## 安装
 
@@ -70,6 +71,32 @@ func main() {
 	for iter.Rewind(); iter.Valid(); iter.Next() {
 		it := iter.Item()
 		fmt.Printf("key=%s, value=%s\n", model.ParseKey(it.Item.Key), it.Item.Value)
+	}
+
+	// 事务操作
+	txn := db.NewTransaction(true) // 开始一个更新事务
+	defer txn.Discard() // 确保事务被丢弃
+
+	// 在事务中设置键值对
+	err = txn.Set([]byte("txn_key"), []byte("txn_value"))
+	if err != nil {
+		fmt.Printf("事务设置失败: %v\n", err)
+	}
+
+	// 在事务中获取值
+	entry, err = txn.Get([]byte("txn_key"))
+	if err != nil {
+		fmt.Printf("事务获取失败: %v\n", err)
+	} else {
+		fmt.Printf("事务中 key=%s, value=%s\n", entry.Key, entry.Value)
+	}
+
+	// 提交事务
+	commitTs, err := txn.Commit()
+	if err != nil {
+		fmt.Printf("事务提交失败: %v\n", err)
+	} else {
+		fmt.Printf("事务提交成功，提交时间戳: %d\n", commitTs)
 	}
 }
 ```

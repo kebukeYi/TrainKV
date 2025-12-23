@@ -24,6 +24,7 @@ TrainKV is a lightweight embedded Key-Value storage engine based on LSM-Tree arc
 - **Mmap I/O** - Memory-mapped file for efficient random reads
 - **Crash Recovery** - WAL + CRC32 checksum + Manifest metadata
 - **Value Log GC** - Automatic garbage collection based on discard ratio
+- **Transaction Support** - ACID-compliant transaction operations with optional conflict detection
 
 ## Installation
 
@@ -70,6 +71,32 @@ func main() {
 	for iter.Rewind(); iter.Valid(); iter.Next() {
 		it := iter.Item()
 		fmt.Printf("key=%s, value=%s\n", model.ParseKey(it.Item.Key), it.Item.Value)
+	}
+
+	// Transaction operations
+	txn := db.NewTransaction(true) // Start an update transaction
+	defer txn.Discard() // Ensure the transaction is discarded
+
+	// Set key-value pairs in transaction
+	err = txn.Set([]byte("txn_key"), []byte("txn_value"))
+	if err != nil {
+		fmt.Printf("Transaction set failed: %v\n", err)
+	}
+
+	// Get value in transaction
+	entry, err = txn.Get([]byte("txn_key"))
+	if err != nil {
+		fmt.Printf("Transaction get failed: %v\n", err)
+	} else {
+		fmt.Printf("In transaction key=%s, value=%s\n", entry.Key, entry.Value)
+	}
+
+	// Commit transaction
+	commitTs, err := txn.Commit()
+	if err != nil {
+		fmt.Printf("Transaction commit failed: %v\n", err)
+	} else {
+		fmt.Printf("Transaction committed successfully, commit timestamp: %d\n", commitTs)
 	}
 }
 ```
