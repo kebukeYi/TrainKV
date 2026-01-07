@@ -59,13 +59,13 @@ func (c *Cache) set(key, val interface{}) bool {
 	item := storeItem{
 		keyHash: keyToHash,
 		value:   val,
-		stage:   0,
+		stage:   Win_LRU,
 	}
 	eitem, evicted := c.wlru.add(item)
 	if !evicted {
 		return true
 	}
-	// 如果 window 中有被淘汰的数据，会走到这里
+	// 如果 window 中有被淘汰的数据, 会走到这里
 	// 需要从 LFU 的 stageOne 部分找到一个淘汰者(未剔除)
 	// 二者进行 PK
 	victim := c.slru.victim()
@@ -73,8 +73,8 @@ func (c *Cache) set(key, val interface{}) bool {
 		c.slru.add(eitem)
 		return true
 	}
-	// 这里进行 PK，必须在 bloomFilter 中出现过一次，才允许 PK
-	// 在 bf 中出现，说明访问频率 >= 2
+	// 这里进行 PK，必须在 bloomFilter 中出现过一次, 才允许 PK
+	// 在 bf 中出现, 说明访问频率 >= 2
 	if !c.door.Allow(uint32(eitem.keyHash)) {
 		return true
 	}
@@ -84,7 +84,7 @@ func (c *Cache) set(key, val interface{}) bool {
 		return true
 	}
 
-	// 执行到这里 说明 winlru 的值频率>= slru的值频率; 需要留下winlru的值
+	// 执行到这里 说明 winlru 的值频率>= slru的值频率; 需要留下winlru的值;
 	// 留下来的 进入 stageOne, 但是此时 victim 并没有剔除掉, 但是add()方法的逻辑中会进行剔除判断;
 	c.slru.add(eitem)
 	return true
@@ -115,18 +115,17 @@ func (c *Cache) get(key interface{}) (interface{}, bool) {
 		c.cmkt.increment(keyToHash)
 		return nil, false
 	}
-	item := element.Value.(*storeItem)
 
+	item := element.Value.(*storeItem)
 	c.door.Allow(uint32(keyToHash))
 	c.cmkt.increment(item.keyHash)
 
 	value := item.value
-	if item.stage == 0 {
+	if item.stage == Win_LRU {
 		c.wlru.get(element)
 	} else {
 		c.slru.get(element)
 	}
-
 	return value, true
 }
 

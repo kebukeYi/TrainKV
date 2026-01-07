@@ -13,6 +13,7 @@ type segmentedLRU struct {
 }
 
 const (
+	Win_LRU   = 0
 	STAGE_ONE = 1
 	STAGE_TWO = 2
 )
@@ -54,9 +55,10 @@ func (slru *segmentedLRU) get(v *list.Element) {
 		slru.stageTwo.MoveToFront(v)
 		return
 	}
-	// 访问的数据在 StageOne, 那么再次被访问到, 就需要提升到 StageTwo 中
 
-	// 假如 StageTwo 没满, 那么直接添加数据
+	// 访问的数据在 StageOne, 那么再次被访问到, 就需要提升到 StageTwo 中;
+
+	// 假如 StageTwo 没满, 那么直接添加数据;
 	if slru.stageTwo.Len() < slru.stageTwoCap {
 		slru.stageOne.Remove(v)
 		item.stage = STAGE_TWO
@@ -64,7 +66,7 @@ func (slru *segmentedLRU) get(v *list.Element) {
 		return
 	}
 
-	// StageTwo 满了，需要淘汰数据
+	// StageTwo 满了, 需要淘汰数据;
 
 	// 新数据加入 StageTwo，需要淘汰旧数据
 	// StageTwo 中淘汰的数据不会消失，会进入 StageOne
