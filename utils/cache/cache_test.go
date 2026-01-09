@@ -12,6 +12,18 @@ func TestNewCache(t *testing.T) {
 	}
 }
 
+func TestCache_Update(t *testing.T) {
+	cache := NewCache(100)
+	utils.AssertTrue(cache.Set("key", "value"))
+	utils.AssertTrue(cache.Set("key", "newValue"))
+	println(cache.Len())
+	get, ok := cache.Get("key")
+	utils.AssertTrue(ok)
+	if get != "newValue" {
+		t.Errorf("Expected value %v, got %v", "newValue", get)
+	}
+}
+
 func TestCache_SetAndGet(t *testing.T) {
 	cache := NewCache(100)
 

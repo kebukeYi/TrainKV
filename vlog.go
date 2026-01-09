@@ -164,7 +164,7 @@ func (vlog *ValueLog) Read(vp *model.ValuePtr) ([]byte, func(), error) {
 	kvData := buf[headerLen:]
 	if uint32(len(kvData)) < head.KLen+head.VLen {
 		fmt.Errorf("Invalid read: vp: %+v\n", vp)
-		return nil, nil, errors.Errorf("Invalid read: Len: %d read at:[%d:%d]",
+		return nil, nil, errors.Errorf("Invalid read: len: %d read at:[%d:%d]",
 			len(kvData), head.KLen, head.KLen+head.VLen)
 	}
 	return kvData[head.KLen : head.KLen+head.VLen], callBack, nil

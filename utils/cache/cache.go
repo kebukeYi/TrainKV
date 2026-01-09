@@ -56,6 +56,12 @@ func (c *Cache) Set(key, val interface{}) bool {
 
 func (c *Cache) set(key, val interface{}) bool {
 	keyToHash, _ := utils.KeyToHash(key)
+	// 判断是否更新操作;
+	element, ok := c.get(keyToHash)
+	if ok {
+		element.Value.(*storeItem).value = val
+		return true
+	}
 	item := storeItem{
 		keyHash: keyToHash,
 		value:   val,
@@ -65,7 +71,7 @@ func (c *Cache) set(key, val interface{}) bool {
 	if !evicted {
 		return true
 	}
-	// 如果 window 中有被淘汰的数据, 会走到这里
+	// 如果 winlru 中有被淘汰的数据, 会走到这里
 	// 需要从 LFU 的 stageOne 部分找到一个淘汰者(未剔除)
 	// 二者进行 PK
 	victim := c.slru.victim()
@@ -84,7 +90,7 @@ func (c *Cache) set(key, val interface{}) bool {
 		return true
 	}
 
-	// 执行到这里 说明 winlru 的值频率>= slru的值频率; 需要留下winlru的值;
+	// 执行到这里 说明 winlru 的值频率>= slru 的值频率; 需要留下 winlru 的值;
 	// 留下来的 进入 stageOne, 但是此时 victim 并没有剔除掉, 但是add()方法的逻辑中会进行剔除判断;
 	c.slru.add(eitem)
 	return true
@@ -93,10 +99,14 @@ func (c *Cache) set(key, val interface{}) bool {
 func (c *Cache) Get(key interface{}) (interface{}, bool) {
 	c.m.Lock()
 	defer c.m.Unlock()
-	return c.get(key)
+	element, ok := c.get(key)
+	if !ok {
+		return nil, false
+	}
+	return element.Value.(*storeItem).value, ok
 }
 
-func (c *Cache) get(key interface{}) (interface{}, bool) {
+func (c *Cache) get(key interface{}) (*list.Element, bool) {
 	c.total++
 	if c.total == c.threshold {
 		c.cmkt.Reset()
@@ -107,6 +117,7 @@ func (c *Cache) get(key interface{}) (interface{}, bool) {
 	keyToHash, _ := utils.KeyToHash(key)
 	element, ok := c.data[keyToHash]
 
+	// 全局缓存中不存在;
 	if !ok {
 		// todo 自动更换热点数据 关键点
 		// 不存在也要记录对应的数据频率, 说明是需要下一步进行缓存的;
@@ -120,13 +131,12 @@ func (c *Cache) get(key interface{}) (interface{}, bool) {
 	c.door.Allow(uint32(keyToHash))
 	c.cmkt.increment(item.keyHash)
 
-	value := item.value
 	if item.stage == Win_LRU {
 		c.wlru.get(element)
 	} else {
 		c.slru.get(element)
 	}
-	return value, true
+	return element, true
 }
 
 func (c *Cache) Del(key interface{}) (interface{}, bool) {
@@ -143,6 +153,10 @@ func (c *Cache) del(key interface{}) (interface{}, bool) {
 	}
 	delete(c.data, keyToHash)
 	return keyToHash, true
+}
+
+func (c *Cache) Len() int {
+	return c.wlru.len() + c.slru.len()
 }
 
 func (c *Cache) String() string {

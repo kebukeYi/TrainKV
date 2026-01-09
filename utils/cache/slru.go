@@ -35,7 +35,7 @@ func (slru *segmentedLRU) add(newitem storeItem) {
 		return
 	}
 	// 待定; stageOne满了,但是stageTwo未满, 那么在add逻辑中先都添加在stageOne中,后续再添加,那就淘汰stageOne中最后一个数据;
-	if slru.Len() < slru.stageTwoCap+slru.stageOneCap {
+	if slru.len() < slru.stageTwoCap+slru.stageOneCap {
 		slru.data[newitem.keyHash] = slru.stageOne.PushFront(&newitem)
 		return
 	}
@@ -87,7 +87,7 @@ func (slru *segmentedLRU) get(v *list.Element) {
 }
 
 func (slru *segmentedLRU) victim() *storeItem {
-	if slru.Len() < slru.stageTwoCap+slru.stageOneCap {
+	if slru.len() < slru.stageTwoCap+slru.stageOneCap {
 		return nil
 	}
 	element := slru.stageOne.Back()
@@ -95,7 +95,7 @@ func (slru *segmentedLRU) victim() *storeItem {
 
 }
 
-func (slru *segmentedLRU) Len() int {
+func (slru *segmentedLRU) len() int {
 	return slru.stageOne.Len() + slru.stageTwo.Len()
 }
 

@@ -25,7 +25,7 @@ func NewWinLRU(size int, data map[uint64]*list.Element) *winLRU {
 	}
 }
 
-func (wlru *winLRU) add(newItem storeItem) (oldEitem storeItem, evicted bool) {
+func (wlru *winLRU) add(newItem storeItem) (oldItem storeItem, evicted bool) {
 	// 如果还有空间, 那么添加;
 	if wlru.list.Len() < wlru.cap {
 		wlru.data[newItem.keyHash] = wlru.list.PushFront(&newItem)
@@ -38,15 +38,19 @@ func (wlru *winLRU) add(newItem storeItem) (oldEitem storeItem, evicted bool) {
 
 	delete(wlru.data, item.keyHash)
 
-	oldEitem, *item = *item, newItem
+	oldItem, *item = *item, newItem
 
 	wlru.data[item.keyHash] = evictItem
 	wlru.list.MoveToFront(evictItem)
-	return oldEitem, true
+	return oldItem, true
 }
 
 func (wlru *winLRU) get(v *list.Element) {
 	wlru.list.MoveToFront(v)
+}
+
+func (wlru *winLRU) len() int {
+	return wlru.list.Len()
 }
 
 func (wlru *winLRU) string() string {
