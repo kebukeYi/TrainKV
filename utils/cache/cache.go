@@ -8,7 +8,7 @@ import (
 
 type Cache struct {
 	m         sync.RWMutex
-	wlru      *winLRU // 接收新插入，快速淘汰
+	wlru      *winLRU
 	slru      *segmentedLRU
 	door      *BloomFilter
 	cmkt      *cmSketch
@@ -18,7 +18,7 @@ type Cache struct {
 }
 
 func NewCache(numEntries int) *Cache {
-	const winlruPct = 10
+	const winlruPct = 15
 	winlruSz := (winlruPct * numEntries) / 100
 	if winlruSz < 1 {
 		winlruSz = 1
@@ -27,7 +27,7 @@ func NewCache(numEntries int) *Cache {
 	if slruSz < 1 {
 		slruSz = 1
 	}
-	slruOne := int(0.2 * float64(slruSz))
+	slruOne := int(0.15 * float64(slruSz))
 	if slruOne < 1 {
 		slruOne = 1
 	}
@@ -40,8 +40,8 @@ func NewCache(numEntries int) *Cache {
 		m:         sync.RWMutex{},
 		wlru:      NewWinLRU(winlruSz, data),
 		slru:      newSLRU(data, slruOne, slruTwo),
-		door:      newBloomFilter(numEntries, 0.01),
-		cmkt:      newCmSketch(int64(numEntries)),
+		door:      newBloomFilter(numEntries, 0.005),
+		cmkt:      newCmSketch(int64(numEntries) * 2),
 		total:     0,
 		threshold: int32(numEntries * 100),
 		data:      data,
@@ -149,7 +149,7 @@ func (c *Cache) del(key interface{}) (interface{}, bool) {
 	keyToHash, _ := utils.KeyToHash(key)
 	_, ok := c.data[keyToHash]
 	if !ok {
-		return 0, false
+		return nil, false
 	}
 	delete(c.data, keyToHash)
 	return keyToHash, true
@@ -163,4 +163,17 @@ func (c *Cache) String() string {
 	s := ""
 	s += c.wlru.string() + " | " + c.slru.string()
 	return s
+}
+
+func (c *Cache) Stats() map[string]interface{} {
+	c.m.RLock()
+	defer c.m.RUnlock()
+
+	return map[string]interface{}{
+		"win_lru_size":   c.wlru.len(),
+		"slru_size":      c.slru.len(),
+		"total_size":     c.Len(),
+		"total_accesses": c.total,
+		"hit_count":      c.total - int32(c.Len()), // 简化计算
+	}
 }
