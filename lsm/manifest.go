@@ -231,6 +231,7 @@ func (mf *ManifestFile) addChanges(changes []*pb.ManifestChange) error {
 		return err
 	}
 
+	// 会有遗失数据的风险;
 	if mf.manifest.Deletions > common.ManifestDeletionsRewriteThreshold &&
 		mf.manifest.Deletions > common.ManifestDeletionsRatio*(mf.manifest.Creations-mf.manifest.Deletions) {
 		if err := mf.rewrite(); err != nil {

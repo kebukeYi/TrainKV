@@ -133,6 +133,8 @@ func (lsm *LSM) recovery() (*MemoryTable, []*MemoryTable) {
 	var immutables []*MemoryTable
 	sstMaxID := lsm.LevelManger.maxFID.Load()
 	for _, fid := range fids {
+		// 什么情况下会出现 相等?
+		// 最新的 wal flush-> l0层的sst ->  添加 manifest 清单文件失败(宕机);
 		if fid == sstMaxID {
 			fmt.Printf("LSM.#recovery(): sstMaxFid(%d.sst) is not allow equal to wal fid(%d.wal)!", sstMaxID, fid)
 			// 方式A: 进行删除相关wal文件;

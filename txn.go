@@ -47,7 +47,6 @@ func NewTransactionManager(options *lsm.Options) *TransactionManager {
 func (m *TransactionManager) Stop() {
 	m.closer.CloseAndWait()
 }
-
 func (m *TransactionManager) startTs() uint64 {
 	m.tsLock.Lock()
 	startTs := m.nextTxnTs - 1
@@ -65,7 +64,6 @@ func (m *TransactionManager) incrementNextTs() {
 func (m *TransactionManager) DiscardTs() uint64 {
 	return m.startMark.GetDoneIndex()
 }
-
 func (m *TransactionManager) hasConflict(txn *Transaction) bool {
 	if !m.detectConflicts {
 		return false
@@ -87,7 +85,6 @@ func (m *TransactionManager) hasConflict(txn *Transaction) bool {
 	}
 	return false
 }
-
 func (m *TransactionManager) newCommitTs(txn *Transaction) (uint64, bool) {
 	m.tsLock.Lock()
 	defer m.tsLock.Unlock()
@@ -173,7 +170,6 @@ func (db *TrainKV) NewTransaction(update bool) *Transaction {
 	txn.startTs = db.transactionManager.startTs()
 	return txn
 }
-
 func (txn *Transaction) IsVisible(e *model.Entry) bool {
 	if e == nil {
 		return false
@@ -268,7 +264,6 @@ func (t *Transaction) addReadKey(key []byte) {
 		t.readKeys = append(t.readKeys, hash)
 	}
 }
-
 func (t *Transaction) Commit() (uint64, error) {
 	if t.discard {
 		return 0, common.ErrDiscardedTxn
@@ -345,6 +340,29 @@ func (t *Transaction) RollBack() {
 	t.conflictKeys = nil
 	t.readKeys = nil
 	t.db = nil
+}
+
+func (db *TrainKV) Update(fn func(txn *Transaction) error) error {
+	if db.IsClosed() {
+		return common.ErrClosedDB
+	}
+	localTxn := db.NewTransaction(true)
+	defer localTxn.Discard()
+	if err := fn(localTxn); err != nil {
+		return err
+	}
+	_, err := localTxn.Commit()
+	return err
+}
+
+func (db *TrainKV) View(fn func(txn *Transaction) error) error {
+	if db.IsClosed() {
+		return common.ErrClosedDB
+	}
+	localTxn := db.NewTransaction(false)
+	defer localTxn.Discard()
+
+	return fn(localTxn)
 }
 
 type pendingWritesIterator struct {

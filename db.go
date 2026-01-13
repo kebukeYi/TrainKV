@@ -13,6 +13,7 @@ import (
 	"github.com/pkg/errors"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 )
 
 type TrainKV struct {
@@ -27,6 +28,8 @@ type TrainKV struct {
 	VlogReplayHead     model.ValuePtr
 	logRotates         int32
 	Closer             closer
+	closeOnce          sync.Once
+	isClosed           atomic.Bool
 }
 
 type closer struct {
@@ -394,6 +397,9 @@ func (db *TrainKV) initVlog() {
 }
 
 func (db *TrainKV) Close() error {
+	db.closeOnce.Do(func() {
+		db.isClosed.Store(true)
+	})
 	db.Closer.valueGC.CloseAndWait()
 	db.Closer.writes.CloseAndWait()
 	close(db.writeCh)
@@ -413,6 +419,10 @@ func (db *TrainKV) Close() error {
 		return err
 	}
 	return nil
+}
+
+func (db *TrainKV) IsClosed() bool {
+	return db.isClosed.Load()
 }
 
 func BuildRequest(entries []*model.Entry) *model.Request {

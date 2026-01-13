@@ -181,10 +181,12 @@ func (lm *LevelsManger) flush(imm *MemoryTable) (err error) {
 
 	// 此时磁盘中已经生成 .sst 文件;
 	t, _ := OpenTable(lm, sstName, builder)
-	// 向manifest 中添加, 添加失败了呢?
-	// 假设5.wal 刚转化成 5.sst, 那么5.wal理应被删除掉;但是和5.wal绑定的跳表正在被引用,因此无法直接删除掉5.wal;
+	// 向 manifest 中添加, 添加失败了呢?
+	// 1. 假设5.wal 刚转化成 5.sst, 那么5.wal理应被删除掉; 但是和5.wal绑定的跳表正在被引用,因此无法直接删除掉5.wal;
 	// 随后 系统突然宕机关闭, 重启时, 会先加载 .sst文件, 然后再加载.wal; 那么就会出现 5.wal 和 5.sst 的重叠;
-	// 因此, 在 wal 刷盘时, 等于 .sst 的最大文件ID的 .wal 文件需要删除掉;
+	// 因此, 在 wal 重放时, 等于 .sst 的最大文件ID的 .wal 文件需要删除掉;
+	// 2. 还未添加到 manifest, 当前 存在 5.wal, 5.sst; 那么在重启时,根据 manifest已存内容, 会删除掉 5.sst;
+	//    随后 5.wal 会继续flush成 5.sst, 并再次尝试添加到 manifest中;
 	err = lm.manifestFile.AddTableMeta(0, &TableMeta{
 		ID:       fid,
 		Checksum: []byte{'s', 'k', 'i', 'p'},
