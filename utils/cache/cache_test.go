@@ -337,21 +337,32 @@ func TestCacheHitRateRandom(t *testing.T) {
 	fmt.Printf("随机访问命中率: %.2f%%\n", hitRate)
 }
 
-// TestCacheHitRateZipfian 模拟 Zipfian 分布访问模式
-// Zipfian 分布访问命中率: 90.03%
+// NewCache(100),numKeys 10000下, Zipfian 分布 (s=1.50) 访问命中率: 89.24%
+// NewCache(100),numKeys 5000  , Zipfian 分布 (s=1.50) 访问命中率: 90.24%
 func TestCacheHitRateZipfian(t *testing.T) {
-	cache := NewCache(1000)
+	cache := NewCache(100) // 缓存大小 1000
+	totalRequests := 10000
+	hitCount := 0
 
 	// 模拟 Zipfian 分布 - 大部分访问集中在少数键上
 	// 80%的请求集中在20%的数据
-	hitCount := 0
-	totalRequests := 10000
+	const (
+		numKeys = 5000 * 2 // 总数据范围（比缓存大，才能测试出真实命中率）
+		//s       = 0.99 // 倾斜因子：s 越大，热点越集中。0.99 是业界标准
+		s = 1.5
+	)
+
+	// 1. 初始化 Zipf 生成器 (Go 标准库 math/rand 已经内置了 Zipf)
+	// r: 随机数源
+	// s: 倾斜系数 (必须 > 1.0, 所以我们用 1.01 模拟极高偏斜，或使用下面这种方式)
+	// v: 变量 v 越大，分布越平滑
+	// n: 范围上限
+	src := rand.New(rand.NewSource(time.Now().UnixNano()))
+	zipf := rand.NewZipf(src, s, 1.0, uint64(numKeys-1))
 
 	for i := 0; i < totalRequests; i++ {
-		// 使用简单的幂律分布模拟
-		// 大部分请求会落在较小的键值范围内
-		r := rand.Float64()
-		key := int(r * r * 1000) // 平方使小值更常见
+		// 2. 生成符合 Zipfian 分布的 Key
+		key := int(zipf.Uint64())
 
 		_, found := cache.Get(key)
 		if found {
@@ -362,7 +373,46 @@ func TestCacheHitRateZipfian(t *testing.T) {
 	}
 
 	hitRate := float64(hitCount) / float64(totalRequests) * 100
-	fmt.Printf("Zipfian 分布访问命中率: %.2f%%\n", hitRate)
+	fmt.Printf("Zipfian 分布 (s=%.2f) 访问命中率: %.2f%%\n", s, hitRate)
+}
+
+// 模拟热点漂移
+func TestCacheHitRateMovingHotspot(t *testing.T) {
+	cache := NewCache(50)
+	numKeys := 10000
+	totalRequests := 20000 // 增加请求量，观察前后变化
+	hitCount := 0
+
+	src := rand.New(rand.NewSource(time.Now().UnixNano()))
+	zipf := rand.NewZipf(src, 1.5, 1.0, uint64(numKeys-1))
+
+	fmt.Println("开始测试：前10000次请求热点在 A 区，后10000次热点跳变至 B 区")
+
+	for i := 0; i < totalRequests; i++ {
+		// 模拟热点偏移：前半程无偏移，后半程偏移 5000
+		offset := 0
+		if i == totalRequests/2 {
+			fmt.Printf("\n--- [警告] 热点发生突变！当前进度: %d ---\n", i)
+			// 此时可以打印一下前半程的命中率
+			fmt.Printf("前半程命中率: %.2f%%\n", float64(hitCount)/float64(i)*100)
+		}
+		if i >= totalRequests/2 {
+			offset = 5000 // 热点瞬间漂移到索引 5000 之后
+		}
+
+		// 生成原始 Zipf Key 并加上偏移量，取模防止越界
+		key := (int(zipf.Uint64()) + offset) % numKeys
+
+		_, found := cache.Get(key)
+		if found {
+			hitCount++
+		} else {
+			cache.Set(key, fmt.Sprintf("value_%d", key))
+		}
+	}
+
+	finalHitRate := float64(hitCount) / float64(totalRequests) * 100
+	fmt.Printf("\n最终总命中率: %.2f%%\n", finalHitRate)
 }
 
 // CacheHitRateStats 详细的缓存统计信息
