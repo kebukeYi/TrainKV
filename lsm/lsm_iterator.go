@@ -2,9 +2,9 @@ package lsm
 
 import (
 	"container/heap"
-	"github.com/kebukeYi/TrainKV/common"
-	"github.com/kebukeYi/TrainKV/interfaces"
-	"github.com/kebukeYi/TrainKV/model"
+	"github.com/kebukeYi/TrainKV/v2/common"
+	"github.com/kebukeYi/TrainKV/v2/interfaces"
+	"github.com/kebukeYi/TrainKV/v2/model"
 	"sort"
 )
 

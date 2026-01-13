@@ -2,10 +2,10 @@ package benchmk
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainKV"
-	"github.com/kebukeYi/TrainKV/common"
-	"github.com/kebukeYi/TrainKV/lsm"
-	"github.com/kebukeYi/TrainKV/model"
+	"github.com/kebukeYi/TrainKV/v2"
+	"github.com/kebukeYi/TrainKV/v2/common"
+	"github.com/kebukeYi/TrainKV/v2/lsm"
+	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/stretchr/testify/assert"
 	"math/rand"
 	"os"

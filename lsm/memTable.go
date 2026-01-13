@@ -2,10 +2,10 @@ package lsm
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainKV/common"
-	"github.com/kebukeYi/TrainKV/model"
-	"github.com/kebukeYi/TrainKV/skl"
-	"github.com/kebukeYi/TrainKV/utils"
+	"github.com/kebukeYi/TrainKV/v2/common"
+	"github.com/kebukeYi/TrainKV/v2/model"
+	"github.com/kebukeYi/TrainKV/v2/skl"
+	"github.com/kebukeYi/TrainKV/v2/utils"
 	"os"
 	"path/filepath"
 	"sort"

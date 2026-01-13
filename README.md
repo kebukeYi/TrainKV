@@ -29,7 +29,7 @@ TrainKV is a lightweight embedded Key-Value storage engine based on LSM-Tree arc
 ## Installation
 
 ```sh
-go get github.com/kebukeYi/TrainKV@latest
+go get github.com/kebukeYi/TrainKV/v2@latest
 ```
 
 ## Quick Start

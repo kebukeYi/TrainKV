@@ -2,8 +2,8 @@ package TrainKV
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainKV/common"
-	"github.com/kebukeYi/TrainKV/lsm"
+	"github.com/kebukeYi/TrainKV/v2/common"
+	"github.com/kebukeYi/TrainKV/v2/lsm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"os"

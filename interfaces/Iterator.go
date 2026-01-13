@@ -1,6 +1,6 @@
 package interfaces
 
-import "github.com/kebukeYi/TrainKV/model"
+import "github.com/kebukeYi/TrainKV/v2/model"
 
 type Iterator interface {
 	Name() string

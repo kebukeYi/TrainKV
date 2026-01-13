@@ -1,7 +1,7 @@
 package lsm
 
 import (
-	"github.com/kebukeYi/TrainKV/utils/cache"
+	"github.com/kebukeYi/TrainKV/v2/utils/cache"
 )
 
 type LevelsCache struct {

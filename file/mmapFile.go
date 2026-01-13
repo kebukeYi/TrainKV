@@ -2,8 +2,8 @@ package file
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainKV/common"
-	"github.com/kebukeYi/TrainKV/mmap"
+	"github.com/kebukeYi/TrainKV/v2/common"
+	"github.com/kebukeYi/TrainKV/v2/mmap"
 	"github.com/pkg/errors"
 	"io"
 	"os"

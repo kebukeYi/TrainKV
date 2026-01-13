@@ -1,7 +1,7 @@
 package lsm
 
 import (
-	"github.com/kebukeYi/TrainKV/common"
+	"github.com/kebukeYi/TrainKV/v2/common"
 	"math"
 	"os"
 )

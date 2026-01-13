@@ -2,7 +2,7 @@ package cache
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainKV/utils"
+	"github.com/kebukeYi/TrainKV/v2/utils"
 	"math/rand"
 	"testing"
 	"time"

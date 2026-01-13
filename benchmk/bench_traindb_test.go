@@ -2,8 +2,8 @@ package benchmk
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainKV"
-	"github.com/kebukeYi/TrainKV/lsm"
+	"github.com/kebukeYi/TrainKV/v2"
+	"github.com/kebukeYi/TrainKV/v2/lsm"
 	"testing"
 )
 

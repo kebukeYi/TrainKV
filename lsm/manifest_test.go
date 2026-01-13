@@ -1,7 +1,7 @@
 package lsm
 
 import (
-	"github.com/kebukeYi/TrainKV/utils"
+	"github.com/kebukeYi/TrainKV/v2/utils"
 	"testing"
 )
 

@@ -2,7 +2,7 @@ package cache
 
 import (
 	"container/list"
-	"github.com/kebukeYi/TrainKV/utils"
+	"github.com/kebukeYi/TrainKV/v2/utils"
 	"sync"
 )
 

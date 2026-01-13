@@ -2,10 +2,10 @@ package main
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainKV"
-	"github.com/kebukeYi/TrainKV/interfaces"
-	"github.com/kebukeYi/TrainKV/lsm"
-	"github.com/kebukeYi/TrainKV/model"
+	"github.com/kebukeYi/TrainKV/v2"
+	"github.com/kebukeYi/TrainKV/v2/interfaces"
+	"github.com/kebukeYi/TrainKV/v2/lsm"
+	"github.com/kebukeYi/TrainKV/v2/model"
 )
 
 func main() {

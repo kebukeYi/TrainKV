@@ -4,15 +4,15 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/kebukeYi/TrainKV/common"
-	"github.com/kebukeYi/TrainKV/interfaces"
-	"github.com/kebukeYi/TrainKV/model"
+	"github.com/kebukeYi/TrainKV/v2/common"
+	"github.com/kebukeYi/TrainKV/v2/interfaces"
+	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/stretchr/testify/require"
 	"math"
 	"testing"
 
-	"github.com/kebukeYi/TrainKV/pb"
-	"github.com/kebukeYi/TrainKV/utils"
+	"github.com/kebukeYi/TrainKV/v2/pb"
+	"github.com/kebukeYi/TrainKV/v2/utils"
 )
 
 var compactTestPath = "/usr/golanddata/trainkv/compact"

@@ -1,4 +1,4 @@
-module github.com/kebukeYi/TrainKV
+module github.com/kebukeYi/TrainKV/v2
 
 go 1.24.0
 

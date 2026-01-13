@@ -29,7 +29,7 @@ TrainKV 是一个基于 LSM-Tree 架构的轻量级支持kv分离的嵌入式 Ke
 ## 安装
 
 ```sh
-go get github.com/kebukeYi/TrainKV@latest
+go get github.com/kebukeYi/TrainKV/v2@latest
 ```
 
 ## 快速开始

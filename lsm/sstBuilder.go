@@ -2,11 +2,11 @@ package lsm
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainKV/common"
-	"github.com/kebukeYi/TrainKV/interfaces"
-	"github.com/kebukeYi/TrainKV/model"
-	"github.com/kebukeYi/TrainKV/pb"
-	"github.com/kebukeYi/TrainKV/utils"
+	"github.com/kebukeYi/TrainKV/v2/common"
+	"github.com/kebukeYi/TrainKV/v2/interfaces"
+	"github.com/kebukeYi/TrainKV/v2/model"
+	"github.com/kebukeYi/TrainKV/v2/pb"
+	"github.com/kebukeYi/TrainKV/v2/utils"
 	"github.com/pkg/errors"
 	"math"
 	"os"

@@ -2,7 +2,7 @@ package skl
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainKV/model"
+	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"math/rand"
