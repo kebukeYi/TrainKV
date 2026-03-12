@@ -18,7 +18,7 @@ type Cache struct {
 }
 
 func NewCache(numEntries int) *Cache {
-	const winlruPct = 15
+	const winlruPct = 15 // 占比15%;
 	winlruSz := (winlruPct * numEntries) / 100
 	if winlruSz < 1 {
 		winlruSz = 1

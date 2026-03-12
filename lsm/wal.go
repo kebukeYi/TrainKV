@@ -111,6 +111,7 @@ func (w *WAL) WalDecode(reader io.Reader) (*model.Entry, error) {
 	if err != nil {
 		return nil, err
 	}
+	// todo sync.pool
 	entry := &model.Entry{}
 
 	dataBuf := make([]byte, header.KLen+header.VLen)

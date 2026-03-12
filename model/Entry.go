@@ -209,7 +209,6 @@ func (r *HashReader) Read(out []byte) (int, error) {
 
 func (r *HashReader) ReadByte() (byte, error) {
 	buf := make([]byte, 1)
-	//_, err := r.R.Read(buf)
 	_, err := r.Read(buf)
 	if err != nil {
 		return 0, err

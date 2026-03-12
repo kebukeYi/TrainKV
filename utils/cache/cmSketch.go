@@ -26,12 +26,13 @@ func newCmSketch(numCounters int64) *cmSketch {
 	// mask 一定是0111...111
 	sketch := &cmSketch{mask: uint64(numCounters - 1)}
 	source := rand.New(rand.NewSource(time.Now().UnixNano()))
-	// 初始化4行
-	// 0000,0000|0000,0000|0000,0000
-	// 0000,0000|0000,0000|0000,0000
-	// 0000,0000|0000,0000|0000,0000
-	// 0000,0000|0000,0000|0000,0000
+	// 初始化4层;
+	// 0000,0000|0000,0000|0000,0000 ...
+	// 0000,0000|0000,0000|0000,0000 ...
+	// 0000,0000|0000,0000|0000,0000 ...
+	// 0000,0000|0000,0000|0000,0000 ...
 	for i := 0; i < cmDepth; i++ {
+		// 每层的随机种子值;
 		sketch.seed[i] = source.Uint64()
 		sketch.rows[i] = NewCmRow(numCounters)
 	}
@@ -44,7 +45,7 @@ func (cs *cmSketch) increment(keyHash uint64) {
 	}
 }
 
-// Estimate 估计keyHash的频率值
+// Estimate 估计keyHash的频率值;
 func (cs *cmSketch) Estimate(keyHash uint64) uint8 {
 	min := uint8(255)
 	for i := 0; i < cmDepth; i++ {
@@ -68,8 +69,9 @@ func (cs *cmSketch) Clear() {
 	}
 }
 
-// 快速计算大于 X，且最接近 X 的二次幂
+// 快速计算大于 X，且最接近 X 的二次幂;
 func next2power(numCounters int64) int64 {
+	// 把最高位的 1 右侧所有低位也强行置 1，再整体加 1，就得到了“下一个 2 的幂”;
 	numCounters--
 	numCounters |= numCounters >> 1
 	numCounters |= numCounters >> 2
@@ -81,28 +83,41 @@ func next2power(numCounters int64) int64 {
 	return numCounters
 }
 
-// 计数器, 每byte,8位记录了两个数字的频率值, 高四位代表奇数,低四位代表偶数;
+// 计数器, 每byte 前8位记录了两个数字的频率值, 高四位代表奇数,低四位代表偶数;
 type cmRow []byte
 
 func NewCmRow(numCounters int64) cmRow {
+	// 0000,0000|0000,0000| 0000,0000 => 6 counter => make([]byte, 3);
 	return make(cmRow, numCounters/2)
 }
 
 func (cr cmRow) get(keyHash uint64) byte {
-	return cr[keyHash/2] >> ((keyHash & 1) * 4) & 0x0f
+	// 定位到第i个Counter
+	index := keyHash / 2
+	// 右移距离，偶数为0，奇数为4
+	offset := (keyHash & 1) * 4
+	// 取前4Bit还是后4Bit
+	val := (cr[index] >> offset) & 0x0f
+	return val
 }
 
 func (cr cmRow) increment(keyHash uint64) {
+	// 定位到第i个Counter
 	index := keyHash / 2
+	// 右移距离，偶数为0，奇数为4
 	offset := (keyHash & 1) * 4
+	// 取前4Bit还是后4Bit
 	val := (cr[index] >> offset) & 0x0f
+	// 没有超出最大计数时，计数+1
 	if val < 15 {
 		cr[index] += 1 << offset
 	}
 }
 
 func (cr cmRow) reset() {
+	// 计数减半
 	for i := range cr {
+		// cr[i] & 0111，0111
 		cr[i] = (cr[i] >> 1) & 0xf7
 	}
 }
