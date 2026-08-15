@@ -4,15 +4,16 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	errors "github.com/kebukeYi/TrainKV/v2/common"
-	"github.com/kebukeYi/TrainKV/v2/file"
-	"github.com/kebukeYi/TrainKV/v2/model"
-	"github.com/kebukeYi/TrainKV/v2/utils"
 	"hash/crc32"
 	"io"
 	"os"
 	"sync"
 	"sync/atomic"
+
+	errors "github.com/kebukeYi/TrainKV/v2/common"
+	"github.com/kebukeYi/TrainKV/v2/file"
+	"github.com/kebukeYi/TrainKV/v2/model"
+	"github.com/kebukeYi/TrainKV/v2/utils"
 )
 
 const (
@@ -148,6 +149,10 @@ func EstimateWalEncodeSize(e *model.Entry) int {
 
 func (w *WAL) Size() uint32 {
 	return atomic.LoadUint32(&w.writeAt)
+}
+
+func (w *WAL) SyncFile() error {
+	return w.file.Sync()
 }
 
 func (w *WAL) SetSize(offset uint32) {

@@ -1,9 +1,10 @@
 package lsm
 
 import (
-	"github.com/kebukeYi/TrainKV/v2/common"
 	"math"
 	"os"
+
+	"github.com/kebukeYi/TrainKV/v2/common"
 )
 
 type Options struct {
@@ -44,7 +45,7 @@ type Options struct {
 	MaxLevelNum         int         // 最大层数,默认是 7 层;
 	SSTKeyRangCheckNums int         // 默认是 5000;
 	NumVersionsToKeep   int         // 相同key, 可存在的不同版本数量;
-	TxnDoneIndexCh      chan uint64 // txn 提交完成, 通知 compact 组件;
+	TxnDoneIndexCh      chan uint64 // txn 提交完成, 通知 compact 组件,;
 
 	// vlogFile GC; 在合并过程中, 统计出哪些 vlog 文件达到失效阈值比, 通知 vlog 组件, 方便其 vlogFile-GC;
 	DiscardStatsCh *chan map[uint32]int64 // 用于 compact 组件向 vlog 组件传递信息;

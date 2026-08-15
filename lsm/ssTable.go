@@ -2,6 +2,12 @@ package lsm
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
 	"github.com/golang/protobuf/proto"
 	"github.com/kebukeYi/TrainKV/v2/common"
 	"github.com/kebukeYi/TrainKV/v2/file"
@@ -9,11 +15,6 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/pb"
 	"github.com/kebukeYi/TrainKV/v2/utils"
 	"github.com/pkg/errors"
-	"io"
-	"os"
-	"path/filepath"
-	"sync"
-	"time"
 )
 
 type SSTable struct {
@@ -125,7 +126,9 @@ func (sst *SSTable) read(off, size int) ([]byte, error) {
 
 func (sst *SSTable) readCheckError(off, sz int) []byte {
 	buf, err := sst.read(off, sz)
-	common.Panic(err)
+	if err != nil {
+		common.Panic(err)
+	}
 	return buf
 }
 

@@ -2,17 +2,18 @@ package lsm
 
 import (
 	"fmt"
+	"math"
+	"os"
+	"sort"
+	"strconv"
+	"unsafe"
+
 	"github.com/kebukeYi/TrainKV/v2/common"
 	"github.com/kebukeYi/TrainKV/v2/interfaces"
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/kebukeYi/TrainKV/v2/pb"
 	"github.com/kebukeYi/TrainKV/v2/utils"
 	"github.com/pkg/errors"
-	"math"
-	"os"
-	"sort"
-	"strconv"
-	"unsafe"
 )
 
 type sstBuilder struct {
@@ -439,24 +440,38 @@ func (itr *blockIterator) setIndex(idx int) {
 	eny.Version = model.ParseTsVersion(itr.key)
 	itr.it = interfaces.Item{Item: eny}
 }
+
 func (itr *blockIterator) Next() {
 	itr.setIndex(itr.idx + 1)
 }
+
 func (itr *blockIterator) Prev() {
 	itr.setIndex(itr.idx - 1)
 }
+
 func (itr *blockIterator) Valid() bool {
 	return !errors.Is(itr.err, common.ErrBlockEOF)
 }
+
 func (itr *blockIterator) Rewind() {
 	itr.setIndex(0)
 }
+
 func (itr *blockIterator) Item() interfaces.Item {
 	return itr.it
 }
+
 func (itr *blockIterator) Close() error {
+	itr.block = nil
+	itr.data = nil
+	itr.err = nil
+	itr.baseKey = nil
+	itr.key = nil
+	itr.val = nil
+	itr.entryOffsets = nil
 	return nil
 }
+
 func (itr *blockIterator) Error() error {
 	return itr.err
 }

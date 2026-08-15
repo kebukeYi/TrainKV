@@ -4,6 +4,10 @@ import (
 	"bytes"
 	"expvar"
 	"fmt"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+
 	"github.com/gofrs/flock"
 	"github.com/kebukeYi/TrainKV/v2/common"
 	"github.com/kebukeYi/TrainKV/v2/interfaces"
@@ -11,9 +15,6 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/kebukeYi/TrainKV/v2/utils"
 	"github.com/pkg/errors"
-	"path/filepath"
-	"sync"
-	"sync/atomic"
 )
 
 type TrainKV struct {
@@ -279,7 +280,6 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 				}
 			}
 		case r = <-db.writeCh:
-
 			reqs = append(reqs, r)
 			reqLen = int64(len(reqs))
 
@@ -351,6 +351,13 @@ func (db *TrainKV) WriteRequest(reqs []*model.Request) error {
 		}
 	}
 
+	if count >= 100 {
+		// 批量写入后  wal 进行刷盘
+		if err := db.Lsm.SyncWalFile(); err != nil {
+			return err
+		}
+	}
+
 	done(nil)
 	return nil
 }
@@ -381,11 +388,13 @@ func (db *TrainKV) ShouldWriteValueToLSM(entry *model.Entry) bool {
 
 func (db *TrainKV) initVlog() {
 	vlog := &ValueLog{
-		DirPath:    db.Opt.WorkDir,
-		filesLock:  sync.RWMutex{},
-		FilesToDel: make([]uint32, 0),
-		Opt:        db.Opt,
-		buf:        &bytes.Buffer{},
+		DirPath:            db.Opt.WorkDir,
+		filesLock:          sync.RWMutex{},
+		FilesToDel:         make([]uint32, 0),
+		Opt:                db.Opt,
+		buf:                &bytes.Buffer{},
+		runGCOver:          &sync.WaitGroup{},
+		disCardStaInfoOver: &sync.WaitGroup{},
 		VLogFileDisCardStaInfo: &VLogFileDisCardStaInfo{
 			FileMap: make(map[uint32]int64),
 			FlushCh: make(chan map[uint32]int64, 16),
@@ -406,6 +415,7 @@ func (db *TrainKV) Close() error {
 	db.Lsm.CloseFlushIMemChan()
 	db.Closer.memtable.CloseAndWait()
 	db.Closer.compactors.CloseAndWait()
+	db.transactionManager.Stop()
 
 	if err := db.Lsm.Close(); err != nil {
 		return err
@@ -470,7 +480,7 @@ func (dbIter *TxnIterator) Valid() bool {
 func (dbIter *TxnIterator) Item() interfaces.Item {
 	for dbIter.iter.Valid() {
 		entry := dbIter.iter.Item().Item
-		if dbIter.txn.IsVisible(&entry) {
+		if dbIter.txn.IsVisible(&entry) && (entry.Meta&common.BitDelete <= 0) {
 			return dbIter.iter.Item()
 		}
 		dbIter.iter.Next()

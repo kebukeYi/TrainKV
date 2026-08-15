@@ -6,11 +6,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/kebukeYi/TrainKV/v2/common"
-	"github.com/kebukeYi/TrainKV/v2/lsm"
-	"github.com/kebukeYi/TrainKV/v2/model"
-	"github.com/kebukeYi/TrainKV/v2/utils"
-	"github.com/pkg/errors"
 	"hash/crc32"
 	"io"
 	"math"
@@ -20,26 +15,32 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/kebukeYi/TrainKV/v2/common"
+	"github.com/kebukeYi/TrainKV/v2/lsm"
+	"github.com/kebukeYi/TrainKV/v2/model"
+	"github.com/kebukeYi/TrainKV/v2/utils"
+	"github.com/pkg/errors"
 )
 
 const discardStatsFlushThreshold = 100
 
 type ValueLog struct {
-	DirPath            string
-	filesLock          sync.RWMutex // 防止 vlogFile 意外被删除;
-	filesMap           map[uint32]*VLogFile
-	maxFid             uint32 // vlog 组件的最大id
-	FilesToDel         []uint32
-	activeIteratorNum  int32
-	writableFileOffset uint32
-	entriesWrittenNum  int32
-	Opt                *lsm.Options
-	buf                *bytes.Buffer
-
+	DirPath                string
+	filesLock              sync.RWMutex // 防止 vlogFile 意外被删除;
+	filesMap               map[uint32]*VLogFile
+	maxFid                 uint32 // vlog 组件的最大id
+	FilesToDel             []uint32
+	activeIteratorNum      int32
+	writableFileOffset     uint32
+	entriesWrittenNum      int32
+	Opt                    *lsm.Options
+	buf                    *bytes.Buffer
+	runGCOver              *sync.WaitGroup
+	disCardStaInfoOver     *sync.WaitGroup
 	Db                     *TrainKV
 	GarbageCh              chan struct{}
 	VLogFileDisCardStaInfo *VLogFileDisCardStaInfo
-	closer                 *utils.Closer
 }
 
 type VLogFileDisCardStaInfo struct {
@@ -220,6 +221,7 @@ func (vlog *ValueLog) validateWrites(reqs []*model.Request) error {
 	}
 	return nil
 }
+
 func estimateRequestSize(req *model.Request) uint64 {
 	size := uint64(0)
 	for _, entry := range req.Entries {
@@ -227,6 +229,7 @@ func estimateRequestSize(req *model.Request) uint64 {
 	}
 	return size
 }
+
 func (vlog *ValueLog) Write(reqs []*model.Request) error {
 	if err := vlog.validateWrites(reqs); err != nil {
 		return common.Wrap(err, "#Write while validating reqs")
@@ -257,7 +260,7 @@ func (vlog *ValueLog) Write(reqs []*model.Request) error {
 			return err
 		}
 		// 因为 vlogFile 会自动扩容, 因此在 flushToFile() 写完后, 我们还需要再进一步判断是否需要创建新的文件;
-		if vlog.getWriteOffset() > uint32(vlog.Opt.ValueLogFileSize) || vlog.entriesWrittenNum > vlog.Opt.ValueLogMaxEntries {
+		if vlog.getWriteOffset() >= uint32(vlog.Opt.ValueLogFileSize) || vlog.entriesWrittenNum > vlog.Opt.ValueLogMaxEntries {
 			// 截断当前达到阈值的文件;
 			if err := curVlogFile.DoneWriting(vlog.getWriteOffset()); err != nil {
 				return err
@@ -311,11 +314,10 @@ func (vlog *ValueLog) Write(reqs []*model.Request) error {
 			vlog.entriesWrittenNum > vlog.Opt.ValueLogMaxEntries
 		if writeNow {
 			if err := toWrite(); err != nil {
-				return nil
+				return err
 			}
 		}
 	}
-
 	return toWrite()
 }
 
@@ -344,6 +346,9 @@ func (vlog *ValueLog) Close() error {
 	if vlog == nil || vlog.Db == nil {
 		return nil
 	}
+	// 等待 vlog gc完毕;
+	vlog.runGCOver.Wait()
+	vlog.disCardStaInfoOver.Wait()
 	var err error
 	maxFid := vlog.maxFid
 	// 由于每次启动kv, 都将创建新vlog; 因此, 每次关闭前, 进行判断最新的vlog是否有数据写入, 没有写入的话,那就执行删除掉;
@@ -373,8 +378,8 @@ func (vlog *ValueLog) Close() error {
 
 func (vlog *ValueLog) handleDiscardStats() {
 	mergeStats := func(stateInfos map[uint32]int64) ([]byte, error) {
-		vlog.filesLock.Lock()
-		defer vlog.filesLock.Unlock()
+		vlog.VLogFileDisCardStaInfo.mux.Lock()
+		defer vlog.VLogFileDisCardStaInfo.mux.Unlock()
 		if len(stateInfos) == 0 {
 			return nil, nil
 		}
@@ -383,16 +388,15 @@ func (vlog *ValueLog) handleDiscardStats() {
 			vlog.VLogFileDisCardStaInfo.UpdatesSinceFlush++
 		}
 		if vlog.VLogFileDisCardStaInfo.UpdatesSinceFlush > discardStatsFlushThreshold {
-			bytes, err := json.Marshal(vlog.VLogFileDisCardStaInfo.FileMap)
+			marshal, err := json.Marshal(vlog.VLogFileDisCardStaInfo.FileMap)
 			if err != nil {
 				return nil, err
 			}
 			vlog.VLogFileDisCardStaInfo.UpdatesSinceFlush = 0
-			return bytes, err
+			return marshal, err
 		}
 		return nil, nil
 	}
-
 	processDiscardStats := func(stateInfos map[uint32]int64) error {
 		encodeMap, err := mergeStats(stateInfos)
 		if err != nil || encodeMap == nil {
@@ -408,13 +412,17 @@ func (vlog *ValueLog) handleDiscardStats() {
 		}
 		return request.Wait()
 	}
-
 	for {
 		select {
 		case stateInfo := <-vlog.VLogFileDisCardStaInfo.FlushCh:
+			vlog.disCardStaInfoOver.Add(1)
 			if err := processDiscardStats(stateInfo); err != nil {
-				common.Err(fmt.Errorf("unable to process discardstats with error: %s", err))
+				err := common.Err(fmt.Errorf("unable to process discardstats with error: %s", err))
+				if err != nil {
+					panic(err)
+				}
 			}
+			vlog.disCardStaInfoOver.Done()
 		}
 	}
 }
@@ -452,12 +460,14 @@ func (vlog *ValueLog) fpath(fid uint32) string {
 }
 
 func (vlog *ValueLog) waitOnGC(closer *utils.Closer) {
-	// 不继续等待 vlogGC 完毕吗? 仅仅是禁止新 GC启动;
 	defer closer.Done()
 	select {
 	case <-closer.CloseSignal:
-		// 装满通道, 禁止vlogGC再启动;
+		// 禁止vlogGC再启动;
 		vlog.GarbageCh <- struct{}{}
+		if err := vlog.Close(); err != nil {
+			panic(err)
+		}
 	}
 }
 
@@ -483,6 +493,7 @@ func (vlog *ValueLog) runGC(discardRatio float64) error {
 
 func (vlog *ValueLog) doRunGC(logFile *VLogFile) error {
 	var err error
+	defer vlog.runGCOver.Done()
 	defer func() {
 		if err == nil {
 			vlog.VLogFileDisCardStaInfo.mux.Lock()
@@ -490,6 +501,7 @@ func (vlog *ValueLog) doRunGC(logFile *VLogFile) error {
 			vlog.VLogFileDisCardStaInfo.mux.Unlock()
 		}
 	}()
+	vlog.runGCOver.Add(1)
 	if err = vlog.gcReWriteLog(logFile); err != nil {
 		return err
 	}
@@ -550,7 +562,8 @@ func (vlog *ValueLog) Entry(read io.Reader, offset uint32) (*model.Entry, error)
 		return nil, common.ErrTruncate
 	}
 
-	// todo 先假设 key 和 value 出现0时,就认为在读取一个新的没有写入数据的空vlog文件;
+	// 如果 key 和 value 出现0时,就认为在读取一个新的没有写入数据的空vlog文件;
+	// 因为 vlog 文件初始为预扩容 0 的GB文件;
 	if head.KLen == 0 || head.VLen == 0 {
 		return nil, common.ErrEmptyVlogFile
 	}
@@ -740,6 +753,7 @@ func (vlog *ValueLog) gcReWriteLog(logFile *VLogFile) error {
 	}
 
 	var deleteNow bool
+
 	{
 		vlog.filesLock.Lock()
 		if _, ok := vlog.filesMap[logFile.FID]; !ok {
@@ -754,6 +768,7 @@ func (vlog *ValueLog) gcReWriteLog(logFile *VLogFile) error {
 		}
 		vlog.filesLock.Unlock()
 	}
+
 	if deleteNow {
 		if err = vlog.deleteVlogFile(logFile); err != nil {
 			return err

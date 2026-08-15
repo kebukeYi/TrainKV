@@ -39,66 +39,91 @@ package main
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainKV"
-	"github.com/kebukeYi/TrainKV/lsm"
-	"github.com/kebukeYi/TrainKV/model"
+
+	"github.com/kebukeYi/TrainKV/v2"
+	"github.com/kebukeYi/TrainKV/v2/interfaces"
+	"github.com/kebukeYi/TrainKV/v2/lsm"
+	"github.com/kebukeYi/TrainKV/v2/model"
 )
 
 func main() {
-	// Open database (empty path creates temp directory)
-	db, err, cleanup := TrainKV.Open(lsm.GetLSMDefaultOpt(""))
+	// 未指定具体工作目录时, 程序会创建临时目录, 程序正常关闭时会清理临时目录;
+	dirPath := ""
+	defaultOpt := lsm.GetDefaultOpt(dirPath)
+	db, err, callBack := TrainKV.Open(defaultOpt)
 	if err != nil {
 		panic(err)
 	}
 	defer func() {
 		_ = db.Close()
-		_ = cleanup()
+		_ = callBack()
 	}()
 
-	// Set
-	_ = db.Set(model.NewEntry([]byte("hello"), []byte("world")))
+	key := []byte("key")
+	val := []byte("value1")
 
-	// Get
-	entry, _ := db.Get([]byte("hello"))
-	fmt.Printf("key=%s, value=%s\n", entry.Key, entry.Value)
+	txn1 := db.NewTransaction(true)
 
-	// Delete
-	_ = db.Del([]byte("hello"))
+	// set key.
+	if err = txn1.Set(key, val); err != nil {
+		panic(err)
+	}
 
-	// Iterator
-	iter := db.NewDBIterator(&model.Options{IsAsc: true})
-	defer iter.Close()
-	for iter.Rewind(); iter.Valid(); iter.Next() {
+	// update key again.
+	val2 := []byte("value2")
+	if err = txn1.Set(key, val2); err != nil {
+		panic(err)
+	}
+
+	txn2 := db.NewTransaction(true)
+	// To test a valid key.
+	if err = txn2.Set([]byte("newKey"), []byte("newValue")); err != nil {
+		panic(err)
+	}
+	_, err = txn2.Commit()
+	if err != nil {
+		panic(err)
+	}
+
+	// get key.
+	if entry, err := txn1.Get(key); err != nil || entry == nil {
+		fmt.Printf("err:%v; txn.get(key): %s;\n", err, key)
+	} else {
+		fmt.Printf("txn.get(%s), value=%s, meta:%d, version=%d;\n",
+			model.ParseKey(entry.Key), entry.Value, entry.Meta, entry.Version)
+	}
+
+	// Delete key.
+	if err := txn1.Delete(key); err != nil {
+		panic(err)
+	}
+
+	// get key again.
+	if entry, err := txn1.Get(key); err != nil || entry == nil {
+		fmt.Printf("err: %v; txn.get(%s);\n", err, key)
+	} else {
+		fmt.Printf("txn.get(%s), value=%s, meta:%d, version=%d;\n",
+			model.ParseKey(entry.Key), entry.Value, entry.Meta, entry.Version)
+	}
+
+	// Iterator keys(Only valid values are returned).
+	iter := txn1.NewIterator(&interfaces.Options{IsAsc: true, IsSetCache: true})
+	defer func() { err = iter.Close() }()
+	iter.Rewind()
+	for iter.Valid() {
 		it := iter.Item()
-		fmt.Printf("key=%s, value=%s\n", model.ParseKey(it.Item.Key), it.Item.Value)
+		if it.Item.Version != 0 {
+			fmt.Printf("txn.Iterator key=%s, value=%s, meta:%d, version=%d;\n", model.ParseKey(it.Item.Key), it.Item.Value, it.Item.Meta, it.Item.Version)
+		}
+		iter.Next()
 	}
-
-	// Transaction operations
-	txn := db.NewTransaction(true) // Start an update transaction
-	defer txn.Discard() // Ensure the transaction is discarded
-
-	// Set key-value pairs in transaction
-	err = txn.Set([]byte("txn_key"), []byte("txn_value"))
+	commitTs, err := txn1.Commit()
 	if err != nil {
-		fmt.Printf("Transaction set failed: %v\n", err)
+		panic(err)
 	}
-
-	// Get value in transaction
-	entry, err = txn.Get([]byte("txn_key"))
-	if err != nil {
-		fmt.Printf("Transaction get failed: %v\n", err)
-	} else {
-		fmt.Printf("In transaction key=%s, value=%s\n", entry.Key, entry.Value)
-	}
-
-	// Commit transaction
-	commitTs, err := txn.Commit()
-	if err != nil {
-		fmt.Printf("Transaction commit failed: %v\n", err)
-	} else {
-		fmt.Printf("Transaction committed successfully, commit timestamp: %d\n", commitTs)
-	}
+	fmt.Printf("txn.Commit(), commitTs=%d;\n", commitTs)
 }
+
 ```
 
 ## Architecture

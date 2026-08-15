@@ -1,15 +1,19 @@
 package TrainKV
 
 import (
+	"bytes"
 	"fmt"
+	"math/rand"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
 	"github.com/kebukeYi/TrainKV/v2/common"
 	"github.com/kebukeYi/TrainKV/v2/lsm"
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"math/rand"
-	"testing"
-	"time"
 )
 
 var vlogTestPath = "/usr/golanddata/trainkv/vlog"
@@ -213,4 +217,24 @@ func getItemValue(t *testing.T, item *model.Entry) (val []byte) {
 		return nil
 	}
 	return v
+}
+
+// vlog_test.go 或新增
+func TestVlogWriteRotationErrorPropagated(t *testing.T) {
+	dir := t.TempDir()
+	opt := lsm.GetDefaultOpt(dir)
+	opt.ValueLogFileSize = 100 // 极小,强制写入中轮转;
+	opt.ValueLogMaxEntries = 1000
+	db, _, _ := Open(opt)
+	defer db.Close()
+	// 预建占位目录 00002.vlog文件, 轮转时 createVlogFile → os.OpenFile(2) 返回失败
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "00002.vlog"), 0o755))
+	txn := db.NewTransaction(true)
+	require.NoError(t, txn.Set([]byte("k1"), bytes.Repeat([]byte("v"), 200)))
+	// 触发写入 → vlog 文件 00001 超 100B → toWrite → DoneWriting + createVlogFile(2) 失败
+	_, err := txn.Commit()
+	// 期望:err != nil;实际(现状):err == nil,数据已"成功"提交, 但 vlog 无此数据;
+	if err == nil {
+		t.Fatalf("BUG 复现: 提交成功但 vlog 数据丢失")
+	}
 }

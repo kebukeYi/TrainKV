@@ -1,11 +1,12 @@
 package lsm
 
 import (
+	"sync"
+
 	"github.com/kebukeYi/TrainKV/v2/common"
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/kebukeYi/TrainKV/v2/skl"
 	"github.com/kebukeYi/TrainKV/v2/utils"
-	"sync"
 )
 
 type LSM struct {
@@ -61,6 +62,13 @@ func (lsm *LSM) Put(entry *model.Entry) (err error) {
 	return err
 }
 
+func (lsm *LSM) SyncWalFile() error {
+	if err := lsm.memoryTable.SyncWalFile(); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (lsm *LSM) Get(keyTs []byte) (model.Entry, error) {
 	if len(keyTs) <= 8 {
 		return model.Entry{Version: 0}, common.ErrEmptyKey
@@ -68,8 +76,9 @@ func (lsm *LSM) Get(keyTs []byte) (model.Entry, error) {
 	var (
 		maxEntryTs model.Entry
 	)
+	// Read of IncrRef;
 	memoryTales, callBack := lsm.getAllMemoryTales()
-	defer callBack()
+	defer callBack() // DecrRef;
 	startTs := model.ParseTsVersion(keyTs)
 	for _, memoryTable := range memoryTales {
 		// 1. 跳表中对返回的near节点进行对比时, key 是去掉Ts时间戳的, 相同直接返回,将不再继续向level层寻找;
@@ -109,16 +118,16 @@ func (lsm *LSM) MaxVersion() uint64 {
 }
 
 func (lsm *LSM) getAllMemoryTales() ([]*MemoryTable, func()) {
-	lsm.Lock()
-	defer lsm.Unlock()
+	lsm.RLock()
+	defer lsm.RUnlock()
+	lsm.memoryTable.IncrRef()
 	tables := make([]*MemoryTable, 0)
 	tables = append(tables, lsm.memoryTable)
-	lsm.memoryTable.IncrRef()
 
 	last := len(lsm.immemoryTables) - 1
 	for i := last; i >= 0; i-- {
-		tables = append(tables, lsm.immemoryTables[i])
 		lsm.immemoryTables[i].IncrRef()
+		tables = append(tables, lsm.immemoryTables[i])
 	}
 	return tables, func() {
 		for _, t := range tables {

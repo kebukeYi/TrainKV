@@ -1,11 +1,12 @@
 package lsm
 
 import (
+	"sort"
+	"sync"
+
 	"github.com/kebukeYi/TrainKV/v2/common"
 	"github.com/kebukeYi/TrainKV/v2/interfaces"
 	"github.com/kebukeYi/TrainKV/v2/model"
-	"sort"
-	"sync"
 )
 
 type levelHandler struct {
@@ -49,19 +50,32 @@ func (leh *levelHandler) Get(keyTs []byte) (model.Entry, error) {
 	// 如果是第0层查询,则需要全部table进行逆序查询;
 	if leh.levelID == 0 {
 		return leh.searchL0SST(keyTs)
-	} else {
-		return leh.searchLnSST(keyTs)
 	}
+	return leh.searchLnSST(keyTs)
 }
 
 func (leh *levelHandler) searchL0SST(keyTs []byte) (model.Entry, error) {
+	// [old,1,2,3,4,5,6,7,8,new...]
+	leh.mux.RLock()
+	tables := make([]*Table, len(leh.tables))
+	copy(tables, leh.tables)
+	for _, t := range tables {
+		// 要在加锁状态下,提前将所有的 table 引用起来, 避免后被 compact 协程删除掉;
+		t.IncrRef()
+	}
+	leh.mux.RUnlock()
+	defer func() {
+		for _, t := range tables {
+			_ = t.DecrRef()
+		}
+	}()
 	var maxEntry model.Entry
-	for i := len(leh.tables) - 1; i >= 0; i-- {
+	for i := len(tables) - 1; i >= 0; i-- {
 		table := leh.tables[i]
-		// 结果集:
+		// 多种结果集:
 		// 1. 没有找到;
 		// 2. 等于找到;
-		// 3. 找到小于当前 ketTs的;
+		// 3. 找到最近小于当前 keyTs 的;
 		entry, _ := table.Search(keyTs)
 		if entry.Value != nil || entry.Version != 0 {
 			if entry.Version > maxEntry.Version {
@@ -74,16 +88,22 @@ func (leh *levelHandler) searchL0SST(keyTs []byte) (model.Entry, error) {
 }
 
 func (leh *levelHandler) searchLnSST(keyTs []byte) (model.Entry, error) {
-	getTable := leh.getTable(keyTs)
-	if getTable == nil {
+	leh.mux.RLock()
+	tbl := leh.getTable(keyTs) // getTable 仅允许在 RLock 下调用;
+	if tbl == nil {
+		leh.mux.RUnlock()
 		return model.Entry{Version: 0}, common.ErrNotFoundTable
 	}
+	tbl.IncrRef() // 必须在锁内加引用,防止 RUnlock 后被 decrRef 到 0 删除
+	leh.mux.RUnlock()
+	defer func() { _ = tbl.DecrRef() }()
+
 	var maxEntry model.Entry
 	// 结果集:
 	// 1. 没有找到;
 	// 2. 等于找到;
-	// 3. 找到小于当前 ketTs的;
-	entry, _ := getTable.Search(keyTs)
+	// 3. 找到小于当前 keyTs 的;
+	entry, _ := tbl.Search(keyTs)
 	if entry.Value != nil || entry.Version != 0 {
 		if entry.Version > maxEntry.Version {
 			maxEntry = entry

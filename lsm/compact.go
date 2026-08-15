@@ -4,11 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/kebukeYi/TrainKV/v2/common"
-	"github.com/kebukeYi/TrainKV/v2/interfaces"
-	"github.com/kebukeYi/TrainKV/v2/model"
-	"github.com/kebukeYi/TrainKV/v2/pb"
-	"github.com/kebukeYi/TrainKV/v2/utils"
 	"log"
 	"math"
 	"math/rand"
@@ -16,6 +11,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kebukeYi/TrainKV/v2/common"
+	"github.com/kebukeYi/TrainKV/v2/interfaces"
+	"github.com/kebukeYi/TrainKV/v2/model"
+	"github.com/kebukeYi/TrainKV/v2/pb"
+	"github.com/kebukeYi/TrainKV/v2/utils"
 )
 
 type compactionPriority struct {
@@ -224,7 +225,7 @@ func (lm *LevelsManger) pickCompactLevels() (prios []compactionPriority) {
 		prios = append(prios, prio)
 	}
 
-	addPriority(0, float64(lm.levelHandlers[0].numTables()/lm.opt.NumLevelZeroTables))
+	addPriority(0, float64(lm.levelHandlers[0].numTables())/float64(lm.opt.NumLevelZeroTables))
 
 	for i := 1; i < len(lm.levelHandlers); i++ {
 		delSize := lm.compactIngStatus.getLevelDelSize(i)
@@ -345,6 +346,7 @@ func (lm *LevelsManger) findTablesL0ToDstLevel(cd *compactDef) bool {
 
 	left, right := cd.nextLevel.findOverLappingTables(levelHandlerRLocked{}, cd.thisRange)
 	cd.nextTables = make([]*Table, right-left)
+	// 获得 tables[] 的引用;
 	copy(cd.nextTables, cd.nextLevel.tables[left:right])
 
 	if len(cd.nextTables) == 0 {
@@ -762,9 +764,12 @@ func (lm *LevelsManger) subCompact(iterator interfaces.Iterator, kr keyRange, cd
 			version := model.ParseTsVersion(entry.Key)
 			expired := IsDeletedOrExpired(&entry)
 
+			// 所有 startTs ≤ doneIndex 的读者都已结束,因此 compaction 可以安全删除这些版本以下的旧数据;
+			// 这就是 MVCC 版本回收的安全性依据;
+			// 小于等于这个版本的数据, 都是安全的, 不会被事务读到, 所以才可以走清理;
 			if version <= lm.getDiscardTs() {
 				// 跟踪此键遇到的低版本数量, 只考虑 startMark 以下的版本;
-				// 否则, 我们可能会丢弃正在运行的事务的唯一有效版本;
+				// 否则, 我们可能会丢弃正在运行的已读事务的已读数据;
 				keyNumVersions++
 				lastKeyVersion := keyNumVersions == lm.opt.NumVersionsToKeep
 				// 进行判断是否需要保留:

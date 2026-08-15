@@ -2,16 +2,17 @@ package lsm
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainKV/v2/common"
-	"github.com/kebukeYi/TrainKV/v2/model"
-	"github.com/kebukeYi/TrainKV/v2/skl"
-	"github.com/kebukeYi/TrainKV/v2/utils"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
+
+	"github.com/kebukeYi/TrainKV/v2/common"
+	"github.com/kebukeYi/TrainKV/v2/model"
+	"github.com/kebukeYi/TrainKV/v2/skl"
+	"github.com/kebukeYi/TrainKV/v2/utils"
 )
 
 const MemTableName string = ".memtable"
@@ -82,6 +83,13 @@ func (m *MemoryTable) Put(e *model.Entry) error {
 
 func (m *MemoryTable) IncrRef() {
 	m.skipList.IncrRef()
+}
+
+func (m *MemoryTable) SyncWalFile() error {
+	if err := m.wal.SyncFile(); err != nil {
+		return err
+	}
+	return nil
 }
 func (m *MemoryTable) DecrRef() {
 	m.skipList.DecrRef()

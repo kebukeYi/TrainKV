@@ -4,16 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"sort"
+	"strconv"
+	"sync"
+	"sync/atomic"
+
 	"github.com/kebukeYi/TrainKV/v2/common"
 	"github.com/kebukeYi/TrainKV/v2/interfaces"
 	"github.com/kebukeYi/TrainKV/v2/lsm"
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/kebukeYi/TrainKV/v2/utils"
 	"github.com/pkg/errors"
-	"sort"
-	"strconv"
-	"sync"
-	"sync/atomic"
 )
 
 type TransactionManager struct {
@@ -21,8 +22,8 @@ type TransactionManager struct {
 	tsLock          sync.Mutex
 	writeChLock     sync.Mutex
 	nextTxnTs       uint64
-	startMark       *utils.LimitMark
-	commitMark      *utils.LimitMark
+	startMark       *utils.LimitMark // startMark 回答"谁还在读" → 指导 compaction 安全回收旧版本;
+	commitMark      *utils.LimitMark // commitMark 回答"谁提交完了" → 保证新事务开启时读到全部已提交数据;
 	commitedTxns    []commitedTxn
 	lastCleanupTs   uint64
 	closer          *utils.Closer
@@ -49,9 +50,14 @@ func (m *TransactionManager) Stop() {
 }
 func (m *TransactionManager) startTs() uint64 {
 	m.tsLock.Lock()
+	// 每次申请时, 申请到最新的index, 然后就等待其结束;
+	// 只有最新的结束了, 才说明之前的都提交了, 类似串行;
 	startTs := m.nextTxnTs - 1
 	m.startMark.Begin(startTs)
 	m.tsLock.Unlock()
+	// 当前 读事务必须等待 这个版本的写事务完毕
+	// 否则 假如这个写事务提交了, 但是还没真正落盘, 就会出现提交的数据读取不到;
+	// 事务系统在分配 startTs=101 的这一刻,就向这个事务承诺:"所有编号 ≤ 101 的提交,你都应该看得见
 	err := m.commitMark.WaitForIndexDone(context.Background(), startTs)
 	common.Check(err)
 	return startTs
@@ -170,12 +176,13 @@ func (db *TrainKV) NewTransaction(update bool) *Transaction {
 	txn.startTs = db.transactionManager.startTs()
 	return txn
 }
-func (txn *Transaction) IsVisible(e *model.Entry) bool {
+
+func (t *Transaction) IsVisible(e *model.Entry) bool {
 	if e == nil {
 		return false
 	}
 	tsVersion := model.ParseTsVersion(e.Key)
-	return txn.startTs >= tsVersion
+	return t.startTs >= tsVersion
 }
 func (t *Transaction) modify(e *model.Entry) error {
 	switch {
@@ -197,7 +204,6 @@ func (t *Transaction) modify(e *model.Entry) error {
 		hash, _ := utils.KeyToHash(e.Key)
 		t.conflictKeys[hash] = struct{}{}
 	}
-
 	t.pendingKeys[string(e.Key)] = e
 	return nil
 }
@@ -291,6 +297,7 @@ func (t *Transaction) commitAndSendToDB() (func() (uint64, error), error) {
 	entries := make([]*model.Entry, 0, len(t.pendingKeys))
 	for _, entry := range t.pendingKeys {
 		if entry.Version == 0 {
+			// 属于同一组事务, 共同成功,共同失败;
 			entry.Version = commitTs
 		} else {
 			keepTogether = false
@@ -316,7 +323,7 @@ func (t *Transaction) commitAndSendToDB() (func() (uint64, error), error) {
 		manager.doneCommit(commitTs)
 		return nil, err
 	}
-	// 写入通道成功; 释放锁, 允许其他事务写入;
+	// 写入通道成功; 释放锁, 允许其他事务写入或者读;
 	ret := func() (uint64, error) {
 		// 释放了锁后, 阻塞等待lsm结果; 然后才允许, 结束当前水印;
 		err := req.Wait()

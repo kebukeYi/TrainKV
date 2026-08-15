@@ -4,18 +4,19 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/kebukeYi/TrainKV/v2/common"
-	"github.com/kebukeYi/TrainKV/v2/interfaces"
-	"github.com/kebukeYi/TrainKV/v2/model"
-	"github.com/kebukeYi/TrainKV/v2/pb"
-	"github.com/kebukeYi/TrainKV/v2/utils"
-	pkg_err "github.com/pkg/errors"
 	"math"
 	"os"
 	"sort"
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/kebukeYi/TrainKV/v2/common"
+	"github.com/kebukeYi/TrainKV/v2/interfaces"
+	"github.com/kebukeYi/TrainKV/v2/model"
+	"github.com/kebukeYi/TrainKV/v2/pb"
+	"github.com/kebukeYi/TrainKV/v2/utils"
+	pkg_err "github.com/pkg/errors"
 )
 
 const SSTableName string = ".sst"
@@ -183,7 +184,7 @@ func (t *Table) IncrRef() {
 func (t *Table) DecrRef() error {
 	atomic.AddInt32(&t.ref, -1)
 	if t.ref == 0 {
-		// TODO 从缓存中删除
+		// TODO 从缓存中删除自己的数据块;
 		for i := 0; i < len(t.sst.Indexs().GetOffsets()); i++ {
 			t.lm.cache.blockData.Del(t.blockCacheKey(i))
 		}
@@ -208,7 +209,7 @@ func (t *Table) GetCreatedAt() *time.Time {
 }
 
 func (t *Table) Delete() error {
-	//fmt.Printf("delete sstTable:  %d.sst;\n", t.sst.fid)
+	// fmt.Printf("delete sstTable:  %d.sst;\n", t.sst.fid)
 	return t.sst.Delete()
 }
 

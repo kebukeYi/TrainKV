@@ -1,21 +1,22 @@
 package lsm
 
 import (
+	"strconv"
+	"sync"
+	"sync/atomic"
+
 	"github.com/kebukeYi/TrainKV/v2/common"
 	"github.com/kebukeYi/TrainKV/v2/interfaces"
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/kebukeYi/TrainKV/v2/utils"
-	"strconv"
-	"sync"
-	"sync/atomic"
 )
 
 type LevelsManger struct {
 	maxFID           atomic.Uint64   // sst 已经分配出去的最大fid,只要创建了 MemoryTable 就算已分配;
 	levelHandlers    []*levelHandler // 每层的处理器
 	opt              *Options
-	lsm              *LSM // 上层引用
-	txnDoneIndex     atomic.Uint64
+	lsm              *LSM          // 上层引用
+	txnDoneIndex     atomic.Uint64 // 所有已读事务的结束索引;
 	cache            *LevelsCache  // 缓存 block 和 sst.index() 数据
 	manifestFile     *ManifestFile // 增删 sst 元信息
 	compactIngStatus *compactIngStatus
@@ -181,10 +182,11 @@ func (lm *LevelsManger) flush(imm *MemoryTable) (err error) {
 
 	// 此时磁盘中已经生成 .sst 文件;
 	t, _ := OpenTable(lm, sstName, builder)
-	// 向 manifest 中添加, 添加失败了呢?
-	// 1. 假设5.wal 刚转化成 5.sst, 那么5.wal理应被删除掉; 但是和5.wal绑定的跳表正在被引用,因此无法直接删除掉5.wal;
-	// 随后 系统突然宕机关闭, 重启时, 会先加载 .sst文件, 然后再加载.wal; 那么就会出现 5.wal 和 5.sst 的重叠;
-	// 因此, 在 wal 重放时, 等于 .sst 的最大文件ID的 .wal 文件需要删除掉;
+	// 向 manifest 中添加, 中途失败了呢?
+	// 1. 假设5.wal 刚转化成 5.sst, 添加到 manifest中了, 那么5.wal理应被删除掉;
+	//    但是和5.wal绑定的跳表正在被引用,因此无法直接删除掉5.wal;
+	//    随后 系统突然宕机关闭, 重启时, 会先加载 .sst文件, 然后再加载.wal; 那么就会出现 5.wal 和 5.sst 的重叠;
+	//    因此, 在 wal 重放时, 大于等于 .sst 的最大文件ID的 .wal 文件需要删除掉;
 	// 2. 还未添加到 manifest, 当前 存在 5.wal, 5.sst; 那么在重启时,根据 manifest已存内容, 会删除掉 5.sst;
 	//    随后 5.wal 会继续flush成 5.sst, 并再次尝试添加到 manifest中;
 	err = lm.manifestFile.AddTableMeta(0, &TableMeta{
@@ -193,7 +195,6 @@ func (lm *LevelsManger) flush(imm *MemoryTable) (err error) {
 	})
 	common.Panic(err)
 	lm.levelHandlers[0].add(t)
-	// fmt.Printf("flush sstable %d.sst; \n", fid)
 	return nil
 }
 

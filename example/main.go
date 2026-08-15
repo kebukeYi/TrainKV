@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+
 	"github.com/kebukeYi/TrainKV/v2"
 	"github.com/kebukeYi/TrainKV/v2/interfaces"
 	"github.com/kebukeYi/TrainKV/v2/lsm"
@@ -21,7 +22,7 @@ func main() {
 		_ = callBack()
 	}()
 
-	key := []byte("key")
+	key := []byte("key1")
 	val := []byte("value1")
 
 	txn1 := db.NewTransaction(true)
@@ -31,15 +32,15 @@ func main() {
 		panic(err)
 	}
 
-	// update key again.
-	val2 := []byte("value2")
+	// t1 update key again.
+	val2 := []byte("value1_1")
 	if err = txn1.Set(key, val2); err != nil {
 		panic(err)
 	}
 
 	txn2 := db.NewTransaction(true)
-	// To test a valid key.
-	if err = txn2.Set([]byte("newKey"), []byte("newValue")); err != nil {
+	// t2 set key2,value2.
+	if err = txn2.Set([]byte("Key2"), []byte("newValue")); err != nil {
 		panic(err)
 	}
 	_, err = txn2.Commit()
@@ -47,12 +48,12 @@ func main() {
 		panic(err)
 	}
 
-	// get key.
+	// t1 get key1.
 	if entry, err := txn1.Get(key); err != nil || entry == nil {
-		fmt.Printf("err:%v; txn.get(key): %s;\n", err, key)
+		fmt.Printf("txn1.get(%s), err:%v; \n", key, err)
 	} else {
-		fmt.Printf("txn.get(%s), value=%s, meta:%d, version=%d;\n",
-			model.ParseKey(entry.Key), entry.Value, entry.Meta, entry.Version)
+		fmt.Printf("tx1n.get(%s), value=%s, meta:%d, version=%d;\n",
+			entry.Key, entry.Value, entry.Meta, entry.Version)
 	}
 
 	// Delete key.
@@ -60,12 +61,14 @@ func main() {
 		panic(err)
 	}
 
+	fmt.Printf("txn1.delete(%s);\n", key)
+
 	// get key again.
 	if entry, err := txn1.Get(key); err != nil || entry == nil {
-		fmt.Printf("err: %v; txn.get(%s);\n", err, key)
+		fmt.Printf("txn1.get(%s), err: %v; \n", key, err)
 	} else {
-		fmt.Printf("txn.get(%s), value=%s, meta:%d, version=%d;\n",
-			model.ParseKey(entry.Key), entry.Value, entry.Meta, entry.Version)
+		fmt.Printf("txn1.get(%s), value=%s, meta:%d, version=%d;\n",
+			entry.Key, entry.Value, entry.Meta, entry.Version)
 	}
 
 	// Iterator keys(Only valid values are returned).
@@ -75,7 +78,8 @@ func main() {
 	for iter.Valid() {
 		it := iter.Item()
 		if it.Item.Version != 0 {
-			fmt.Printf("txn.Iterator key=%s, value=%s, meta:%d, version=%d;\n", model.ParseKey(it.Item.Key), it.Item.Value, it.Item.Meta, it.Item.Version)
+			fmt.Printf("txn1.Iterator key=%s, value=%s, meta:%d, version=%d;\n",
+				it.Item.Key, it.Item.Value, it.Item.Meta, it.Item.Version)
 		}
 		iter.Next()
 	}
@@ -83,5 +87,19 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("txn.Commit(), commitTs=%d;\n", commitTs)
+	fmt.Printf("txn1.Commit(), commits=%d;\n", commitTs)
+
+	txn3 := db.NewTransaction(true)
+	// Iterator keys(Only valid values are returned).
+	iter3 := txn3.NewIterator(&interfaces.Options{IsAsc: true, IsSetCache: true})
+	defer func() { err = iter3.Close() }()
+	iter3.Rewind()
+	for iter3.Valid() {
+		it := iter3.Item()
+		if it.Item.Version != 0 {
+			fmt.Printf("txn3.Iterator key=%s, value=%s, meta:%d, version=%d;\n",
+				model.ParseKey(it.Item.Key), it.Item.Value, it.Item.Meta, it.Item.Version)
+		}
+		iter3.Next()
+	}
 }

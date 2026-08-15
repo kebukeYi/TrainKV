@@ -25,7 +25,7 @@ func KeyWithTs(key []byte, ts uint64) []byte {
 
 func ParseTsVersion(key []byte) uint64 {
 	if len(key) <= 8 {
-		return 0
+		panic("key is too short;")
 	}
 	ts := binary.BigEndian.Uint64(key[len(key)-8:])
 	return math.MaxUint64 - ts
@@ -34,7 +34,7 @@ func ParseTsVersion(key []byte) uint64 {
 // ParseKey 祛除掉版本信息之后的key;
 func ParseKey(key []byte) []byte {
 	if len(key) < 8 {
-		return key
+		panic("key is too short;")
 	}
 	return key[:len(key)-8]
 }
