@@ -150,7 +150,11 @@ func (lm *LimitMark) processOn(closer *Closer, doneIndexCh chan uint64) {
 			// 通知 compactor , 这个活跃读事务终于结束了, 可以进行数据清理了;
 			if doneIndexCh != nil {
 				go func() {
-					doneIndexCh <- curIndex
+					select {
+					case doneIndexCh <- curIndex:
+					case <-closer.CloseSignal:
+						// tm.Stop() 后立即退出, 不再阻塞在 send 上;
+					}
 				}()
 			}
 		}

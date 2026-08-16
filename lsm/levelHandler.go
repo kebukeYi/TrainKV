@@ -71,7 +71,7 @@ func (leh *levelHandler) searchL0SST(keyTs []byte) (model.Entry, error) {
 	}()
 	var maxEntry model.Entry
 	for i := len(tables) - 1; i >= 0; i-- {
-		table := leh.tables[i]
+		table := tables[i]
 		// 多种结果集:
 		// 1. 没有找到;
 		// 2. 等于找到;
@@ -127,7 +127,7 @@ func (leh *levelHandler) getTable(key []byte) *Table {
 }
 
 func (leh *levelHandler) isLastLevel() bool {
-	return leh.levelID == leh.lm.lsm.option.MaxLevelNum-1
+	return leh.levelID == leh.lm.lsm.Option.MaxLevelNum-1
 }
 
 func (leh *levelHandler) Sort() {
@@ -213,8 +213,8 @@ func (leh *levelHandler) deleteTable(toDel []*Table) error {
 }
 
 func (leh *levelHandler) iterators(opt *interfaces.Options) []interfaces.Iterator {
-	leh.mux.Lock()
-	defer leh.mux.Unlock()
+	leh.mux.RLock()
+	defer leh.mux.RUnlock()
 	if leh.levelID == 0 {
 		return iteratorsReversed(leh.tables, opt)
 	}

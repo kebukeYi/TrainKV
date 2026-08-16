@@ -19,6 +19,7 @@ type LevelsManger struct {
 	txnDoneIndex     atomic.Uint64 // 所有已读事务的结束索引;
 	cache            *LevelsCache  // 缓存 block 和 sst.index() 数据
 	manifestFile     *ManifestFile // 增删 sst 元信息
+	stopCh           chan struct{} // 通知 getTxnDoneIndexFromCh 退出;
 	compactIngStatus *compactIngStatus
 }
 
@@ -29,8 +30,9 @@ func (lm *LevelsManger) NextFileID() uint64 {
 
 func (lsm *LSM) InitLevelManger(opt *Options) *LevelsManger {
 	lm := &LevelsManger{
-		lsm: lsm,
-		opt: opt,
+		lsm:    lsm,
+		opt:    opt,
+		stopCh: make(chan struct{}),
 	}
 	lm.compactIngStatus = lsm.newCompactStatus()
 	if err := lm.loadManifestFile(); err != nil {
@@ -49,6 +51,8 @@ func (lm *LevelsManger) getTxnDoneIndexFromCh() {
 	}
 	for {
 		select {
+		case <-lm.stopCh:
+			return
 		case r := <-lm.opt.TxnDoneIndexCh:
 			if r != 0 {
 				lm.txnDoneIndex.Store(r)
@@ -195,10 +199,12 @@ func (lm *LevelsManger) flush(imm *MemoryTable) (err error) {
 	})
 	common.Panic(err)
 	lm.levelHandlers[0].add(t)
+	lm.levelHandlers[0].addSize(t)
 	return nil
 }
 
 func (lm *LevelsManger) close() error {
+	close(lm.stopCh)
 	if err := lm.manifestFile.Close(); err != nil {
 		return err
 	}

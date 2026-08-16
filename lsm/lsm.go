@@ -14,7 +14,7 @@ type LSM struct {
 	memoryTable    *MemoryTable
 	immemoryTables []*MemoryTable
 	LevelManger    *LevelsManger
-	option         *Options
+	Option         *Options
 
 	flushMemTable chan *MemoryTable
 
@@ -25,7 +25,7 @@ type LSM struct {
 
 func NewLSM(opt *Options, closer *utils.Closer) *LSM {
 	lsm := &LSM{
-		option:        opt,
+		Option:        opt,
 		flushMemTable: make(chan *MemoryTable, opt.WaitFlushMemTables),
 	}
 	// 1. 更新 lm.maxID
@@ -46,8 +46,7 @@ func (lsm *LSM) Put(entry *model.Entry) (err error) {
 		return common.ErrEmptyKey
 	}
 
-	if int64(lsm.memoryTable.wal.Size())+int64(EstimateWalEncodeSize(entry)) > lsm.option.MemTableSize {
-		// fmt.Printf("memtable is full, rotate memtable when cur entry key:%s | meta:%d | value: %s ;\n", model.ParseKey(entry.Key), entry.Meta, entry.Value)
+	if int64(lsm.memoryTable.wal.Size())+int64(EstimateWalEncodeSize(entry)) > lsm.Option.MemTableSize {
 		lsm.Rotate()
 	}
 
@@ -99,6 +98,8 @@ func (lsm *LSM) Get(keyTs []byte) (model.Entry, error) {
 }
 
 func (lsm *LSM) MaxVersion() uint64 {
+	lsm.RLock()
+	defer lsm.RUnlock()
 	var maxVersion uint64
 	maxVersion = lsm.memoryTable.maxVersion
 	for _, table := range lsm.immemoryTables {
@@ -106,6 +107,7 @@ func (lsm *LSM) MaxVersion() uint64 {
 			maxVersion = table.maxVersion
 		}
 	}
+
 	for i := 0; i < common.MaxLevelNum; i++ {
 		tables := lsm.LevelManger.levelHandlers[i].tables
 		for _, table := range tables {
@@ -114,6 +116,7 @@ func (lsm *LSM) MaxVersion() uint64 {
 			}
 		}
 	}
+
 	return maxVersion
 }
 
@@ -191,8 +194,7 @@ func (lsm *LSM) CloseFlushIMemChan() {
 }
 
 func (lsm *LSM) StartCompacter(closer *utils.Closer) {
-	n := lsm.option.NumCompactors
-	closer.Add(n)
+	n := lsm.Option.NumCompactors
 	for coroutineID := 0; coroutineID < n; coroutineID++ {
 		go lsm.LevelManger.runCompacter(coroutineID, closer)
 	}

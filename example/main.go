@@ -40,19 +40,20 @@ func main() {
 
 	txn2 := db.NewTransaction(true)
 	// t2 set key2,value2.
-	if err = txn2.Set([]byte("Key2"), []byte("newValue")); err != nil {
+	if err = txn2.Set([]byte("Key2"), []byte("value2")); err != nil {
 		panic(err)
 	}
-	_, err = txn2.Commit()
+	commit2, err := txn2.Commit()
 	if err != nil {
 		panic(err)
 	}
+	fmt.Printf("txn2.Commit(), commits=%d;\n", commit2)
 
 	// t1 get key1.
 	if entry, err := txn1.Get(key); err != nil || entry == nil {
 		fmt.Printf("txn1.get(%s), err:%v; \n", key, err)
 	} else {
-		fmt.Printf("tx1n.get(%s), value=%s, meta:%d, version=%d;\n",
+		fmt.Printf("txn1.get(%s), value=%s, meta:%d, version=%d;\n",
 			entry.Key, entry.Value, entry.Meta, entry.Version)
 	}
 
@@ -60,7 +61,6 @@ func main() {
 	if err := txn1.Delete(key); err != nil {
 		panic(err)
 	}
-
 	fmt.Printf("txn1.delete(%s);\n", key)
 
 	// get key again.
@@ -79,7 +79,7 @@ func main() {
 		it := iter.Item()
 		if it.Item.Version != 0 {
 			fmt.Printf("txn1.Iterator key=%s, value=%s, meta:%d, version=%d;\n",
-				it.Item.Key, it.Item.Value, it.Item.Meta, it.Item.Version)
+				model.ParseKey(it.Item.Key), it.Item.Value, it.Item.Meta, it.Item.Version)
 		}
 		iter.Next()
 	}
@@ -90,16 +90,21 @@ func main() {
 	fmt.Printf("txn1.Commit(), commits=%d;\n", commitTs)
 
 	txn3 := db.NewTransaction(true)
+	if err = txn3.Set([]byte("Key2"), []byte("value3")); err != nil {
+		panic(err)
+	}
+
 	// Iterator keys(Only valid values are returned).
 	iter3 := txn3.NewIterator(&interfaces.Options{IsAsc: true, IsSetCache: true})
 	defer func() { err = iter3.Close() }()
 	iter3.Rewind()
 	for iter3.Valid() {
-		it := iter3.Item()
-		if it.Item.Version != 0 {
+		entry := iter3.Item().Item
+		if entry.Version != 0 {
 			fmt.Printf("txn3.Iterator key=%s, value=%s, meta:%d, version=%d;\n",
-				model.ParseKey(it.Item.Key), it.Item.Value, it.Item.Meta, it.Item.Version)
+				model.ParseKey(entry.Key), entry.Value, entry.Meta, entry.Version)
 		}
 		iter3.Next()
 	}
+	txn3.RollBack()
 }

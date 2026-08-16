@@ -38,6 +38,7 @@ type ValueLog struct {
 	buf                    *bytes.Buffer
 	runGCOver              *sync.WaitGroup
 	disCardStaInfoOver     *sync.WaitGroup
+	discardStatsDone       sync.WaitGroup
 	Db                     *TrainKV
 	GarbageCh              chan struct{}
 	VLogFileDisCardStaInfo *VLogFileDisCardStaInfo
@@ -47,11 +48,17 @@ type VLogFileDisCardStaInfo struct {
 	mux               sync.RWMutex
 	FileMap           map[uint32]int64
 	FlushCh           chan map[uint32]int64
+	stopCh            chan struct{} // 通知 handleDiscardStats 退出;
+	stopOnce          sync.Once
 	UpdatesSinceFlush int // flush 次数
 }
 
 func (vlog *ValueLog) Open(replayFn model.LogEntry) error {
-	go vlog.handleDiscardStats()
+	vlog.discardStatsDone.Add(1)
+	go func() {
+		defer vlog.discardStatsDone.Done()
+		vlog.handleDiscardStats()
+	}()
 	if err := vlog.fillVlogFileMap(); err != nil {
 		return err
 	}
@@ -164,9 +171,8 @@ func (vlog *ValueLog) Read(vp *model.ValuePtr) ([]byte, func(), error) {
 	headerLen := head.Decode(buf)
 	kvData := buf[headerLen:]
 	if uint32(len(kvData)) < head.KLen+head.VLen {
-		fmt.Errorf("Invalid read: vp: %+v\n", vp)
-		return nil, nil, errors.Errorf("Invalid read: len: %d read at:[%d:%d]",
-			len(kvData), head.KLen, head.KLen+head.VLen)
+		// fmt.Printf("ValueLog.Read: Invalid read vp: %+v\n", vp)
+		return nil, callBack, errors.Errorf("Invalid read: len: %d read at:[%d:%d]", len(kvData), head.KLen, head.KLen+head.VLen)
 	}
 	return kvData[head.KLen : head.KLen+head.VLen], callBack, nil
 }
@@ -176,14 +182,13 @@ func (vlog *ValueLog) ReadValueBytes(vp *model.ValuePtr) ([]byte, *VLogFile, err
 	if err != nil {
 		return nil, nil, err
 	}
-	// file.read(), not vlog read;
 	buf, err := vlogFileLocked.Read(vp)
 	return buf, vlogFileLocked, err
 }
 
 func (vlog *ValueLog) getVlogFileLocked(vp *model.ValuePtr) (*VLogFile, error) {
-	vlog.filesLock.Lock()
-	defer vlog.filesLock.Unlock()
+	vlog.filesLock.RLock()
+	defer vlog.filesLock.RUnlock()
 	vLogFile, ok := vlog.filesMap[vp.Fid]
 	if !ok {
 		return nil, errors.Errorf("file with ID: %d not found", vp.Fid)
@@ -338,6 +343,17 @@ func (vlog *ValueLog) deleteVlogFile(vlogFile *VLogFile) error {
 	return nil
 }
 
+// stopDiscardStats 通知 handleDiscardStats 退出, 并等待其真正返回;
+// 只停生产者、不关闭 vlog 文件(文件仍在 Close() 末尾统一关);
+// 必须在 db.writeCh 消费者(handleWriteCh)停止之前调用, 否则退出前的排空写入无人消费;
+func (vlog *ValueLog) stopDiscardStats() {
+	vlog.VLogFileDisCardStaInfo.stopOnce.Do(func() {
+		close(vlog.VLogFileDisCardStaInfo.stopCh)
+	})
+	vlog.discardStatsDone.Wait()   // 等 handleDiscardStats 协程退出;
+	vlog.disCardStaInfoOver.Wait() // 兜底: 等掉退出前仍在处理的统计写入;
+}
+
 func (vlog *ValueLog) getWriteOffset() uint32 {
 	return atomic.LoadUint32(&vlog.writableFileOffset)
 }
@@ -346,9 +362,11 @@ func (vlog *ValueLog) Close() error {
 	if vlog == nil || vlog.Db == nil {
 		return nil
 	}
+
+	vlog.stopDiscardStats() // 停生产者 + 等待退出;
 	// 等待 vlog gc完毕;
 	vlog.runGCOver.Wait()
-	vlog.disCardStaInfoOver.Wait()
+
 	var err error
 	maxFid := vlog.maxFid
 	// 由于每次启动kv, 都将创建新vlog; 因此, 每次关闭前, 进行判断最新的vlog是否有数据写入, 没有写入的话,那就执行删除掉;
@@ -398,6 +416,8 @@ func (vlog *ValueLog) handleDiscardStats() {
 		return nil, nil
 	}
 	processDiscardStats := func(stateInfos map[uint32]int64) error {
+		vlog.disCardStaInfoOver.Add(1)
+		defer vlog.disCardStaInfoOver.Done()
 		encodeMap, err := mergeStats(stateInfos)
 		if err != nil || encodeMap == nil {
 			return err
@@ -412,17 +432,25 @@ func (vlog *ValueLog) handleDiscardStats() {
 		}
 		return request.Wait()
 	}
+	handle := func(stateInfos map[uint32]int64) {
+		if err := processDiscardStats(stateInfos); err != nil {
+			panic(fmt.Errorf("unable to process discardstats with error: %s", err))
+		}
+	}
 	for {
 		select {
-		case stateInfo := <-vlog.VLogFileDisCardStaInfo.FlushCh:
-			vlog.disCardStaInfoOver.Add(1)
-			if err := processDiscardStats(stateInfo); err != nil {
-				err := common.Err(fmt.Errorf("unable to process discardstats with error: %s", err))
-				if err != nil {
-					panic(err)
+		case <-vlog.VLogFileDisCardStaInfo.stopCh:
+			// 退出前排空积压统计, 减少重启后失效统计丢失;
+			for {
+				select {
+				case stateInfo := <-vlog.VLogFileDisCardStaInfo.FlushCh:
+					handle(stateInfo)
+				default: // FlushCh 已空, 真正退出;
+					return
 				}
 			}
-			vlog.disCardStaInfoOver.Done()
+		case stateInfo := <-vlog.VLogFileDisCardStaInfo.FlushCh:
+			handle(stateInfo)
 		}
 	}
 }
@@ -465,9 +493,6 @@ func (vlog *ValueLog) waitOnGC(closer *utils.Closer) {
 	case <-closer.CloseSignal:
 		// 禁止vlogGC再启动;
 		vlog.GarbageCh <- struct{}{}
-		if err := vlog.Close(); err != nil {
-			panic(err)
-		}
 	}
 }
 
@@ -753,22 +778,19 @@ func (vlog *ValueLog) gcReWriteLog(logFile *VLogFile) error {
 	}
 
 	var deleteNow bool
-
 	{
 		vlog.filesLock.Lock()
-		if _, ok := vlog.filesMap[logFile.FID]; !ok {
-			vlog.filesLock.Unlock()
-		}
-		if vlog.getIteratorCount() == 0 {
-			delete(vlog.filesMap, logFile.FID)
-			deleteNow = true
-		} else {
-			// 不能删除的, 先进行内存保存;
-			vlog.FilesToDel = append(vlog.FilesToDel, logFile.FID)
+		if _, ok := vlog.filesMap[logFile.FID]; ok {
+			if vlog.getIteratorCount() == 0 {
+				delete(vlog.filesMap, logFile.FID)
+				deleteNow = true
+			} else {
+				// 不能删除的, 先进行内存保存;
+				vlog.FilesToDel = append(vlog.FilesToDel, logFile.FID)
+			}
 		}
 		vlog.filesLock.Unlock()
 	}
-
 	if deleteNow {
 		if err = vlog.deleteVlogFile(logFile); err != nil {
 			return err

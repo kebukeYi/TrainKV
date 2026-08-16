@@ -440,7 +440,10 @@ func (itr *blockIterator) setIndex(idx int) {
 	eny.Version = model.ParseTsVersion(itr.key)
 	itr.it = interfaces.Item{Item: eny}
 }
-
+func (itr *blockIterator) Name() string {
+	str := fmt.Sprintf("BlockIterator.Block %d", itr.blockID)
+	return str
+}
 func (itr *blockIterator) Next() {
 	itr.setIndex(itr.idx + 1)
 }

@@ -118,7 +118,7 @@ func (cr cmRow) reset() {
 	// 计数减半
 	for i := range cr {
 		// cr[i] & 0111，0111
-		cr[i] = (cr[i] >> 1) & 0xf7
+		cr[i] = (cr[i] >> 1) & 0x77
 	}
 }
 

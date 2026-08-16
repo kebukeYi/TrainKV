@@ -99,7 +99,7 @@ func (m *TransactionManager) newCommitTs(txn *Transaction) (uint64, bool) {
 	}
 	var commitTs uint64
 	m.doneStart(txn)
-	// 利用它的堆数据结构来跟踪当前活跃的事务的时间戳范围，用于找出哪些事务可以过期回收
+	// 利用它的堆数据结构来跟踪当前活跃的事务的时间戳范围，用于找出哪些事务可以过期回收;
 	m.cleanCommitedTransaction()
 	commitTs = m.nextTxnTs
 	m.nextTxnTs++
@@ -204,6 +204,8 @@ func (t *Transaction) modify(e *model.Entry) error {
 		hash, _ := utils.KeyToHash(e.Key)
 		t.conflictKeys[hash] = struct{}{}
 	}
+	e.Version = t.startTs
+	// e.key is without ts;
 	t.pendingKeys[string(e.Key)] = e
 	return nil
 }
@@ -227,14 +229,15 @@ func (t *Transaction) Set(key, value []byte) error {
 func (t *Transaction) SetEntry(entry *model.Entry) error {
 	return t.modify(entry)
 }
-func (t *Transaction) Get(key []byte) (*model.Entry, error) {
-	if len(key) == 0 {
+func (t *Transaction) Get(keyNoTs []byte) (*model.Entry, error) {
+	if len(keyNoTs) == 0 {
 		return nil, common.ErrEmptyKey
 	} else if t.discard {
 		return nil, common.ErrDiscardedTxn
 	}
 	if t.update {
-		if e, ok := t.pendingKeys[string(key)]; ok && bytes.Equal(e.Key, key) {
+		// key no version;
+		if e, ok := t.pendingKeys[string(keyNoTs)]; ok && bytes.Equal(e.Key, keyNoTs) {
 			if model.IsDeletedOrExpired(e.Meta, e.ExpiresAt) {
 				return nil, common.ErrKeyNotFound
 			}
@@ -242,9 +245,10 @@ func (t *Transaction) Get(key []byte) (*model.Entry, error) {
 			entry := e.SafeCopy()
 			return &entry, nil
 		}
-		t.addReadKey(key)
+		t.addReadKey(keyNoTs)
 	}
-	keyMaxStartTs := model.KeyWithTs(key, t.startTs)
+
+	keyMaxStartTs := model.KeyWithTs(keyNoTs, t.startTs)
 	entry, err := t.db.get(keyMaxStartTs)
 	if err != nil {
 		return nil, err
@@ -257,6 +261,7 @@ func (t *Transaction) Get(key []byte) (*model.Entry, error) {
 	}
 	return entry, nil
 }
+
 func (t *Transaction) Delete(key []byte) error {
 	entry := &model.Entry{
 		Key:  key,
@@ -264,12 +269,14 @@ func (t *Transaction) Delete(key []byte) error {
 	}
 	return t.modify(entry)
 }
+
 func (t *Transaction) addReadKey(key []byte) {
 	if t.update {
 		hash, _ := utils.KeyToHash(key)
 		t.readKeys = append(t.readKeys, hash)
 	}
 }
+
 func (t *Transaction) Commit() (uint64, error) {
 	if t.discard {
 		return 0, common.ErrDiscardedTxn
@@ -285,6 +292,7 @@ func (t *Transaction) Commit() (uint64, error) {
 	}
 	return commitTs, nil
 }
+
 func (t *Transaction) commitAndSendToDB() (func() (uint64, error), error) {
 	manager := t.db.transactionManager
 	manager.writeChLock.Lock()
@@ -293,28 +301,19 @@ func (t *Transaction) commitAndSendToDB() (func() (uint64, error), error) {
 	if hasConflicts {
 		return nil, common.ErrConflict
 	}
-	keepTogether := true
+
 	entries := make([]*model.Entry, 0, len(t.pendingKeys))
 	for _, entry := range t.pendingKeys {
-		if entry.Version == 0 {
-			// 属于同一组事务, 共同成功,共同失败;
-			entry.Version = commitTs
-		} else {
-			keepTogether = false
-		}
+		entry.Version = commitTs
 		entry.Key = model.KeyWithTs(entry.Key, entry.Version)
-		if keepTogether {
-			entry.Meta |= common.BitTxn
-		}
+		entry.Meta |= common.BitTxn
 		entries = append(entries, entry)
 	}
 
-	if keepTogether {
-		entry := model.NewEntry([]byte(common.TxnKey), []byte(strconv.FormatUint(commitTs, 10)))
-		entry.Version = commitTs
-		entry.Meta |= common.BitFinTxn
-		entries = append(entries, entry)
-	}
+	entry := model.NewEntry([]byte(common.TxnKey), []byte(strconv.FormatUint(commitTs, 10)))
+	entry.Version = commitTs
+	entry.Meta |= common.BitFinTxn
+	entries = append(entries, entry)
 
 	req, err := t.db.SendToWriteCh(entries)
 	if err != nil {
@@ -332,6 +331,7 @@ func (t *Transaction) commitAndSendToDB() (func() (uint64, error), error) {
 	}
 	return ret, nil
 }
+
 func (t *Transaction) Discard() {
 	if t.discard {
 		return
@@ -414,20 +414,19 @@ func (pi *pendingWritesIterator) Rewind() {
 }
 func (pi *pendingWritesIterator) Seek(keyStartTs []byte) {
 	rawKey := model.ParseKey(keyStartTs)
-	sort.Search(len(pi.entries), func(i int) bool {
+	pi.nextIndex = sort.Search(len(pi.entries), func(i int) bool {
 		cmp := bytes.Compare(pi.entries[i].Key, rawKey)
 		if !pi.reversed {
-			// 正向迭代：寻找第一个 >= rawKey 的条目
 			return cmp >= 0
-		} else {
-			return cmp <= 0
 		}
+		return cmp <= 0
 	})
 }
 func (pi *pendingWritesIterator) Item() interfaces.Item {
 	utils.AssertTrue(pi.Valid())
 	entry := pi.entries[pi.nextIndex]
 	safeCopy := entry.SafeCopy()
+	safeCopy.Key = model.KeyWithTs(safeCopy.Key, pi.startTs)
 	safeCopy.Version = pi.startTs
 	return interfaces.Item{Item: safeCopy}
 }

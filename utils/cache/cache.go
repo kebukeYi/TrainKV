@@ -2,8 +2,9 @@ package cache
 
 import (
 	"container/list"
-	"github.com/kebukeYi/TrainKV/v2/utils"
 	"sync"
+
+	"github.com/kebukeYi/TrainKV/v2/utils"
 )
 
 type Cache struct {
@@ -147,9 +148,18 @@ func (c *Cache) Del(key interface{}) (interface{}, bool) {
 
 func (c *Cache) del(key interface{}) (interface{}, bool) {
 	keyToHash, _ := utils.KeyToHash(key)
-	_, ok := c.data[keyToHash]
+	element, ok := c.data[keyToHash]
 	if !ok {
 		return nil, false
+	}
+	item := element.Value.(*storeItem)
+	switch item.stage {
+	case Win_LRU:
+		c.wlru.list.Remove(element)
+	case STAGE_ONE:
+		c.slru.stageOne.Remove(element)
+	case STAGE_TWO:
+		c.slru.stageTwo.Remove(element)
 	}
 	delete(c.data, keyToHash)
 	return keyToHash, true

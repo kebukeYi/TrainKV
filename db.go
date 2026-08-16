@@ -2,8 +2,6 @@ package TrainKV
 
 import (
 	"bytes"
-	"expvar"
-	"fmt"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -53,7 +51,7 @@ func Open(opt *lsm.Options) (*TrainKV, error, func() error) {
 	if err != nil {
 		return nil, common.ErrLockDB, callBack
 	}
-
+	db.isClosed.Store(false)
 	db.initVlog()
 	opt.DiscardStatsCh = &db.vlog.VLogFileDisCardStaInfo.FlushCh
 
@@ -67,6 +65,12 @@ func Open(opt *lsm.Options) (*TrainKV, error, func() error) {
 	db.transactionManager.commitMark.Done(db.transactionManager.nextTxnTs)
 	db.transactionManager.incrementNextTs()
 
+	// 1.接收 vlog GC 重写大量entry[]的写请求;
+	// 2.接收 txn.set(entry)的请求,使用通道的话,就不用加锁执行vlog.write();
+	db.writeCh = make(chan *model.Request, lsm.KvWriteChCapacity)
+	db.Closer.writes = utils.NewCloser(1)
+	go db.handleWriteCh(db.Closer.writes)
+
 	db.Closer.valueGC = utils.NewCloser(1)
 	go db.vlog.waitOnGC(db.Closer.valueGC)
 
@@ -77,14 +81,8 @@ func Open(opt *lsm.Options) (*TrainKV, error, func() error) {
 		common.Panic(err)
 	}
 
-	db.Closer.compactors = utils.NewCloser(0)
+	db.Closer.compactors = utils.NewCloser(db.Lsm.Option.NumCompactors)
 	go db.Lsm.StartCompacter(db.Closer.compactors)
-
-	// 1.接收 vlog GC 重写大量entry[]的写请求;
-	// 2.接收 txn.set(entry)的请求,使用通道的话,就不用加锁执行vlog.write();
-	db.writeCh = make(chan *model.Request, lsm.KvWriteChCapacity)
-	db.Closer.writes = utils.NewCloser(1)
-	go db.handleWriteCh(db.Closer.writes)
 
 	return db, nil, callBack
 }
@@ -114,7 +112,7 @@ func (db *TrainKV) get(keyMaxStartTs []byte) (*model.Entry, error) {
 		var vp model.ValuePtr
 		vp.Decode(entry.Value)
 		read, callBack, err := db.vlog.Read(&vp)
-		defer model.RunCallback(callBack)
+		defer callBack()
 		if err != nil {
 			return nil, err
 		}
@@ -189,68 +187,6 @@ func (db *TrainKV) SendToWriteCh(entries []*model.Entry) (*model.Request, error)
 	return request, nil
 }
 
-func (db *TrainKV) handleWriteCh1(closer *utils.Closer) {
-	defer closer.Done()
-	blockChan := make(chan struct{}, 1) //限制:每次只允许一个协程去写数据;
-
-	writeRequest := func(reqs []*model.Request) {
-		if err := db.WriteRequest(reqs); err != nil {
-			common.Panic(err)
-		}
-		<-blockChan
-	}
-
-	reqLen := new(expvar.Int)
-	reqs := make([]*model.Request, 0, 10)
-
-	for {
-		var r *model.Request
-		select {
-		case r = <-db.writeCh:
-		case <-closer.CloseSignal:
-			goto closeCase
-		}
-
-		for {
-			reqs = append(reqs, r)
-			reqLen.Set(int64(len(reqs)))
-
-			if len(reqs) >= 3*common.KVWriteChRequestCapacity {
-				blockChan <- struct{}{}
-				goto writeCse
-			}
-
-			select {
-			case r = <-db.writeCh:
-			case blockChan <- struct{}{}:
-				goto writeCse
-			case <-closer.CloseSignal:
-				goto closeCase
-				// default:
-				// 隐形bug: 只有新请求到来时才有机会检查是否可以写当前批次;
-			}
-		} // for over
-
-	closeCase:
-		for {
-			select {
-			case r = <-db.writeCh:
-				reqs = append(reqs, r)
-			default: // b.writeCh 中没有更多数据, 执行 default 分支;
-				blockChan <- struct{}{} // Push to pending before doing a write.
-				writeRequest(reqs)
-				return
-			}
-		}
-
-	writeCse:
-		go writeRequest(reqs)
-		reqs = make([]*model.Request, 0, 10)
-		reqLen.Set(0)
-
-	} // for over
-}
-
 func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 	defer closer.Done()
 	var reqLen int64
@@ -271,7 +207,6 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 			for {
 				select {
 				case r = <-db.writeCh:
-					fmt.Println("close default-3")
 					reqs = append(reqs, r)
 				default: // db.writeCh 中没有更多数据, 执行 default 分支;
 					blockChan <- struct{}{}
@@ -302,7 +237,6 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 				for {
 					select {
 					case r = <-db.writeCh:
-						fmt.Println("close default-4")
 						reqs = append(reqs, r)
 					default: // db.writeCh 中没有更多数据, 执行 default 分支;
 						blockChan <- struct{}{}
@@ -351,8 +285,8 @@ func (db *TrainKV) WriteRequest(reqs []*model.Request) error {
 		}
 	}
 
-	if count >= 100 {
-		// 批量写入后  wal 进行刷盘
+	if count >= 100 && db.Lsm.Option.SyncWrites {
+		// 批量写入后  wal 进行刷盘, 或者手动开启 每次落盘;
 		if err := db.Lsm.SyncWalFile(); err != nil {
 			return err
 		}
@@ -398,6 +332,7 @@ func (db *TrainKV) initVlog() {
 		VLogFileDisCardStaInfo: &VLogFileDisCardStaInfo{
 			FileMap: make(map[uint32]int64),
 			FlushCh: make(chan map[uint32]int64, 16),
+			stopCh:  make(chan struct{}),
 		},
 	}
 	vlog.Db = db
@@ -406,29 +341,33 @@ func (db *TrainKV) initVlog() {
 }
 
 func (db *TrainKV) Close() error {
-	db.closeOnce.Do(func() {
-		db.isClosed.Store(true)
-	})
-	db.Closer.valueGC.CloseAndWait()
+	if db.isClosed.Load() {
+		return common.ErrClosedDB
+	}
+	db.isClosed.Store(true)
+
+	// 1. 先停掉所有 writeCh 的生产者
+	db.Closer.valueGC.CloseAndWait()    // vlog GC(BatchSet → writeCh)
+	db.Closer.compactors.CloseAndWait() // 压缩(产生 discard stats → FlushCh)
+	db.transactionManager.Stop()        // 事务提交(BatchSet → writeCh)
+	db.vlog.stopDiscardStats()          // 统计 flush(排空 → writeCh)
+
+	// 2. 再停消费者并排空 writeCh, 此刻无新生产者;
 	db.Closer.writes.CloseAndWait()
-	close(db.writeCh)
+
+	// 3. 最后刷 memtable / 关 LSM / 关 vlog 文件
 	db.Lsm.CloseFlushIMemChan()
 	db.Closer.memtable.CloseAndWait()
-	db.Closer.compactors.CloseAndWait()
-	db.transactionManager.Stop()
 
 	if err := db.Lsm.Close(); err != nil {
 		return err
 	}
 
 	if err := db.vlog.Close(); err != nil {
-		return err
+		panic(err)
 	}
 
-	if err := db.fileLock.Unlock(); err != nil {
-		return err
-	}
-	return nil
+	return db.fileLock.Unlock()
 }
 
 func (db *TrainKV) IsClosed() bool {
@@ -445,15 +384,24 @@ func BuildRequest(entries []*model.Entry) *model.Request {
 }
 
 type TxnIterator struct {
-	iter interfaces.Iterator
-	vlog *ValueLog
-	txn  *Transaction
+	iter    interfaces.Iterator
+	vlog    *ValueLog
+	txn     *Transaction
+	lastKey []byte // 新增:用于多版本去重
 }
 
 func (txn *Transaction) NewIterator(opt *interfaces.Options) *TxnIterator {
+	if txn.discard {
+		return nil
+	}
 	txn.db.vlog.incrIteratorCount()
 	iters := make([]interfaces.Iterator, 0)
 	iters = append(iters, txn.db.Lsm.NewLsmIterator(opt)...)
+	// 把 pending 迭代器 也 接进合并集合:
+	if pi := txn.newPendingWritesIterator(opt.IsAsc); pi != nil {
+		iters = append(iters, pi)
+	}
+
 	res := &TxnIterator{
 		iter: lsm.NewMergingIterator(iters, opt),
 		vlog: txn.db.vlog,
@@ -462,35 +410,71 @@ func (txn *Transaction) NewIterator(opt *interfaces.Options) *TxnIterator {
 	return res
 }
 
-func (dbIter *TxnIterator) Name() string {
+func (txnIter *TxnIterator) Name() string {
 	return "TxnIterator"
 }
-func (dbIter *TxnIterator) Next() {
-	dbIter.iter.Next()
+func (txnIter *TxnIterator) Next() {
+	txnIter.iter.Next()
 }
-func (dbIter *TxnIterator) Seek(key []byte) {
-	dbIter.iter.Seek(key)
+func (txnIter *TxnIterator) Seek(key []byte) {
+	txnIter.iter.Seek(key)
 }
-func (dbIter *TxnIterator) Rewind() {
-	dbIter.iter.Rewind()
+func (txnIter *TxnIterator) Rewind() {
+	txnIter.iter.Rewind()
 }
-func (dbIter *TxnIterator) Valid() bool {
-	return dbIter.iter.Valid()
+func (txnIter *TxnIterator) Valid() bool {
+	return txnIter.iter.Valid()
 }
-func (dbIter *TxnIterator) Item() interfaces.Item {
-	for dbIter.iter.Valid() {
-		entry := dbIter.iter.Item().Item
-		if dbIter.txn.IsVisible(&entry) && (entry.Meta&common.BitDelete <= 0) {
-			return dbIter.iter.Item()
+func (txnIter *TxnIterator) Item() interfaces.Item {
+	for txnIter.iter.Valid() {
+		entry := txnIter.iter.Item().Item
+		// ① 可见性 + 删除标记过滤(5f99f3e 已加删除过滤,保留)
+		if !txnIter.txn.IsVisible(&entry) {
+			txnIter.iter.Next()
+			continue
+		} else {
+			if (entry.Meta & common.BitDelete) > 0 {
+				txnIter.iter.Next()
+				continue
+			}
 		}
-		dbIter.iter.Next()
+
+		// ② 大 value 解引用:ValuePtr → vlog 读
+		if entry.Value != nil && model.IsValPtr(&entry) {
+			var vp model.ValuePtr
+			vp.Decode(entry.Value)
+			read, callBack, err := txnIter.vlog.Read(&vp)
+			if err != nil {
+				callBack()
+				panic(err)
+			}
+			entry.Value = model.SafeCopy(nil, read)
+			callBack()
+		}
+
+		// ③ 事务自己的 pending 写覆盖(读己之写 + 与 LSM 版本冲突时取 pending)
+		raw := model.ParseKey(entry.Key)
+		if txnIter.txn.update && txnIter.txn.pendingKeys != nil {
+			if pe, ok := txnIter.txn.pendingKeys[string(raw)]; ok {
+				entry.Key = model.KeyWithTs(pe.Key, txnIter.txn.startTs)
+				entry.Version = txnIter.txn.startTs
+			}
+		}
+
+		// ④ 多版本去重:同 key 只返回第一个(版本号越大越靠前 → 第一个=最新可见)
+		if bytes.Equal(txnIter.lastKey, raw) {
+			txnIter.iter.Next()
+			continue
+		}
+		txnIter.lastKey = append(txnIter.lastKey[:0], raw...)
+		return interfaces.Item{Item: entry}
 	}
 	return interfaces.Item{Item: model.Entry{Version: 0}}
 }
-func (dbIter *TxnIterator) Close() error {
-	err := dbIter.vlog.decrIteratorCount()
+func (txnIter *TxnIterator) Close() error {
+	err := txnIter.vlog.decrIteratorCount()
 	if err != nil {
 		return err
 	}
-	return dbIter.iter.Close()
+	return txnIter.iter.Close()
 }

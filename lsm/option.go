@@ -27,7 +27,7 @@ type Options struct {
 	ValueLogMaxEntries  int32  // vlogFile文件保存的entry最大数量;
 	ValueLogFileSize    int32  // vlogFile的文件大小;
 	ValueLogFileMaxSize uint32 // vlogFile的文件最大尺度;默认 math.MaxUint32;
-	SyncWrites          bool
+	SyncWrites          bool   // 关于 wal 和vlog 文件的同步刷盘策略;
 
 	VerifyValueChecksum bool // 是否开启vlogFile的crc检查;
 

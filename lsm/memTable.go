@@ -28,15 +28,15 @@ type MemoryTable struct {
 func (lsm *LSM) NewMemoryTable() *MemoryTable {
 	newFid := lsm.LevelManger.NextFileID()
 	walFileOpt := &utils.FileOptions{
-		Dir:      lsm.option.WorkDir,
+		Dir:      lsm.Option.WorkDir,
 		Flag:     os.O_CREATE | os.O_RDWR,
-		MaxSz:    int32(lsm.option.MemTableSize),
+		MaxSz:    int32(lsm.Option.MemTableSize),
 		FID:      newFid,
-		FileName: mtFilePath(lsm.option.WorkDir, newFid),
+		FileName: mtFilePath(lsm.Option.WorkDir, newFid),
 	}
 	mt := &MemoryTable{
 		lsm:      lsm,
-		skipList: skl.NewSkipList(lsm.option.MemTableSize),
+		skipList: skl.NewSkipList(lsm.Option.MemTableSize),
 		wal:      OpenWalFile(walFileOpt),
 		name:     strconv.FormatUint(newFid, 10) + MemTableName,
 	}
@@ -91,6 +91,7 @@ func (m *MemoryTable) SyncWalFile() error {
 	}
 	return nil
 }
+
 func (m *MemoryTable) DecrRef() {
 	m.skipList.DecrRef()
 }
@@ -113,7 +114,7 @@ func (m *MemoryTable) close(needRemoveWal bool) error {
 }
 
 func (lsm *LSM) recovery() (*MemoryTable, []*MemoryTable) {
-	files, err := os.ReadDir(lsm.option.WorkDir)
+	files, err := os.ReadDir(lsm.Option.WorkDir)
 	if err != nil {
 		common.Panic(err)
 		return nil, nil
@@ -146,12 +147,12 @@ func (lsm *LSM) recovery() (*MemoryTable, []*MemoryTable) {
 		if fid == sstMaxID {
 			fmt.Printf("LSM.#recovery(): sstMaxFid(%d.sst) is not allow equal to wal fid(%d.wal)!", sstMaxID, fid)
 			// 方式A: 进行删除相关wal文件;
-			//if err = os.Remove(mtFilePath(lsm.option.WorkDir, fid)); err != nil {
-			//	panic(err)
-			//}
-			//continue
+			if err = os.Remove(mtFilePath(lsm.Option.WorkDir, fid)); err != nil {
+				panic(err)
+			}
+			continue
 			// 方式B: 直接退出报错处理;
-			panic("#recovery(): sstMaxFid is not should equal to wal fid")
+			// panic("#recovery(): sstMaxFid is not should equal to wal fid")
 		}
 		memTable, err := lsm.openMemTable(fid)
 		common.CondPanic(err != nil, err)
@@ -169,14 +170,14 @@ func (lsm *LSM) recovery() (*MemoryTable, []*MemoryTable) {
 
 func (lsm *LSM) openMemTable(walFid uint64) (*MemoryTable, error) {
 	fileOpt := &utils.FileOptions{
-		Dir:      lsm.option.WorkDir,
+		Dir:      lsm.Option.WorkDir,
 		Flag:     os.O_CREATE | os.O_RDWR,
-		MaxSz:    int32(lsm.option.MemTableSize),
+		MaxSz:    int32(lsm.Option.MemTableSize),
 		FID:      walFid,
-		FileName: mtFilePath(lsm.option.WorkDir, walFid),
+		FileName: mtFilePath(lsm.Option.WorkDir, walFid),
 	}
 	walFile := OpenWalFile(fileOpt)
-	s := skl.NewSkipList(lsm.option.MemTableSize)
+	s := skl.NewSkipList(lsm.Option.MemTableSize)
 	mem := &MemoryTable{
 		lsm:      lsm,
 		skipList: s,

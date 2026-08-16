@@ -483,26 +483,26 @@ func (lm *LevelsManger) sortByMaxVersion(table []*Table, cd *compactDef) {
 func (lm *LevelsManger) findMaxLevelTables(tables []*Table, cd *compactDef) bool {
 	sortedTables := make([]*Table, len(tables))
 	copy(sortedTables, tables)
-	lm.sortByStaleDataSize(tables, cd)
+	lm.sortByStaleDataSize(sortedTables, cd)
 	if len(sortedTables) > 0 && sortedTables[0].getStaleDataSize() == 0 {
 		return false
 	}
 
 	cd.nextTables = []*Table{}
 	collectNextTables := func(t *Table, needSz int64) {
-		nextIdx := sort.Search(len(tables), func(i int) bool {
-			return model.CompareKeyWithTs(tables[i].sst.minKey, t.sst.minKey) >= 0
+		nextIdx := sort.Search(len(sortedTables), func(i int) bool {
+			return model.CompareKeyWithTs(sortedTables[i].sst.minKey, t.sst.minKey) >= 0
 		})
-		common.CondPanic(tables[nextIdx].fid != t.fid, errors.New("tables[j].ID() != t.ID()"))
+		common.CondPanic(sortedTables[nextIdx].fid != t.fid, errors.New("sortedTables[j].ID() != t.ID()"))
 		totalSize := t.Size()
 		nextIdx++
-		for nextIdx < len(tables) {
-			totalSize += tables[nextIdx].Size()
+		for nextIdx < len(sortedTables) {
+			totalSize += sortedTables[nextIdx].Size()
 			if totalSize >= needSz {
 				break
 			}
-			cd.nextTables = append(cd.nextTables, tables[nextIdx])
-			cd.nextRange.extend(getKeyRange(tables[nextIdx]))
+			cd.nextTables = append(cd.nextTables, sortedTables[nextIdx])
+			cd.nextRange.extend(getKeyRange(sortedTables[nextIdx]))
 			nextIdx++
 		}
 	}
@@ -857,7 +857,7 @@ func IsDeletedOrExpired(e *model.Entry) bool {
 }
 func (lm *LevelsManger) updateDiscardStats(discardStats map[uint32]int64) {
 	select {
-	case *lm.lsm.option.DiscardStatsCh <- discardStats:
+	case *lm.lsm.Option.DiscardStatsCh <- discardStats:
 	}
 }
 func iteratorsReversed(tables []*Table, options *interfaces.Options) []interfaces.Iterator {
@@ -944,7 +944,7 @@ func (lsm *LSM) newCompactStatus() *compactIngStatus {
 		tables: make(map[uint64]struct{}),
 	}
 	// 0 层也需要
-	for i := 0; i < lsm.option.MaxLevelNum; i++ {
+	for i := 0; i < lsm.Option.MaxLevelNum; i++ {
 		cs.levels = append(cs.levels, &levelCompactStatus{})
 	}
 	return cs

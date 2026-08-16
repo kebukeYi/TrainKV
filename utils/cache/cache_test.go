@@ -2,10 +2,11 @@ package cache
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainKV/v2/utils"
 	"math/rand"
 	"testing"
 	"time"
+
+	"github.com/kebukeYi/TrainKV/v2/utils"
 )
 
 func TestNewCache(t *testing.T) {
@@ -54,14 +55,15 @@ func TestCache_SetAndGet(t *testing.T) {
 
 func TestCache_Del(t *testing.T) {
 	cache := NewCache(100)
-
+	utils.AssertTrue(0 == cache.Len())
 	key := "testKey"
 	value := "testValue"
 
 	cache.Set(key, value)
-
+	utils.AssertTrue(1 == cache.Len())
 	// Test deleting an existing key
 	deletedKey, ok := cache.Del(key)
+	utils.AssertTrue(0 == cache.Len())
 	if !ok {
 		t.Error("Expected key to be deleted")
 	}
@@ -69,9 +71,12 @@ func TestCache_Del(t *testing.T) {
 	if deletedKey != keyToHash { // Hash of "testKey"
 		t.Errorf("Expected deleted key hash, got %v", deletedKey)
 	}
+	cache.Set(key, value)
+	utils.AssertTrue(1 == cache.Len())
 
 	// Test deleting a non-existent key
 	_, ok = cache.Del("nonExistentKey")
+	utils.AssertTrue(1 == cache.Len())
 	if ok {
 		t.Error("Expected non-existent key deletion to return false")
 	}

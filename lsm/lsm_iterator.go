@@ -2,10 +2,11 @@ package lsm
 
 import (
 	"container/heap"
+	"sort"
+
 	"github.com/kebukeYi/TrainKV/v2/common"
 	"github.com/kebukeYi/TrainKV/v2/interfaces"
 	"github.com/kebukeYi/TrainKV/v2/model"
-	"sort"
 )
 
 type lsmIterator struct {
@@ -16,10 +17,12 @@ type lsmIterator struct {
 func (lsm *LSM) NewLsmIterator(opt *interfaces.Options) []interfaces.Iterator {
 	iter := &lsmIterator{}
 	iter.iters = make([]interfaces.Iterator, 0)
+	lsm.RLock()
 	iter.iters = append(iter.iters, lsm.memoryTable.skipList.NewSkipListIterator(lsm.memoryTable.name))
 	for _, imemoryTable := range lsm.immemoryTables {
 		iter.iters = append(iter.iters, imemoryTable.skipList.NewSkipListIterator(imemoryTable.name))
 	}
+	lsm.RUnlock()
 	iter.iters = append(iter.iters, lsm.LevelManger.iterators(opt)...)
 	return iter.iters
 }
@@ -153,18 +156,19 @@ func (hp IteratorHeap) Len() int {
 	return len(hp)
 }
 func (hp IteratorHeap) Less(i, j int) bool {
-	// 处理无效迭代器：有效迭代器应该排在无效迭代器前面
+	// 处理无效迭代器: 有效迭代器应该排在无效迭代器前面
 	if hp[i].Valid() != hp[j].Valid() {
 		return hp[i].Valid() // 只有i有效时才返回true
 	}
 	// 现在，要么两个都有效，要么两个都无效
 	if !hp[i].Valid() {
-		// 两个都无效，顺序无所谓，返回false保持稳定
+		// 两个都无效，顺序无所谓, 返回false保持稳定
 		return false
 	}
 	// 两个都有效, 比较键;
 	return model.CompareKeyWithTs(hp[i].Item().Item.Key, hp[j].Item().Item.Key) < 0
 }
+
 func (hp IteratorHeap) Swap(i, j int) {
 	hp[i], hp[j] = hp[j], hp[i]
 }

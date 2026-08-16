@@ -2,13 +2,14 @@ package TrainKV
 
 import (
 	"fmt"
+	"os"
+	"testing"
+	"time"
+
 	"github.com/kebukeYi/TrainKV/v2/common"
 	"github.com/kebukeYi/TrainKV/v2/lsm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"os"
-	"testing"
-	"time"
 )
 
 func removeAll(dir string) {
@@ -209,6 +210,43 @@ func TestTransactionReadYourWrites(t *testing.T) {
 	// Commit
 	_, err = txn.Commit()
 	assert.NoError(t, err)
+}
+
+func TestTransactionReadAfterCommit(t *testing.T) {
+	dir, err := os.MkdirTemp("", "trainkv-test")
+	require.NoError(t, err)
+	defer removeAll(dir)
+
+	opt := lsm.GetDefaultOpt(dir)
+	db, err, callBack := Open(opt)
+	require.NoError(t, err)
+	defer func() {
+		db.Close()
+		_ = callBack()
+	}()
+
+	txn0 := db.NewTransaction(true)
+	defer txn0.Discard()
+
+	txn1 := db.NewTransaction(true)
+	defer txn1.Discard()
+
+	// set a value
+	err = txn1.Set([]byte("key1"), []byte("value1"))
+	assert.NoError(t, err)
+
+	// Read the value within the same transaction - should see the write
+	entry, err := txn1.Get([]byte("key1"))
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("value1"), entry.Value)
+
+	// t1 Commit
+	_, err = txn1.Commit()
+	assert.NoError(t, err)
+
+	// t0 get
+	entry, err = txn0.Get([]byte("key1"))
+	assert.Equal(t, err, common.ErrKeyNotFound)
 }
 
 func TestTransactionBatchOperations(t *testing.T) {
