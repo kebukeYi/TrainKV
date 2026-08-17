@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
+	"testing"
+
 	"github.com/kebukeYi/TrainKV/v2/common"
 	"github.com/kebukeYi/TrainKV/v2/interfaces"
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/stretchr/testify/require"
-	"math"
-	"testing"
 
 	"github.com/kebukeYi/TrainKV/v2/pb"
 	"github.com/kebukeYi/TrainKV/v2/utils"
@@ -20,16 +21,16 @@ var compactTestPath = "/usr/golanddata/trainkv/compact"
 var compactOptions = &Options{
 	WorkDir:            compactTestPath,
 	MemTableSize:       10 << 10,  // 10KB; 64 << 20(64MB)
-	WaitFlushMemTables: 1,         // 默认: 15;
+	WaitFlushMemTables: 2,         // 默认: 15;
 	BlockSize:          4 * 1024,  // 4 * 1024
 	BloomFalsePositive: 0.01,      // 误差率
-	CacheNums:          10 * 1024, // 10240个
+	CacheNums:          10 * 1024, //
 
-	ValueThreshold:      maxValueThreshold, // 1B; 1 << 20(1MB)
+	ValueThreshold:      1, // 1B; 1 << 20(1MB)
 	ValueLogMaxEntries:  100,               // 1000000
 	ValueLogFileSize:    1 << 29,           // 512MB; 1<<30-1(1GB);
 	ValueLogFileMaxSize: math.MaxUint32,
-	SyncWrites:          false,
+	SyncWrites:          false, // 设置 wsl 和 vlogfile 的同步写
 	VerifyValueChecksum: false, // false
 	DiscardStatsCh:      nil,
 

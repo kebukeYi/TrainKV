@@ -100,7 +100,7 @@ func Wrap(err error, msg string) error {
 	}
 	return fmt.Errorf("%s err: %+v", msg, err)
 }
-func Wrapf(err error, format string, args ...interface{}) error {
+func Wraps(err error, format string, args ...interface{}) error {
 	return fmt.Errorf(format+" error: %+v", append(args, err)...)
 }
 

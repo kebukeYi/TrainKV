@@ -190,10 +190,10 @@ func (lsm *LSM) openMemTable(walFid uint64) (*MemoryTable, error) {
 	}
 	endOff, err := mem.recovery2SkipList()
 	if err != nil {
-		return nil, common.Wrapf(err, "#openMemTable recovery2SkipList end offset: %d < size: %d", endOff, walFile.size)
+		return nil, common.Wraps(err, "#openMemTable recovery2SkipList end offset: %d < size: %d", endOff, walFile.size)
 	}
 	if endOff < atomic.LoadUint32(&walFile.size) {
-		return nil, common.Wrapf(err, "#openMemTable end offset: %d < size: %d", endOff, walFile.size)
+		return nil, common.Wraps(err, "#openMemTable end offset: %d < size: %d", endOff, walFile.size)
 	}
 	err = walFile.file.Truncate(int64(endOff))
 	return mem, err

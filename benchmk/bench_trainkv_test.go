@@ -2,9 +2,10 @@ package benchmk
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/kebukeYi/TrainKV/v2"
 	"github.com/kebukeYi/TrainKV/v2/lsm"
-	"testing"
 )
 
 var triandb *TrainKV.TrainKV
