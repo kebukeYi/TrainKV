@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync/atomic"
 
 	"github.com/kebukeYi/TrainKV/v2/common"
 	"github.com/kebukeYi/TrainKV/v2/model"
@@ -73,12 +72,16 @@ func (m *MemoryTable) Put(e *model.Entry) error {
 	if e.Meta&common.BitFinTxn > 0 {
 		return nil
 	}
-	m.skipList.Put(e)
-	parseKey := model.ParseTsVersion(e.Key)
-	if parseKey > m.maxVersion {
-		m.maxVersion = parseKey
-	}
+	m.put(e)
 	return nil
+}
+
+// put 写入跳表并维护 maxVersion; 恢复(重放)路径与在线写路径共用;
+func (m *MemoryTable) put(e *model.Entry) {
+	m.skipList.Put(e)
+	if v := model.ParseTsVersion(e.Key); v > m.maxVersion {
+		m.maxVersion = v
+	}
 }
 
 func (m *MemoryTable) IncrRef() {
@@ -190,10 +193,7 @@ func (lsm *LSM) openMemTable(walFid uint64) (*MemoryTable, error) {
 	}
 	endOff, err := mem.recovery2SkipList()
 	if err != nil {
-		return nil, common.Wraps(err, "#openMemTable recovery2SkipList end offset: %d < size: %d", endOff, walFile.size)
-	}
-	if endOff < atomic.LoadUint32(&walFile.size) {
-		return nil, common.Wraps(err, "#openMemTable end offset: %d < size: %d", endOff, walFile.size)
+		return nil, common.Wraps(err, "#openMemTable recovery2SkipList failed, valid end offset: %d", endOff)
 	}
 	err = walFile.file.Truncate(int64(endOff))
 	return mem, err
@@ -208,30 +208,30 @@ func (m *MemoryTable) recovery2SkipList() (uint32, error) {
 	var readAt uint32 = 0
 	entries := make([]*model.Entry, 0)
 	for {
-		var e *model.Entry
-		e, readAt = m.wal.Read(m.wal.file.Fd)
-		if e == nil {
+		var entry *model.Entry
+		entry, readAt = m.wal.Read(m.wal.file.Fd)
+		if entry == nil {
 			return validEndOffset, nil
 		}
 		switch {
-		case e.Meta&common.BitTxn > 0:
-			txnTs := model.ParseTsVersion(e.Key)
+		case entry.Meta&common.BitTxn > 0:
+			txnTs := model.ParseTsVersion(entry.Key)
 			if lastCommitTs == 0 {
 				lastCommitTs = txnTs
 			}
 			if txnTs != lastCommitTs {
 				return validEndOffset, common.ErrBadTxn
 			}
-			entries = append(entries, e)
-		case e.Meta&common.BitFinTxn > 0:
-			parseUint, err := strconv.ParseUint(string(e.Value), 10, 64)
+			entries = append(entries, entry)
+		case entry.Meta&common.BitFinTxn > 0:
+			parseUint, err := strconv.ParseUint(string(entry.Value), 10, 64)
 			if err != nil || parseUint != lastCommitTs {
 				return validEndOffset, common.ErrBadTxn
 			}
 			lastCommitTs = 0
 			validEndOffset = readAt
 			for _, entry := range entries {
-				m.skipList.Put(entry)
+				m.put(entry)
 			}
 			entries = entries[:0]
 		default:
@@ -239,7 +239,7 @@ func (m *MemoryTable) recovery2SkipList() (uint32, error) {
 			if lastCommitTs != 0 {
 				return validEndOffset, common.ErrBadTxn
 			}
-			m.skipList.Put(e)
+			m.put(entry)
 			validEndOffset = readAt
 		}
 	}

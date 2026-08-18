@@ -89,6 +89,7 @@ func (vlog *ValueLog) Open(replayFn model.LogEntry) error {
 	}
 	lastVLogFile, ok := vlog.filesMap[vlog.maxFid]
 	common.CondPanic(!ok, errors.New("vlog.filesMap[vlog.maxFid] not found"))
+	// 主要是获得 最后一个 vlog 文件的 可写offset位置, 并没有做过多数据判断;
 	endOffset, err := vlog.iterator(lastVLogFile, 0, replayFn)
 	if err != nil {
 		return errors.Wrapf(err, "file.Seek to end path:[%s]", lastVLogFile.FileName())
@@ -230,14 +231,14 @@ func (vlog *ValueLog) validateWrites(reqs []*model.Request) error {
 func estimateRequestSize(req *model.Request) uint64 {
 	size := uint64(0)
 	for _, entry := range req.Entries {
-		size += uint64(common.VlogHeaderSize + len(entry.Key) + len(entry.Value) + crc32.Size)
+		size += uint64(common.MaxHeaderSize + len(entry.Key) + len(entry.Value) + crc32.Size)
 	}
 	return size
 }
 
-func (vlog *ValueLog) Write(reqs []*model.Request) error {
+func (vlog *ValueLog) Write(reqs []*model.Request) (wrote bool, err error) {
 	if err := vlog.validateWrites(reqs); err != nil {
-		return common.Wrap(err, "#Write while validating reqs")
+		return wrote, common.Wrap(err, "#Write while validating reqs")
 	}
 	vlog.filesLock.RLock()
 	curVlogFile := vlog.filesMap[vlog.maxFid]
@@ -248,6 +249,7 @@ func (vlog *ValueLog) Write(reqs []*model.Request) error {
 		if vlog.buf.Len() == 0 {
 			return nil
 		}
+		wrote = true
 		data := vlog.buf.Bytes()
 		offset := vlog.getWriteOffset()
 		// vlogFile 会自动扩容;
@@ -275,6 +277,8 @@ func (vlog *ValueLog) Write(reqs []*model.Request) error {
 			var err error
 			curVlogFile, err = vlog.createVlogFile(newFid)
 			if err != nil {
+				// 轮转失败: 回滚 maxFid, 下次写入仍指向旧文件 (AppendBuffer 会自动扩容), 避免取到 filesMap 中不存在的文件;
+				atomic.AddUint32(&vlog.maxFid, ^uint32(0))
 				return err
 			}
 			atomic.AddInt32(&vlog.Db.logRotates, 1)
@@ -287,7 +291,8 @@ func (vlog *ValueLog) Write(reqs []*model.Request) error {
 		var writeNums int
 		for _, entry := range req.Entries {
 			if vlog.Db.ShouldWriteValueToLSM(entry) {
-				req.ValPtr = append(req.ValPtr, &model.ValuePtr{})
+				// LSM 直写条目从不读取 ValPtr, 零值占位仅用于保持 ValPtr 与 Entries 长度一致;
+				req.ValPtr = append(req.ValPtr, model.ValuePtr{})
 				continue
 			}
 			var p model.ValuePtr
@@ -301,15 +306,15 @@ func (vlog *ValueLog) Write(reqs []*model.Request) error {
 			// 为了后续的 wal 记录, 需要将事务标记写入;
 			entry.Meta = walMeta
 			if err != nil {
-				return err
+				return wrote, err
 			}
 			p.Len = uint32(plen)
-			req.ValPtr = append(req.ValPtr, &p)
+			req.ValPtr = append(req.ValPtr, p)
 			writeNums++
 			// 如果 buf 长度够了, 那么就写入文件;
 			if int32(vlog.buf.Len()) > vlog.Db.Opt.ValueLogFileSize {
 				if err = toWrite(); err != nil {
-					return err
+					return wrote, err
 				}
 			}
 		}
@@ -319,11 +324,25 @@ func (vlog *ValueLog) Write(reqs []*model.Request) error {
 			vlog.entriesWrittenNum > vlog.Opt.ValueLogMaxEntries
 		if writeNow {
 			if err := toWrite(); err != nil {
-				return err
+				return wrote, err
 			}
 		}
 	}
-	return toWrite()
+	return wrote, toWrite()
+}
+
+// Sync 将当前正在写入的 vlog 文件同步到磁盘; 必须先于 WAL 同步调用,
+// 保证 WAL 中 ValuePtr 指向的 value 已持久化;
+func (vlog *ValueLog) Sync() error {
+	vlog.filesLock.RLock()
+	curVlogFile := vlog.filesMap[vlog.maxFid]
+	vlog.filesLock.RUnlock()
+	if curVlogFile == nil {
+		return nil
+	}
+	curVlogFile.Lock.RLock()
+	defer curVlogFile.Lock.RUnlock()
+	return curVlogFile.Sync()
 }
 
 func (vlog *ValueLog) deleteVlogFile(vlogFile *VLogFile) error {
@@ -534,9 +553,6 @@ func (vlog *ValueLog) doRunGC(logFile *VLogFile) error {
 }
 
 func (vlog *ValueLog) iterator(vlogFile *VLogFile, offset uint32, fn model.LogEntry) (uint32, error) {
-	if offset == 0 {
-		offset = common.VlogHeaderSize
-	}
 	if int64(offset) == vlogFile.Size() {
 		return offset, common.ErrOutOffset
 	}
@@ -547,7 +563,7 @@ func (vlog *ValueLog) iterator(vlogFile *VLogFile, offset uint32, fn model.LogEn
 	}
 
 	reader := bufio.NewReader(vlogFile.FD())
-	var recordEntryOffset uint32 = offset
+	var recordEntryOffset = offset
 LOOP:
 	for {
 		entry, err := vlog.Entry(reader, recordEntryOffset)
@@ -562,7 +578,6 @@ LOOP:
 			fmt.Printf("unable to decode entry, err:%v \n", err)
 			return recordEntryOffset, err
 		}
-		//var vp *model.ValuePtr
 		var vp model.ValuePtr
 		vp.Len = uint32((entry.HeaderLen) + len(entry.Key) + len(entry.Value) + crc32.Size)
 		vp.Offset = entry.Offset

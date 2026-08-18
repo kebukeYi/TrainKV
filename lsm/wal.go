@@ -10,7 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	errors "github.com/kebukeYi/TrainKV/v2/common"
+	"github.com/kebukeYi/TrainKV/v2/common"
 	"github.com/kebukeYi/TrainKV/v2/file"
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/kebukeYi/TrainKV/v2/utils"
@@ -23,33 +23,27 @@ const (
 )
 
 type WAL struct {
-	file    *file.MmapFile
-	opt     *utils.FileOptions
-	lock    sync.Mutex
-	buf     *bytes.Buffer
-	size    uint32
-	writeAt uint32
-	readAt  uint32
+	file     *file.MmapFile
+	opt      *utils.FileOptions
+	lock     sync.Mutex
+	buf      *bytes.Buffer
+	crcTable *crc32.Table // 写路径经 handleWriteCh 串行化, 无需每记录新建哈希对象;
+	writeAt  uint32
+	readAt   uint32
 }
 
 func OpenWalFile(opt *utils.FileOptions) *WAL {
 	mmapFile, err := file.OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
 	if err != nil {
-		return nil
+		common.Panic(fmt.Errorf("open wal mmap_file error: %v ;\n", err))
 	}
-	fileInfo, err := mmapFile.Fd.Stat()
-	wal := &WAL{
-		file:    mmapFile,
-		size:    uint32(fileInfo.Size()),
-		writeAt: 0,
-		opt:     opt,
-		buf:     &bytes.Buffer{},
+	return &WAL{
+		file:     mmapFile,
+		writeAt:  0,
+		opt:      opt,
+		buf:      &bytes.Buffer{},
+		crcTable: common.CastigationCryTable,
 	}
-	if err != nil {
-		fmt.Printf("open wal file error: %v ;\n", err)
-		return nil
-	}
-	return wal
 }
 
 func (w *WAL) Write(e *model.Entry) error {
@@ -66,15 +60,34 @@ func (w *WAL) Write(e *model.Entry) error {
 	return nil
 }
 
+// Read 从 wal 文件按顺序读取下一条 entry;
+// 文件尾部的零填充区或撕裂的半写记录被视为正常结束(回退到上一条完整记录处),
+// 而文件中间出现的解析/校验错误说明存在真实损坏, 直接 panic;
 func (w *WAL) Read(reader io.Reader) (*model.Entry, uint32) {
 	entry, err := w.WalDecode(reader)
 	if err != nil {
-		if err == io.EOF {
+		if err == io.EOF || err == io.ErrUnexpectedEOF || err == common.ErrTruncate {
 			return nil, 0
 		}
-		errors.Panic(err)
+		// crc 不匹配: 若其后全是零填充, 则是崩溃时最后一条未完整落盘的记录, 也视为尾部;
+		if err == common.ErrWalInvalidCrc {
+			rest, readErr := io.ReadAll(reader)
+			if readErr == nil && allZero(rest) {
+				return nil, 0
+			}
+		}
+		common.Panic(err)
 	}
 	return entry, w.readAt
+}
+
+func allZero(buf []byte) bool {
+	for _, b := range buf {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // WalEncode | header(meta,klen,vlen,expir) | key | value | crc32 |
@@ -88,17 +101,15 @@ func (w *WAL) WalEncode(buf *bytes.Buffer, e *model.Entry) (int, error) {
 	var headerEnc [WalHeaderSize]byte
 	sz := header.Encode(headerEnc[:])
 
-	hash := crc32.New(errors.CastigationCryTable)
-	writer := io.MultiWriter(buf, hash)
+	buf.Write(headerEnc[:sz])
+	buf.Write(e.Key)
+	buf.Write(e.Value)
 
-	writer.Write(headerEnc[:sz])
-	writer.Write(e.Key)
-	writer.Write(e.Value)
-
-	crcBuf := make([]byte, crcSize)
-	binary.BigEndian.PutUint32(crcBuf[:], hash.Sum32())
-	writer.Write(crcBuf[:])
-	return len(headerEnc[:sz]) + len(e.Key) + len(e.Value) + len(crcBuf), nil
+	var crcBuf [crcSize]byte
+	// 整条记录一次算出 crc; 若走 hash.Hash 接口逐段 Write, headerEnc 会经接口逃逸到堆;
+	binary.BigEndian.PutUint32(crcBuf[:], crc32.Checksum(buf.Bytes(), w.crcTable))
+	buf.Write(crcBuf[:])
+	return sz + len(e.Key) + len(e.Value) + len(crcBuf), nil
 }
 
 func (w *WAL) WalDecode(reader io.Reader) (*model.Entry, error) {
@@ -119,16 +130,18 @@ func (w *WAL) WalDecode(reader io.Reader) (*model.Entry, error) {
 	dataLen, err := io.ReadFull(hashReader, dataBuf[:])
 	if err != nil {
 		if err == io.EOF {
-			err = errors.ErrTruncate
+			err = common.ErrTruncate
 		}
 		return nil, err
 	}
+
 	entry.Key = dataBuf[:header.KLen]
 	entry.Value = dataBuf[header.KLen:]
 	entry.Meta = header.Meta
 	entry.ExpiresAt = header.ExpiresAt
 	sum32 := hashReader.Sum32()
 
+	// 读取 crc32
 	crcBuf := make([]byte, crcSize)
 	crcLen, err := io.ReadFull(reader, crcBuf[:])
 	if err != nil {
@@ -136,7 +149,7 @@ func (w *WAL) WalDecode(reader io.Reader) (*model.Entry, error) {
 	}
 	readChecksumIEEE := binary.BigEndian.Uint32(crcBuf[:])
 	if readChecksumIEEE != sum32 {
-		return nil, errors.ErrWalInvalidCrc
+		return nil, common.ErrWalInvalidCrc
 	}
 	w.readAt += uint32(headLen + dataLen + crcLen)
 	return entry, nil
@@ -152,7 +165,8 @@ func (w *WAL) Size() uint32 {
 }
 
 func (w *WAL) SyncFile() error {
-	return w.file.Sync()
+	// WAL 文件被预截断到 MemTableSize, 只同步已写入前缀即可, 整区 msync 会拖慢每次提交;
+	return w.file.SyncRange(w.Size())
 }
 
 func (w *WAL) SetSize(offset uint32) {

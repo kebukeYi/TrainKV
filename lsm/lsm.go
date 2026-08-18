@@ -75,13 +75,41 @@ func (lsm *LSM) Get(keyTs []byte) (model.Entry, error) {
 	var (
 		maxEntryTs model.Entry
 	)
-	// Read of IncrRef;
-	memoryTales, callBack := lsm.getAllMemoryTales()
-	defer callBack() // DecrRef;
 	startTs := model.ParseTsVersion(keyTs)
-	for _, memoryTable := range memoryTales {
+
+	// Read of IncrRef; 无 immutable 时直接在栈上持有引用, 避免每次 Get 分配切片;
+	lsm.RLock()
+	mt := lsm.memoryTable
+	mt.IncrRef()
+	var imms []*MemoryTable
+	if n := len(lsm.immemoryTables); n > 0 {
+		imms = make([]*MemoryTable, n)
+		for i := 0; i < n; i++ {
+			im := lsm.immemoryTables[n-1-i] // 新→旧, 与 getAllMemoryTales 顺序一致;
+			im.IncrRef()
+			imms[i] = im
+		}
+	}
+	lsm.RUnlock()
+	defer func() { // DecrRef;
+		mt.DecrRef()
+		for _, im := range imms {
+			im.DecrRef()
+		}
+	}()
+
+	entry, _ := mt.Get(keyTs)
+	if entry.Version != 0 || entry.Value != nil {
 		// 1. 跳表中对返回的near节点进行对比时, key 是去掉Ts时间戳的, 相同直接返回,将不再继续向level层寻找;
 		// 否则向level--层寻找;
+		if entry.Version == startTs {
+			return entry, nil
+		}
+		if entry.Version > maxEntryTs.Version {
+			maxEntryTs = entry
+		}
+	}
+	for _, memoryTable := range imms {
 		entry, _ := memoryTable.Get(keyTs)
 		if entry.Version == 0 && entry.Value == nil {
 			continue
@@ -118,25 +146,6 @@ func (lsm *LSM) MaxVersion() uint64 {
 	}
 
 	return maxVersion
-}
-
-func (lsm *LSM) getAllMemoryTales() ([]*MemoryTable, func()) {
-	lsm.RLock()
-	defer lsm.RUnlock()
-	lsm.memoryTable.IncrRef()
-	tables := make([]*MemoryTable, 0)
-	tables = append(tables, lsm.memoryTable)
-
-	last := len(lsm.immemoryTables) - 1
-	for i := last; i >= 0; i-- {
-		lsm.immemoryTables[i].IncrRef()
-		tables = append(tables, lsm.immemoryTables[i])
-	}
-	return tables, func() {
-		for _, t := range tables {
-			t.DecrRef()
-		}
-	}
 }
 
 func (lsm *LSM) MemSize() int64 {

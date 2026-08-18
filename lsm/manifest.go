@@ -4,14 +4,15 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/kebukeYi/TrainKV/v2/common"
-	"github.com/kebukeYi/TrainKV/v2/pb"
-	"github.com/kebukeYi/TrainKV/v2/utils"
 	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/kebukeYi/TrainKV/v2/common"
+	"github.com/kebukeYi/TrainKV/v2/pb"
+	"github.com/kebukeYi/TrainKV/v2/utils"
 )
 
 type ManifestFile struct {
@@ -311,15 +312,15 @@ func doRewrite(dir string, manifest *Manifest) (*os.File, int, error) {
 	return openFile, creations, nil
 }
 
-func (m *Manifest) asChanges() []*pb.ManifestChange {
-	manifestChanges := make([]*pb.ManifestChange, 0, len(m.Tables))
-	for id, tm := range m.Tables {
-		manifestChanges = append(manifestChanges, m.newCreateChange(id, int(tm.LevelID), tm.CheckSum))
+func (mf *Manifest) asChanges() []*pb.ManifestChange {
+	manifestChanges := make([]*pb.ManifestChange, 0, len(mf.Tables))
+	for id, tm := range mf.Tables {
+		manifestChanges = append(manifestChanges, mf.newCreateChange(id, int(tm.LevelID), tm.CheckSum))
 	}
 	return manifestChanges
 }
 
-func (m *Manifest) newCreateChange(id uint64, level int, checkSum []byte) *pb.ManifestChange {
+func (mf *Manifest) newCreateChange(id uint64, level int, checkSum []byte) *pb.ManifestChange {
 	return &pb.ManifestChange{
 		Id:       id,
 		Type:     pb.ManifestChange_Create,

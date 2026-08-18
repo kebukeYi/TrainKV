@@ -26,9 +26,9 @@ var compactOptions = &Options{
 	BloomFalsePositive: 0.01,      // 误差率
 	CacheNums:          10 * 1024, //
 
-	ValueThreshold:      1, // 1B; 1 << 20(1MB)
-	ValueLogMaxEntries:  100,               // 1000000
-	ValueLogFileSize:    1 << 29,           // 512MB; 1<<30-1(1GB);
+	ValueThreshold:      1,       // 1B; 1 << 20(1MB)
+	ValueLogMaxEntries:  100,     // 1000000
+	ValueLogFileSize:    1 << 29, // 512MB; 1<<30-1(1GB);
 	ValueLogFileMaxSize: math.MaxUint32,
 	SyncWrites:          false, // 设置 wsl 和 vlogfile 的同步写
 	VerifyValueChecksum: false, // false
@@ -61,6 +61,7 @@ func createEmptyTable(lsm *LSM) *Table {
 	tab, _ := OpenTable(&LevelsManger{opt: &Options{BaseTableSize: compactOptions.BaseTableSize}}, fileName, b)
 	return tab
 }
+
 func TestKeyCompare(t *testing.T) {
 	key1 := model.KeyWithTs([]byte("foo"), uint64(1))
 	key2 := model.KeyWithTs([]byte("fooz"), uint64(1))

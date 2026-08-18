@@ -3,11 +3,10 @@ package lsm
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"math"
 	"os"
-	"sort"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -66,6 +65,33 @@ func OpenTable(lm *LevelsManger, tableName string, builder *sstBuilder) (*Table,
 	return t, nil
 }
 
+// blockKeyPool 复用块内二分探测的 key 拼装缓冲区, 避免每次 Search 重新增长分配;
+var blockKeyPool = sync.Pool{New: func() any { return make([]byte, 0, 64) }}
+
+// searchBlock 在指定块内二分查找 keyTs, 返回其 item (命中) 或 not-found;
+// setIndex 已把 Key 拷贝为独立内存, Value 仍指向共享的缓存块, 由调用方决定是否拷贝;
+func (t *Table) searchBlock(blockIdx int, offsets []*pb.BlockOffset, keyTs []byte) (model.Entry, error) {
+	b, err := t.getBlock(blockIdx, true)
+	if err != nil {
+		return model.Entry{Version: 0}, err
+	}
+	var bi blockIterator
+	bi.key = blockKeyPool.Get().([]byte)
+	bi.setBlock(b)
+	bi.Seek(keyTs)
+	blockKeyPool.Put(bi.key)
+	if !bi.Valid() {
+		return model.Entry{Version: 0}, bi.err
+	}
+	item := bi.Item().Item
+	if model.SameKeyNoTs(keyTs, item.Key) {
+		// Key 已被 setIndex 拷贝; 仅需把 Value 从共享缓存块中拷出;
+		item.Value = model.SafeCopy(nil, item.Value)
+		return item, nil
+	}
+	return model.Entry{Version: 0}, common.ErrKeyNotFound
+}
+
 func (t *Table) Search(keyTs []byte) (entry model.Entry, err error) {
 	t.IncrRef()
 	defer t.DecrRef()
@@ -74,20 +100,34 @@ func (t *Table) Search(keyTs []byte) (entry model.Entry, err error) {
 	if t.sst.HasBloomFilter() && !bloomFilter.MayContainKey(model.ParseKey(keyTs)) {
 		return model.Entry{Version: 0}, common.ErrKeyNotFound
 	}
-	iterator := t.NewTableIterator(&interfaces.Options{IsAsc: true, IsSetCache: true})
-	defer iterator.Close()
-	iterator.Seek(keyTs)
-	if !iterator.Valid() {
-		return model.Entry{Version: 0}, iterator.err
+	// 1. 在 block 索引上二分: 找到第一个 baseKey > keyTs 的 block;
+	//    定位逻辑与 TableIterator.seekFrom 一致, 但不需要构造迭代器;
+	offsets := indexData.GetOffsets()
+	lo, hi := 0, len(offsets)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if model.CompareKeyWithTs(offsets[mid].GetKey(), keyTs) <= 0 {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
 	}
-	// 额外:有可能在迭代器有效的情况下, 返回和keyTs完全不相同的数据key;
-	// 因此需要再判断一次;
-	if model.SameKeyNoTs(keyTs, iterator.Item().Item.Key) {
-		item := iterator.Item().Item
-		safeCopy := item.SafeCopy()
-		return safeCopy, nil
+	blockIdx := lo - 1
+	if blockIdx < 0 {
+		// table 中最小的 key 都大于 keyTs, 仍取第一个 block 检查;
+		blockIdx = 0
 	}
-	return model.Entry{Version: 0}, common.ErrKeyNotFound
+	entry, err = t.searchBlock(blockIdx, offsets, keyTs)
+	if !errors.Is(err, common.ErrBlockEOF) {
+		return entry, err
+	}
+	// 目标 key+ts 可能排序在自身版本所在块的前一块末尾(块边界恰好把同名 key 的
+	// 各版本切开, 且目标版本排序在前), 此时需回退到下一个块; 与 seekFrom 的
+	// ErrBlockEOF 回退逻辑一致;
+	if blockIdx+1 >= len(offsets) {
+		return model.Entry{Version: 0}, common.ErrBlockEOF
+	}
+	return t.searchBlock(blockIdx+1, offsets, keyTs)
 }
 
 func (t *Table) MaxVersion() uint64 {
@@ -107,7 +147,9 @@ func (t *Table) getBlock(idx int, IsSetCache bool) (*block, error) {
 	}
 	var ko pb.BlockOffset
 	isGetBlockOffset := t.getBlockOffset(idx, &ko)
-	common.CondPanic(!isGetBlockOffset, fmt.Errorf("block t.offset id=%d is ouf of range", idx))
+	if !isGetBlockOffset {
+		return nil, common.ErrBlockEOF
+	}
 	b = &block{
 		offset: int(ko.Offset),
 	}
@@ -161,14 +203,10 @@ func (t *Table) indexFIDKey() uint64 {
 	return t.fid
 }
 
-func (t *Table) blockCacheKey(idx int) []byte {
-	common.CondPanic(t.fid >= math.MaxUint32, fmt.Errorf("t.fid >= math.MaxUint32"))
-	common.CondPanic(uint32(idx) >= math.MaxUint32, fmt.Errorf("uint32(idx) >=  math.MaxUint32"))
-	buf := make([]byte, 8)
-	binary.BigEndian.PutUint32(buf[:4], uint32(t.fid))
-	binary.BigEndian.PutUint32(buf[4:], uint32(idx))
-
-	return buf
+func (t *Table) blockCacheKey(idx int) uint64 {
+	common.CondPanicf(t.fid >= math.MaxUint32, "t.fid >= math.MaxUint32")
+	common.CondPanicf(uint32(idx) >= math.MaxUint32, "uint32(idx) >=  math.MaxUint32")
+	return uint64(t.fid)<<32 | uint64(idx)
 }
 
 func (t *Table) Size() int64 { return t.sst.Size() }
@@ -330,18 +368,20 @@ func (tier *TableIterator) seekPrev(key []byte) {
 }
 
 func (tier *TableIterator) seekFrom(key []byte) {
-	var blo pb.BlockOffset
-	blockOffsetLen := len(tier.t.sst.Indexs().GetOffsets())
-	idx := sort.Search(blockOffsetLen, func(index int) bool {
-		getBlockOffset := tier.t.getBlockOffset(index, &blo)
-		common.CondPanic(!getBlockOffset, fmt.Errorf("TableIterator.sort.Search idx < 0 || idx > len(index.GetOffsets()"))
-		if index == blockOffsetLen {
-			return true
+	offsets := tier.t.sst.Indexs().GetOffsets()
+	blockOffsetLen := len(offsets)
+	// 手写二分: 找到第一个 baseKey > key 的 block, 等价于 sort.Search 但避免闭包与每次探测的防御性分配;
+	lo, hi := 0, blockOffsetLen
+	for lo < hi {
+		mid := (lo + hi) / 2
+		blockBaseKey := offsets[mid].GetKey() // block.baseKey, 每个block中的第一个key(最小键);
+		if model.CompareKeyWithTs(blockBaseKey, key) <= 0 {
+			lo = mid + 1
+		} else {
+			hi = mid
 		}
-		blockBaseKey := blo.GetKey() // block.baseKey, 每个block中的第一个key(最小键);
-		compareKeyNoTs := model.CompareKeyWithTs(blockBaseKey, key)
-		return compareKeyNoTs > 0
-	})
+	}
+	idx := lo
 
 	// todo table 寻找相关 block;
 	if idx == 0 { // 说明当前table中最小的key都大于要找的值,间接说明当前table没有这个key;

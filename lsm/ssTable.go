@@ -136,6 +136,10 @@ func (sst *SSTable) Bytes(off, sz int) ([]byte, error) {
 	return sst.file.Bytes(off, sz)
 }
 
+func (sst *SSTable) SyncFile() error {
+	return sst.file.Sync()
+}
+
 func (sst *SSTable) Size() int64 {
 	fileStats, err := sst.file.Fd.Stat()
 	common.Panic(err)

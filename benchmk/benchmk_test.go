@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"math/rand"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -64,6 +65,27 @@ func BenchmarkTrainKVTxnSet(b *testing.B) {
 	txn.Discard()
 }
 
+// BenchmarkTrainKVTxnSetBigValue 大 value(kv 分离)写路径: value 超过 ValueThreshold(1MB) 走 vlog;
+func BenchmarkTrainKVTxnSetBigValue(b *testing.B) {
+	b.ResetTimer()
+	b.ReportAllocs()
+	clearDir(benchMarkDir)
+	train, _, _ := TrainKV.Open(lsm.GetDefaultOpt(benchMarkDir))
+	defer train.Close()
+
+	val := make([]byte, 1<<20+1) // 1MB+1 > ValueThreshold(1MB), 复用同一 value 避免基准侧分配干扰;
+	for i := 0; i < b.N; i++ {
+		key := []byte(fmt.Sprintf("key=%d", i))
+		txn := train.NewTransaction(true)
+		if err := txn.Set(key, val); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := txn.Commit(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkWriteRequest(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -96,6 +118,54 @@ func BenchmarkWriteRequest(b *testing.B) {
 		key = []byte(randStr(18))
 		_, err = txn.Get(key)
 		assert.Error(b, err)
+	}
+}
+
+func BenchmarkTrainKVTxnSetParallel(b *testing.B) {
+	// 并发提交: 多个事务的写请求被 handleWriteCh 攒成一批, 共享一次 fsync (group commit);
+	// 与串行 BenchmarkTrainKVTxnSet 对比, 观察每 op 摊销的刷盘开销;
+	b.ResetTimer()
+	b.ReportAllocs()
+	clearDir(benchMarkDir)
+	train, _, _ := TrainKV.Open(lsm.GetDefaultOpt(benchMarkDir))
+	defer train.Close()
+
+	var counter atomic.Uint64
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			i := counter.Add(1)
+			key := []byte(fmt.Sprintf("key=%d", i))
+			txn := train.NewTransaction(true)
+			if err := txn.Set(key, make([]byte, 128)); err != nil {
+				b.Fatal(err)
+			}
+			if _, err := txn.Commit(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+func BenchmarkTrainKVBatchSet10(b *testing.B) {
+	// API 层攒批: 一个事务 10 条 entry 共享一次 fsync, 观察每 op 摊销的刷盘开销;
+	b.ResetTimer()
+	b.ReportAllocs()
+	clearDir(benchMarkDir)
+	train, _, _ := TrainKV.Open(lsm.GetDefaultOpt(benchMarkDir))
+	defer train.Close()
+
+	for i := 0; i < b.N; i++ {
+		txn := train.NewTransaction(true)
+		for j := 0; j < 10; j++ {
+			key := fmt.Sprintf("key=%d-%d", i, j)
+			val := fmt.Sprintf("val%d-%d", i, j)
+			if err := txn.Set([]byte(key), []byte(val)); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if _, err := txn.Commit(); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

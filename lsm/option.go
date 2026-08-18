@@ -75,7 +75,7 @@ func GetDefaultOpt(dirPath string) *Options {
 		ValueLogMaxEntries:  1000,
 		ValueLogFileSize:    1<<30 - 1,
 		ValueLogFileMaxSize: math.MaxUint32,
-		SyncWrites:          false,
+		SyncWrites:          true,
 		VerifyValueChecksum: false,
 		// vlogGC
 		DiscardStatsCh: nil,

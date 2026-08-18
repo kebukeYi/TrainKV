@@ -13,7 +13,7 @@ import (
 
 type LevelsManger struct {
 	maxFID           atomic.Uint64   // sst 已经分配出去的最大fid,只要创建了 MemoryTable 就算已分配;
-	levelHandlers    []*levelHandler // 每层的处理器
+	levelHandlers    []*LevelHandler // 每层的处理器
 	opt              *Options
 	lsm              *LSM          // 上层引用
 	txnDoneIndex     atomic.Uint64 // 所有已读事务的结束索引;
@@ -22,6 +22,10 @@ type LevelsManger struct {
 	stopCh           chan struct{} // 通知 getTxnDoneIndexFromCh 退出;
 	compactIngStatus *compactIngStatus
 }
+
+// 临时诊断用: 暴露层处理器和表列表;
+func (lm *LevelsManger) GetLevelHandler(i int) *LevelHandler { return lm.levelHandlers[i] }
+func (lm *LevelHandler) GetTables() []*Table                 { return lm.tables }
 
 func (lm *LevelsManger) NextFileID() uint64 {
 	id := lm.maxFID.Add(1)
@@ -71,9 +75,9 @@ func (lm *LevelsManger) loadManifestFile() (err error) {
 }
 
 func (lm *LevelsManger) build() error {
-	lm.levelHandlers = make([]*levelHandler, lm.opt.MaxLevelNum)
+	lm.levelHandlers = make([]*LevelHandler, lm.opt.MaxLevelNum)
 	for i := 0; i < lm.opt.MaxLevelNum; i++ {
-		lm.levelHandlers[i] = &levelHandler{
+		lm.levelHandlers[i] = &LevelHandler{
 			mux:            sync.RWMutex{},
 			levelID:        i,
 			tables:         make([]*Table, 0),
@@ -112,7 +116,7 @@ func (lm *LevelsManger) build() error {
 	return nil
 }
 
-func (lm *LevelsManger) lastLevel() *levelHandler {
+func (lm *LevelsManger) lastLevel() *LevelHandler {
 	return lm.levelHandlers[len(lm.levelHandlers)-1]
 }
 
@@ -133,7 +137,8 @@ func (lm *LevelsManger) Get(keyTs []byte, skipListEntryMaxTs *model.Entry) (mode
 			return l0_entry, nil
 		}
 		if l0_entry.Version > skipListEntryMaxTs.Version {
-			skipListEntryMaxTs = &l0_entry
+			// 直接写回调用方栈上的 entry, 避免 &l0_entry 逃逸分配;
+			*skipListEntryMaxTs = l0_entry
 		}
 	}
 
@@ -144,7 +149,7 @@ func (lm *LevelsManger) Get(keyTs []byte, skipListEntryMaxTs *model.Entry) (mode
 				return lx_entry, nil
 			}
 			if lx_entry.Version > skipListEntryMaxTs.Version {
-				skipListEntryMaxTs = &lx_entry
+				*skipListEntryMaxTs = lx_entry
 			}
 		}
 	}

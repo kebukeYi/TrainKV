@@ -36,8 +36,8 @@ type compactDef struct {
 	compactorId int
 	prior       compactionPriority
 	dst         targets
-	thisLevel   *levelHandler
-	nextLevel   *levelHandler
+	thisLevel   *LevelHandler
+	nextLevel   *LevelHandler
 
 	thisTables []*Table
 	nextTables []*Table

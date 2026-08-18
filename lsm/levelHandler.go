@@ -9,7 +9,7 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/model"
 )
 
-type levelHandler struct {
+type LevelHandler struct {
 	mux            sync.RWMutex
 	levelID        int
 	tables         []*Table
@@ -18,35 +18,35 @@ type levelHandler struct {
 	lm             *LevelsManger // 上层引用;
 }
 
-func (leh *levelHandler) add(r *Table) {
+func (leh *LevelHandler) add(r *Table) {
 	leh.mux.Lock()
 	defer leh.mux.Unlock()
 	leh.tables = append(leh.tables, r)
 }
 
-func (leh *levelHandler) addSize(t *Table) {
+func (leh *LevelHandler) addSize(t *Table) {
 	leh.totalSize += t.Size()
 	leh.totalStaleSize += int64(t.getStaleDataSize())
 }
 
-func (leh *levelHandler) getTotalSize() int64 {
+func (leh *LevelHandler) getTotalSize() int64 {
 	leh.mux.RLock()
 	defer leh.mux.RUnlock()
 	return leh.totalSize
 }
 
-func (leh *levelHandler) subtractSize(t *Table) {
+func (leh *LevelHandler) subtractSize(t *Table) {
 	leh.totalSize -= t.Size()
 	leh.totalStaleSize -= int64(t.getStaleDataSize())
 }
 
-func (leh *levelHandler) numTables() int {
+func (leh *LevelHandler) numTables() int {
 	leh.mux.RLock()
 	defer leh.mux.RUnlock()
 	return len(leh.tables)
 }
 
-func (leh *levelHandler) Get(keyTs []byte) (model.Entry, error) {
+func (leh *LevelHandler) Get(keyTs []byte) (model.Entry, error) {
 	// 如果是第0层查询,则需要全部table进行逆序查询;
 	if leh.levelID == 0 {
 		return leh.searchL0SST(keyTs)
@@ -54,7 +54,7 @@ func (leh *levelHandler) Get(keyTs []byte) (model.Entry, error) {
 	return leh.searchLnSST(keyTs)
 }
 
-func (leh *levelHandler) searchL0SST(keyTs []byte) (model.Entry, error) {
+func (leh *LevelHandler) searchL0SST(keyTs []byte) (model.Entry, error) {
 	// [old,1,2,3,4,5,6,7,8,new...]
 	leh.mux.RLock()
 	tables := make([]*Table, len(leh.tables))
@@ -87,7 +87,7 @@ func (leh *levelHandler) searchL0SST(keyTs []byte) (model.Entry, error) {
 	return maxEntry, nil
 }
 
-func (leh *levelHandler) searchLnSST(keyTs []byte) (model.Entry, error) {
+func (leh *LevelHandler) searchLnSST(keyTs []byte) (model.Entry, error) {
 	leh.mux.RLock()
 	tbl := leh.getTable(keyTs) // getTable 仅允许在 RLock 下调用;
 	if tbl == nil {
@@ -113,24 +113,29 @@ func (leh *levelHandler) searchLnSST(keyTs []byte) (model.Entry, error) {
 }
 
 // 默认从 首部 开始查询, 找到第一个最大值 大于等于 key的 sst, 除了l0层之外, 其他层的 Table 都是递增规律;
-func (leh *levelHandler) getTable(key []byte) *Table {
-	idx := sort.Search(len(leh.tables), func(i int) bool {
-		maxKey := leh.tables[i].sst.MaxKey()
-		cmp := model.CompareKeyWithTs(maxKey, key)
-		return cmp >= 0
-	})
-	if idx >= len(leh.tables) {
+func (leh *LevelHandler) getTable(key []byte) *Table {
+	// 手写二分, 避免 sort.Search 闭包在每次 Get 时分配;
+	lo, hi := 0, len(leh.tables)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if model.CompareKeyWithTs(leh.tables[mid].sst.MaxKey(), key) < 0 {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	if lo >= len(leh.tables) {
 		return nil
 	}
-	tbl := leh.tables[idx]
+	tbl := leh.tables[lo]
 	return tbl
 }
 
-func (leh *levelHandler) isLastLevel() bool {
+func (leh *LevelHandler) isLastLevel() bool {
 	return leh.levelID == leh.lm.lsm.Option.MaxLevelNum-1
 }
 
-func (leh *levelHandler) Sort() {
+func (leh *LevelHandler) Sort() {
 	leh.mux.Lock()
 	defer leh.mux.Unlock()
 	if leh.levelID == 0 {
@@ -147,7 +152,7 @@ func (leh *levelHandler) Sort() {
 type levelHandlerRLocked struct{}
 
 // 在本层所有的 Table 中找到涉及到给定的 kr 区间的 right,left左右边界;
-func (leh *levelHandler) findOverLappingTables(_ levelHandlerRLocked, kr keyRange) (lIndex int, rIndex int) {
+func (leh *LevelHandler) findOverLappingTables(_ levelHandlerRLocked, kr keyRange) (lIndex int, rIndex int) {
 	if len(kr.left) == 0 || len(kr.right) == 0 {
 		return 0, 0
 	}
@@ -160,7 +165,7 @@ func (leh *levelHandler) findOverLappingTables(_ levelHandlerRLocked, kr keyRang
 	return left, right
 }
 
-func (leh *levelHandler) updateTable(toDel, toAdd []*Table) error {
+func (leh *LevelHandler) updateTable(toDel, toAdd []*Table) error {
 	leh.mux.Lock()
 	defer leh.mux.Unlock()
 	toDelMap := make(map[uint64]bool, len(toDel))
@@ -190,7 +195,7 @@ func (leh *levelHandler) updateTable(toDel, toAdd []*Table) error {
 	return decrRefs(toDel)
 }
 
-func (leh *levelHandler) deleteTable(toDel []*Table) error {
+func (leh *LevelHandler) deleteTable(toDel []*Table) error {
 	leh.mux.Lock()
 	defer leh.mux.Unlock()
 	toDelMap := make(map[uint64]bool, len(toDel))
@@ -212,7 +217,7 @@ func (leh *levelHandler) deleteTable(toDel []*Table) error {
 	return decrRefs(toDel)
 }
 
-func (leh *levelHandler) iterators(opt *interfaces.Options) []interfaces.Iterator {
+func (leh *LevelHandler) iterators(opt *interfaces.Options) []interfaces.Iterator {
 	leh.mux.RLock()
 	defer leh.mux.RUnlock()
 	if leh.levelID == 0 {
@@ -224,7 +229,7 @@ func (leh *levelHandler) iterators(opt *interfaces.Options) []interfaces.Iterato
 	return []interfaces.Iterator{NewConcatIterator(leh.tables, opt)}
 }
 
-func (leh *levelHandler) close() error {
+func (leh *LevelHandler) close() error {
 	for i := range leh.tables {
 		if err := leh.tables[i].sst.Close(); err != nil {
 			return err

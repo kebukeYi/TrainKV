@@ -2,12 +2,13 @@ package file
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainKV/v2/common"
-	"github.com/kebukeYi/TrainKV/v2/mmap"
-	"github.com/pkg/errors"
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/kebukeYi/TrainKV/v2/common"
+	"github.com/kebukeYi/TrainKV/v2/mmap"
+	"github.com/pkg/errors"
 )
 
 type MmapFile struct {
@@ -36,7 +37,6 @@ func OpenMmapFile(fileName string, flag int, maxSz int32) (*MmapFile, error) {
 			return nil, errors.Wrapf(err, "error while truncation")
 		}
 		fileSize = int64(maxSz)
-		err = errors.New("Create a new file")
 	}
 	buf, err := mmap.Mmap(fd, writable, fileSize) // Mmap up to file size.
 	if err != nil {
@@ -77,6 +77,18 @@ func (m *MmapFile) Sync() error {
 		return nil
 	}
 	return mmap.Msync(m.Buf)
+}
+
+// SyncRange 只同步映射区 [0, n) 内的脏页; 文件通常被预分配到较大尺寸,
+// 整区 msync 需要遍历大量干净页表项, 按已写入长度同步可显著降低延迟;
+func (m *MmapFile) SyncRange(n uint32) error {
+	if m == nil || n == 0 {
+		return nil
+	}
+	if int64(n) > int64(len(m.Buf)) {
+		n = uint32(len(m.Buf))
+	}
+	return mmap.Msync(m.Buf[:n])
 }
 
 func (m *MmapFile) Bytes(off, sz int) ([]byte, error) {

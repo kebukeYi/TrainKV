@@ -16,14 +16,13 @@ import (
 )
 
 type TrainKV struct {
-	Mux                sync.Mutex
 	Lsm                *lsm.LSM
 	vlog               *ValueLog
 	fileLock           *flock.Flock
 	Opt                *lsm.Options
 	transactionManager *TransactionManager
+	txnPool            sync.Pool
 	writeCh            chan *model.Request
-	blockWrites        int32
 	VlogReplayHead     model.ValuePtr
 	logRotates         int32
 	Closer             closer
@@ -44,11 +43,14 @@ func Open(opt *lsm.Options) (*TrainKV, error, func() error) {
 	}
 	callBack, _ := lsm.CheckOpt(opt)
 	db := &TrainKV{Opt: opt}
+	db.txnPool.New = func() interface{} {
+		return &Transaction{}
+	}
 	join := filepath.Join(opt.WorkDir, common.LockFile)
 	fileLock := flock.New(join)
 	db.fileLock = fileLock
-	err := fileLock.Lock()
-	if err != nil {
+	hold, err := fileLock.TryLock()
+	if err != nil || !hold {
 		return nil, common.ErrLockDB, callBack
 	}
 	db.isClosed.Store(false)
@@ -194,9 +196,9 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 	blockChan := make(chan struct{}, 1) //限制:每次只允许一个协程去写数据;
 
 	writeRequest := func(reqs []*model.Request) {
-		if err := db.WriteRequest(reqs); err != nil {
-			common.Panic(err)
-		}
+		// WriteRequest 内部已通过 done(err) 把错误投递给批次中每个请求的提交方;
+		// 这里不能 panic, 否则一次轮转等失败会直接杀死整个进程;
+		common.Err(db.WriteRequest(reqs))
 		<-blockChan
 	}
 
@@ -218,35 +220,31 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 			reqs = append(reqs, r)
 			reqLen = int64(len(reqs))
 
-			if reqLen >= 3*common.KVWriteChRequestCapacity {
-				blockChan <- struct{}{}
-				go writeRequest(reqs)
-				reqs = make([]*model.Request, 0, 10)
-				reqLen = 0
-			}
-
-			select {
-			case r = <-db.writeCh:
-				reqs = append(reqs, r)
-				reqLen = int64(len(reqs))
-			case blockChan <- struct{}{}:
-				go writeRequest(reqs)
-				reqs = make([]*model.Request, 0, 10)
-				reqLen = 0
-			case <-closer.CloseSignal:
-				for {
-					select {
-					case r = <-db.writeCh:
-						reqs = append(reqs, r)
-					default: // db.writeCh 中没有更多数据, 执行 default 分支;
-						blockChan <- struct{}{}
-						writeRequest(reqs)
-						return
-					}
+			// 只要通道里还有请求就继续攒批, 攒满阈值或通道排空后, 立即把当前批次交给写协程;
+			// 批次交出去之前绝不回到外层 select, 否则已攒批次会被搁置在 reqs 中,
+			// 只有等到下一个请求到来才有机会被处理;
+			collected := true
+			for collected && reqLen < common.WriteChBatchThreshold {
+				select {
+				case r = <-db.writeCh:
+					reqs = append(reqs, r)
+					reqLen = int64(len(reqs))
+				default: // db.writeCh 中没有更多数据, 执行 default 分支;
+					collected = false
 				}
-				// default:
-				// 隐形bug: 只有新请求到来时才有机会检查是否可以写当前批次;
 			}
+			// 令牌空闲时直接在本协程写盘: 串行提交场景下每批省去一个写协程的创建与调度;
+			// 令牌被占用时(上一批仍在写), 才派发协程排队写, 本协程继续攒批;
+			select {
+			case blockChan <- struct{}{}:
+				common.Err(db.WriteRequest(reqs))
+				<-blockChan
+				reqs = reqs[:0] // 复用批次切片底层数组;
+			default:
+				go writeRequest(reqs)
+				reqs = make([]*model.Request, 0, 10)
+			}
+			reqLen = 0
 		}
 	} // for over
 }
@@ -268,27 +266,35 @@ func (db *TrainKV) WriteRequest(reqs []*model.Request) error {
 		}
 	}
 
-	if err := db.vlog.Write(reqs); err != nil {
+	wrote, err := db.vlog.Write(reqs)
+	if err != nil {
 		done(err)
 		return err
 	}
 
-	var count int
+	// 先同步 vlog, 保证 WAL 中 ValuePtr 指向的 value 已持久化; 再写 WAL 并同步;
+	if db.Lsm.Option.SyncWrites && wrote {
+		if err = db.vlog.Sync(); err != nil {
+			done(err)
+			return errors.Wrap(err, "#WriteRequest.vlog.Sync()")
+		}
+	}
+
 	for _, req := range reqs {
 		if len(req.Entries) == 0 {
 			continue
 		}
-		count += len(req.Entries)
-		if err := db.writeToLSM(req); err != nil {
+		if err = db.writeToLSM(req); err != nil {
 			done(err)
 			return errors.Wrap(err, "#WriteRequest.writeToLSM()")
 		}
 	}
 
-	if count >= 100 && db.Lsm.Option.SyncWrites {
-		// 批量写入后  wal 进行刷盘, 或者手动开启 每次落盘;
-		if err := db.Lsm.SyncWalFile(); err != nil {
-			return err
+	if db.Lsm.Option.SyncWrites {
+		// 每次批量写入后统一刷盘一次, 提交方会在 Wg.Done 之后才返回;
+		if err = db.Lsm.SyncWalFile(); err != nil {
+			done(err)
+			return errors.Wrap(err, "#WriteRequest.SyncWalFile()")
 		}
 	}
 
@@ -306,7 +312,8 @@ func (db *TrainKV) writeToLSM(req *model.Request) error {
 			entry.Meta &= ^(common.BitValuePointer)
 		} else {
 			entry.Meta |= common.BitValuePointer
-			entry.Value = req.ValPtr[i].Encode()
+			// 写入请求级复用缓冲, 避免每条目分配 12B; lsm.Put 同步拷贝后即可覆写;
+			entry.Value = req.EncodeValPtr(req.ValPtr[i])
 		}
 		// 确保写入的 entry 是安全的;
 		if err := db.Lsm.Put(entry); err != nil {
@@ -455,7 +462,7 @@ func (txnIter *TxnIterator) Item() interfaces.Item {
 		// ③ 事务自己的 pending 写覆盖(读己之写 + 与 LSM 版本冲突时取 pending)
 		raw := model.ParseKey(entry.Key)
 		if txnIter.txn.update && txnIter.txn.pendingKeys != nil {
-			if pe, ok := txnIter.txn.pendingKeys[string(raw)]; ok {
+			if pe, ok := txnIter.txn.pendingKeys[utils.MemHash(raw)]; ok && bytes.Equal(pe.Key, raw) {
 				entry.Key = model.KeyWithTs(pe.Key, txnIter.txn.startTs)
 				entry.Version = txnIter.txn.startTs
 			}

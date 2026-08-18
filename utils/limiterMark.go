@@ -1,30 +1,52 @@
 package utils
 
 import (
-	"container/heap"
 	"context"
 	"sync/atomic"
 )
 
-type minHeap []uint64
+// u64Heap 手写的最小堆; container/heap 的 Push/Pop 走 interface{},
+// 每个元素都会装箱逃逸分配, 提交热路径上每条记录 2-3 次;
+type u64Heap []uint64
 
-func (h minHeap) Len() int {
-	return len(h)
+func (h *u64Heap) push(x uint64) {
+	*h = append(*h, x)
+	i := len(*h) - 1
+	for i > 0 {
+		parent := (i - 1) / 2
+		if (*h)[parent] <= (*h)[i] {
+			break
+		}
+		(*h)[parent], (*h)[i] = (*h)[i], (*h)[parent]
+		i = parent
+	}
 }
-func (h minHeap) Less(i, j int) bool {
-	return h[i] < h[j]
-}
-func (h minHeap) Swap(i, j int) {
-	h[i], h[j] = h[j], h[i]
-}
-func (h *minHeap) Push(x interface{}) {
-	*h = append(*h, x.(uint64))
-}
-func (h *minHeap) Pop() interface{} {
+
+func (h *u64Heap) pop() uint64 {
 	old := *h
 	n := len(old)
-	ret := old[n-1]
-	*h = old[0 : n-1]
+	ret := old[0]
+	last := old[n-1]
+	*h = old[:n-1]
+	if n > 1 {
+		(*h)[0] = last
+		i := 0
+		for {
+			l, r := 2*i+1, 2*i+2
+			smallest := i
+			if l < len(*h) && (*h)[l] < (*h)[smallest] {
+				smallest = l
+			}
+			if r < len(*h) && (*h)[r] < (*h)[smallest] {
+				smallest = r
+			}
+			if smallest == i {
+				break
+			}
+			(*h)[i], (*h)[smallest] = (*h)[smallest], (*h)[i]
+			i = smallest
+		}
+	}
 	return ret
 }
 
@@ -97,8 +119,7 @@ func (lm *LimitMark) WaitForIndexDone(ctx context.Context, index uint64) error {
 func (lm *LimitMark) processOn(closer *Closer, doneIndexCh chan uint64) {
 	defer closer.Done()
 
-	var minHeap minHeap
-	heap.Init(&minHeap)
+	var minHeap u64Heap
 
 	// 每个 index 的 begin 数减 done 数;
 	// < index, dones >
@@ -110,7 +131,7 @@ func (lm *LimitMark) processOn(closer *Closer, doneIndexCh chan uint64) {
 		// 1. 维护更新每个水位的跟踪值;
 		prev, ok := indexDoneNum[index]
 		if !ok {
-			heap.Push(&minHeap, index)
+			minHeap.push(index)
 		}
 		delta := 1 // 默认是 begin, done = false,所以是 +1;
 		if done {
@@ -136,7 +157,7 @@ func (lm *LimitMark) processOn(closer *Closer, doneIndexCh chan uint64) {
 				break
 			}
 			// dones<=0
-			heap.Pop(&minHeap)
+			minHeap.pop()
 			delete(indexDoneNum, minIndex)
 			curIndex = minIndex
 			loops++

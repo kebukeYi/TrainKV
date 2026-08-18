@@ -31,7 +31,9 @@ func (vlog *VLogFile) Open(opt *utils.FileOptions) error {
 	vlog.FID = uint32(opt.FID)
 	vlog.Lock = sync.RWMutex{}
 	vlog.f, err = file.OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
-	common.Panic(err)
+	if err != nil {
+		return errors.Wrapf(err, "Unable to open mmap file: %q", opt.FileName)
+	}
 	info, err := vlog.f.Fd.Stat()
 	if err != nil {
 		return common.WarpErr("#Open Unable to run VLogFile.Stat", err)
@@ -56,7 +58,8 @@ func (vlog *VLogFile) Read(vptr *model.ValuePtr) (buf []byte, err error) {
 
 func (vlog *VLogFile) DoneWriting(offset uint32) error {
 	if vlog.opt.SyncWrites {
-		if err := vlog.f.Sync(); err != nil {
+		// vlog 文件被预分配到 MaxSz, 只同步即将截断保留的 [0, offset) 区间;
+		if err := vlog.f.SyncRange(offset); err != nil {
 			return errors.Wrapf(err, "Unable to sync value log: %q", vlog.FileName())
 		}
 	}
@@ -120,7 +123,7 @@ func (vlog *VLogFile) FD() *os.File {
 
 // Sync You must hold lf.lock to sync()
 func (vlog *VLogFile) Sync() error {
-	return vlog.f.Sync()
+	return vlog.f.SyncRange(atomic.LoadUint32(&vlog.size))
 }
 
 func (vlog *VLogFile) Close() error {
@@ -140,20 +143,19 @@ func (vlog *VLogFile) EncodeEntry(entry *model.Entry, out *bytes.Buffer) (int, e
 		Meta:      entry.Meta,
 	}
 
-	hash := crc32.New(common.CastigationCryTable)
-	writer := io.MultiWriter(out, hash)
-
 	var headerBuf [common.MaxHeaderSize]byte
 	encodeLen := header.Encode(headerBuf[:])
-	common.Panic2(writer.Write(headerBuf[:encodeLen]))
-	common.Panic2(writer.Write(entry.Key))
-	common.Panic2(writer.Write(entry.Value))
+	start := out.Len()
+	out.Write(headerBuf[:encodeLen])
+	out.Write(entry.Key)
+	out.Write(entry.Value)
 
+	// 一次性对已编码字节算 crc; 若走 hash.Hash 接口逐段 Write, headerBuf 等会经接口逃逸到堆;
 	var crcBuf [crc32.Size]byte
-	binary.BigEndian.PutUint32(crcBuf[:], hash.Sum32())
-	common.Panic2(writer.Write(crcBuf[:]))
+	binary.BigEndian.PutUint32(crcBuf[:], crc32.Checksum(out.Bytes()[start:], common.CastigationCryTable))
+	out.Write(crcBuf[:])
 
-	return len(headerBuf[:encodeLen]) + len(entry.Key) + len(entry.Value) + len(crcBuf[:]), nil
+	return encodeLen + len(entry.Key) + len(entry.Value) + len(crcBuf), nil
 }
 
 func (vlog *VLogFile) DecodeEntry(buf []byte, offset uint32) (*model.Entry, error) {

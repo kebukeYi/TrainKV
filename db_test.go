@@ -195,6 +195,7 @@ func TestDBBatchOperations(t *testing.T) {
 	assert.NoError(t, err)
 
 	txn1 := db.NewTransaction(false)
+	defer txn1.Discard()
 	// 验证所有条目都被正确设置
 	for i := 0; i < 10; i++ {
 		key := []byte(fmt.Sprintf("batch-key-%d", i))
@@ -202,7 +203,6 @@ func TestDBBatchOperations(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotNil(t, entry)
 		assert.Equal(t, fmt.Sprintf("batch-value-%d", i), string(entry.Value))
-		txn.Discard()
 	}
 }
 
@@ -316,10 +316,9 @@ func TestDBValueLogGC(t *testing.T) {
 
 	// 尝试运行值日志GC
 	err = db.RunValueLogGC(0.5) // 50%的废弃比例
-	// GC可能不会立即运行，这取决于实际的废弃比例
-	// 我们只验证它不会返回错误
+	// 本用例没有任何删除/覆盖写, 废弃比例为 0, GC 无可清理, 返回 ErrNoRewrite 属于预期;
 	if err != nil {
-		assert.Equal(t, "cannot run vlog garbage collection because the vlog is not opened", err.Error())
+		assert.Equal(t, common.ErrNoRewrite.Error(), err.Error())
 	}
 }
 

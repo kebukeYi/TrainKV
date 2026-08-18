@@ -2,12 +2,13 @@ package lsm
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainKV/v2/model"
-	"github.com/kebukeYi/TrainKV/v2/utils"
 	"math/rand"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/kebukeYi/TrainKV/v2/model"
+	"github.com/kebukeYi/TrainKV/v2/utils"
 )
 
 var walTestPath = "/usr/golanddata/trainkv/wal"
@@ -34,6 +35,7 @@ func getDefaultFileOpt(walFilePath string) *utils.FileOptions {
 	}
 	return options
 }
+
 func TestWAL_WalDecode(t *testing.T) {
 	walFilePath := filepath.Join(walTestPath, "0.00005.wal")
 	w := OpenWalFile(getDefaultFileOpt(walFilePath))

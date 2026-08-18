@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"sort"
 	"strconv"
 	"unsafe"
 
@@ -225,6 +224,10 @@ func (ssb *sstBuilder) flush(lm *LevelsManger, tableName string) (t *Table, err 
 	}
 	// copy 之前 文件建立好了, 但是数据还没复制完毕, 宕机了; 怎么办?
 	copy(mmapBuf, buf)
+	err = t.sst.SyncFile()
+	if err != nil {
+		return nil, err
+	}
 	return t, nil
 }
 
@@ -383,33 +386,36 @@ func (itr *blockIterator) seekToLast() {
 }
 func (itr *blockIterator) Seek(key []byte) {
 	itr.err = nil
-	startIndex := 0
-	// 成立的话 往左走, 否则向右走;
-	findEntryIndex := sort.Search(len(itr.entryOffsets), func(idx int) bool {
-		if idx < startIndex {
-			return false
+	// 手写二分, 避免 sort.Search 闭包分配; 探测阶段只解码 key 不拷贝;
+	lo, hi := 0, len(itr.entryOffsets)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		itr.loadIndex(mid)
+		if model.CompareKeyWithTs(itr.key, key) < 0 {
+			lo = mid + 1
+		} else {
+			hi = mid
 		}
-		itr.setIndex(idx)
-		// todo block 寻找 key
-		cmp := model.CompareKeyWithTs(itr.key, key)
-		return cmp >= 0
-	})
+	}
 	// idx = 0 有可能也是不存在值的;(例如寻找最小不存在的值);
-	itr.setIndex(findEntryIndex)
+	itr.setIndex(lo)
 }
-func (itr *blockIterator) setIndex(idx int) {
+
+// loadIndex 解码第 idx 个 entry 的 key 到 itr.key, 不构造 Item、不做拷贝;
+// 二分探测阶段只关心 key 大小关系, 拷贝留到最终的 setIndex;
+func (itr *blockIterator) loadIndex(idx int) (entryData []byte, header entryHeader) {
 	itr.idx = idx // v2.0
 	if idx >= len(itr.entryOffsets) || idx < 0 {
 		itr.err = common.ErrBlockEOF
-		return
+		return nil, header
 	}
 	itr.err = nil
 	// 找到entry data区域;
 	startOffset := int(itr.entryOffsets[idx])
 	if len(itr.baseKey) == 0 { // 说明当前 block 没有重叠key, 因此直接获得不同的key区间
-		var header entryHeader
-		header.decode(itr.data)
-		itr.baseKey = itr.data[headerSize : headerSize+header.dif]
+		var baseHeader entryHeader
+		baseHeader.decode(itr.data)
+		itr.baseKey = itr.data[headerSize : headerSize+baseHeader.dif]
 	}
 	var endOffset int
 	if idx+1 == len(itr.entryOffsets) {
@@ -418,8 +424,7 @@ func (itr *blockIterator) setIndex(idx int) {
 		endOffset = int(itr.entryOffsets[itr.idx+1])
 	}
 
-	entryData := itr.data[startOffset:endOffset]
-	var header entryHeader
+	entryData = itr.data[startOffset:endOffset]
 	header.decode(entryData)
 	// 设置 key 重叠区间;
 	if header.overlap > itr.prevOverlap {
@@ -429,9 +434,18 @@ func (itr *blockIterator) setIndex(idx int) {
 	valueOffset := headerSize + header.dif
 	diffKey := entryData[headerSize:valueOffset]
 	itr.key = append(itr.key[:header.overlap], diffKey...)
+	return entryData, header
+}
+
+func (itr *blockIterator) setIndex(idx int) {
+	entryData, header := itr.loadIndex(idx)
+	if itr.err != nil {
+		return
+	}
+	valueOffset := headerSize + header.dif
 	eny := model.Entry{}
 	eny.Key = model.SafeCopy(eny.Key, itr.key)
-	val := &model.ValueExt{}
+	var val model.ValueExt
 	val.DecodeVal(entryData[valueOffset:])
 	itr.val = val.Value
 	eny.Value = itr.val

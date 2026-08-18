@@ -1,10 +1,10 @@
 package benchmk
 
 import (
-	"bytes"
 	"fmt"
 	"math/rand"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -14,16 +14,21 @@ func init() {
 	rand.Seed(time.Now().Unix())
 }
 
+var keyPrefix = []byte("test_key_")
+
 func GetKey(n int) []byte {
-	return []byte("test_key_" + fmt.Sprintf("%09d", n))
+	// 预分配容量, 一次分配完成 key 拼装, 避免 fmt.Sprintf 的多次分配污染基准数据;
+	key := make([]byte, 0, len(keyPrefix)+9)
+	key = append(key, keyPrefix...)
+	return strconv.AppendInt(key, int64(n), 10)
 }
 
 func GetValue() []byte {
-	var str bytes.Buffer
+	val := make([]byte, 0, 512)
 	for i := 0; i < 512; i++ {
-		str.WriteByte(alphabet[rand.Int()%36])
+		val = append(val, alphabet[rand.Int()%36])
 	}
-	return []byte(str.String())
+	return val
 }
 
 func ClearDir(dir string) {

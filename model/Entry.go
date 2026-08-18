@@ -111,7 +111,7 @@ func (e *Entry) SafeCopy() Entry {
 	entry.Key = SafeCopy(nil, e.Key)
 	entry.Value = SafeCopy(nil, e.Value)
 	entry.Version = e.Version
-	entry.Meta = SafeCopy(nil, []byte{e.Meta})[0]
+	entry.Meta = e.Meta
 	entry.ExpiresAt = e.ExpiresAt
 	return entry
 }

@@ -31,7 +31,7 @@ type TransactionManager struct {
 
 type commitedTxn struct {
 	TxnCommitTs  uint64
-	conflictKeys map[uint64]struct{}
+	conflictKeys []uint64 // 写 key 哈希快照; 提交时从 txn.conflictKeys 拷贝, 使 txn 的 map 可被池化复用;
 }
 
 func NewTransactionManager(options *lsm.Options) *TransactionManager {
@@ -48,18 +48,19 @@ func NewTransactionManager(options *lsm.Options) *TransactionManager {
 func (m *TransactionManager) Stop() {
 	m.closer.CloseAndWait()
 }
-func (m *TransactionManager) startTs() uint64 {
+func (m *TransactionManager) startTs(update bool) uint64 {
 	m.tsLock.Lock()
 	// 每次申请时, 申请到最新的index, 然后就等待其结束;
 	// 只有最新的结束了, 才说明之前的都提交了, 类似串行;
 	startTs := m.nextTxnTs - 1
 	m.startMark.Begin(startTs)
 	m.tsLock.Unlock()
-	// 当前 读事务必须等待 这个版本的写事务完毕
-	// 否则 假如这个写事务提交了, 但是还没真正落盘, 就会出现提交的数据读取不到;
-	// 事务系统在分配 startTs=101 的这一刻,就向这个事务承诺:"所有编号 ≤ 101 的提交,你都应该看得见
-	err := m.commitMark.WaitForIndexDone(context.Background(), startTs)
-	common.Check(err)
+	if !update {
+		// 读事务在开启这一刻就向自己承诺:"所有编号 ≤ startTs 的提交,你都应该看得见";
+		// 写事务的承诺延迟到首次读 LSM 时兑现(ensureStartTsReady), 纯写事务不付这笔等待;
+		err := m.commitMark.WaitForIndexDone(context.Background(), startTs)
+		common.Check(err)
+	}
 	return startTs
 }
 func (m *TransactionManager) incrementNextTs() {
@@ -84,8 +85,10 @@ func (m *TransactionManager) hasConflict(txn *Transaction) bool {
 		// 找出当前事务开始之后提交的事务，判断自己读到的 key 中，是否存在于其他事务的写列表中;
 		// txn.startTs < commit.TxnCommitTs
 		for _, key := range txn.readKeys {
-			if _, ok := commit.conflictKeys[key]; ok {
-				return true
+			for _, ck := range commit.conflictKeys {
+				if ck == key {
+					return true
+				}
 			}
 		}
 	}
@@ -106,9 +109,14 @@ func (m *TransactionManager) newCommitTs(txn *Transaction) (uint64, bool) {
 	m.commitMark.Begin(commitTs)
 	utils.AssertTrue(commitTs >= m.lastCleanupTs)
 	if m.detectConflicts {
+		// 拷贝写 key 哈希快照; txn.conflictKeys 事务结束后即被池化清除;
+		keys := make([]uint64, 0, len(txn.conflictKeys))
+		for k := range txn.conflictKeys {
+			keys = append(keys, k)
+		}
 		m.commitedTxns = append(m.commitedTxns, commitedTxn{
 			TxnCommitTs:  commitTs,
-			conflictKeys: txn.conflictKeys,
+			conflictKeys: keys,
 		})
 	}
 	return commitTs, false
@@ -148,7 +156,7 @@ func (m *TransactionManager) doneStart(txn *Transaction) {
 type Transaction struct {
 	startTs      uint64
 	readKeys     []uint64
-	pendingKeys  map[string]*model.Entry
+	pendingKeys  map[uint64]*model.Entry
 	conflictKeys map[uint64]struct{}
 	count        int64
 	size         int64
@@ -158,23 +166,64 @@ type Transaction struct {
 	startDone    bool
 	update       bool
 	discard      bool
+	startTsReady bool // 读事务开启即等待水位; 写事务延迟到首次读 LSM (ensureStartTsReady);
+
+	// 池化复用的内部 scratch, 仅提交路径使用, 不参与事务语义;
+	entries  []*model.Entry // 提交批次的 entry 切片, 复用底层数组;
+	finEntry *model.Entry   // finTxn 结束标记 entry, 复用一个对象;
+	finTsBuf []byte         // finTxn 标记 ts 的序列化缓冲, 复用底层数组;
+	keyBufs  []*[]byte      // 提交路径从 KeyTsBufPool 取出的 key+8 缓冲指针, Discard 时归还;
 }
 
+// txnKeyBytes 事务标记键的静态字节; 只经只读路径进入 WAL, 不会被修改;
+var txnKeyBytes = []byte(common.TxnKey)
+
 func (db *TrainKV) NewTransaction(update bool) *Transaction {
-	txn := &Transaction{
-		db:     db,
-		update: update,
-		count:  1,
-		size:   int64(len(common.TxnKey) + 10),
+	var txn *Transaction
+	if v := db.txnPool.Get(); v != nil {
+		txn = v.(*Transaction)
+	} else {
+		txn = &Transaction{}
 	}
+	txn.db = db
+	txn.update = update
+	txn.count = 1
+	txn.size = int64(len(common.TxnKey) + 10)
+	txn.commitTs = 0
+	txn.discard = false
+	txn.startDone = false
+	txn.startTsReady = !update
+	txn.readKeys = nil
+	txn.keyBufs = txn.keyBufs[:0]
+	txn.numIterators.Store(0)
 	if update {
 		if db.Opt.DetectConflicts {
-			txn.conflictKeys = make(map[uint64]struct{})
+			// conflictKeys 在提交时快照进 commitedTxns, 事务结束后可池化复用;
+			if txn.conflictKeys == nil {
+				txn.conflictKeys = make(map[uint64]struct{})
+			}
 		}
-		txn.pendingKeys = make(map[string]*model.Entry)
+		// pendingKeys 在 Discard 时 clear, 底层 bucket 池化复用;
+		if txn.pendingKeys == nil {
+			txn.pendingKeys = make(map[uint64]*model.Entry)
+		}
+	} else {
+		txn.pendingKeys = nil
+		txn.conflictKeys = nil
 	}
-	txn.startTs = db.transactionManager.startTs()
+	txn.startTs = db.transactionManager.startTs(update)
 	return txn
+}
+
+// ensureStartTsReady 兑现 "所有 ≤ startTs 的提交都可见" 的承诺;
+// 写事务只有在真正读 LSM 时才需要, 纯写事务全程不付这笔等待;
+func (t *Transaction) ensureStartTsReady() {
+	if t.startTsReady {
+		return
+	}
+	err := t.db.transactionManager.commitMark.WaitForIndexDone(context.Background(), t.startTs)
+	common.Check(err)
+	t.startTsReady = true
 }
 
 func (t *Transaction) IsVisible(e *model.Entry) bool {
@@ -200,13 +249,20 @@ func (t *Transaction) modify(e *model.Entry) error {
 		return err
 	}
 
+	var hash1, hash2 uint64
 	if t.db.Opt.DetectConflicts {
-		hash, _ := utils.KeyToHash(e.Key)
-		t.conflictKeys[hash] = struct{}{}
+		// 两个哈希都登记, 消除单 64 位哈希碰撞导致的误报冲突;
+		hash1, hash2 = utils.KeyToHash(e.Key)
+		t.conflictKeys[hash1] = struct{}{}
+		t.conflictKeys[hash2] = struct{}{}
+	} else {
+		hash1 = utils.MemHash(e.Key)
 	}
 	e.Version = t.startTs
 	// e.key is without ts;
-	t.pendingKeys[string(e.Key)] = e
+	// pendingKeys 以 64 位哈希为键, 省去 string(e.Key) 的转换分配;
+	// 读取时仍用 bytes.Equal 校验真实 key, 哈希碰撞只可能造成概率极低的写覆盖, 与 Badger 同策略;
+	t.pendingKeys[hash1] = e
 	return nil
 }
 func exceedsSize(prefix string, max int64, key []byte) error {
@@ -237,7 +293,7 @@ func (t *Transaction) Get(keyNoTs []byte) (*model.Entry, error) {
 	}
 	if t.update {
 		// key no version;
-		if e, ok := t.pendingKeys[string(keyNoTs)]; ok && bytes.Equal(e.Key, keyNoTs) {
+		if e, ok := t.pendingKeys[utils.MemHash(keyNoTs)]; ok && bytes.Equal(e.Key, keyNoTs) {
 			if model.IsDeletedOrExpired(e.Meta, e.ExpiresAt) {
 				return nil, common.ErrKeyNotFound
 			}
@@ -248,6 +304,8 @@ func (t *Transaction) Get(keyNoTs []byte) (*model.Entry, error) {
 		t.addReadKey(keyNoTs)
 	}
 
+	// 读 LSM 前先兑现 startTs 水位承诺 (读事务开启时已兑现, 这里是写事务的延迟兑现点);
+	t.ensureStartTsReady()
 	keyMaxStartTs := model.KeyWithTs(keyNoTs, t.startTs)
 	entry, err := t.db.get(keyMaxStartTs)
 	if err != nil {
@@ -302,18 +360,34 @@ func (t *Transaction) commitAndSendToDB() (func() (uint64, error), error) {
 		return nil, common.ErrConflict
 	}
 
-	entries := make([]*model.Entry, 0, len(t.pendingKeys))
+	entries := t.entries[:0]
+	t.keyBufs = t.keyBufs[:0]
 	for _, entry := range t.pendingKeys {
 		entry.Version = commitTs
-		entry.Key = model.KeyWithTs(entry.Key, entry.Version)
+		bufPtr := model.KeyWithTsPooled(entry.Key, commitTs)
+		entry.Key = *bufPtr
+		t.keyBufs = append(t.keyBufs, bufPtr)
 		entry.Meta |= common.BitTxn
 		entries = append(entries, entry)
 	}
 
-	entry := model.NewEntry([]byte(common.TxnKey), []byte(strconv.FormatUint(commitTs, 10)))
+	// finTxn 结束标记 entry 及其 ts 序列化缓冲均为池化事务的私有 scratch, 提交完成后即可复用;
+	entry := t.finEntry
+	if entry == nil {
+		entry = &model.Entry{}
+		t.finEntry = entry
+	}
+	t.finTsBuf = strconv.AppendUint(t.finTsBuf[:0], commitTs, 10)
+	entry.Key = txnKeyBytes
+	entry.Value = t.finTsBuf
 	entry.Version = commitTs
-	entry.Meta |= common.BitFinTxn
+	entry.Meta = common.BitFinTxn
+	entry.ExpiresAt = 0
+	entry.HeaderLen = 0
+	entry.Offset = 0
+	entry.ValThreshold = 0
 	entries = append(entries, entry)
+	t.entries = entries
 
 	req, err := t.db.SendToWriteCh(entries)
 	if err != nil {
@@ -341,6 +415,15 @@ func (t *Transaction) Discard() {
 	}
 	t.discard = true
 	t.db.transactionManager.doneStart(t)
+	// 两个 map 均已池化复用: pendingKeys 无外部引用; conflictKeys 在提交时已快照, 外部不再持有;
+	clear(t.pendingKeys)
+	clear(t.conflictKeys)
+	// 提交路径取出的 key+8 缓冲在请求落盘后不再被引用, 归还池中复用;
+	for _, b := range t.keyBufs {
+		model.KeyTsBufPool.Put(b)
+	}
+	t.keyBufs = t.keyBufs[:0]
+	t.db.txnPool.Put(t)
 }
 func (t *Transaction) RollBack() {
 	t.pendingKeys = nil

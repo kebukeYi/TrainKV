@@ -47,8 +47,8 @@ func NewConcatIterator(tables []*Table, opt *interfaces.Options) *ConcatIterator
 		opt:    opt,
 	}
 }
-func (s *ConcatIterator) Name() string {
-	return s.curIer.Name()
+func (conIter *ConcatIterator) Name() string {
+	return conIter.curIer.Name()
 }
 func (conIter *ConcatIterator) Value() []byte {
 	return conIter.Item().Item.Value
@@ -168,7 +168,6 @@ func (hp IteratorHeap) Less(i, j int) bool {
 	// 两个都有效, 比较键;
 	return model.CompareKeyWithTs(hp[i].Item().Item.Key, hp[j].Item().Item.Key) < 0
 }
-
 func (hp IteratorHeap) Swap(i, j int) {
 	hp[i], hp[j] = hp[j], hp[i]
 }
@@ -183,29 +182,30 @@ func (hp *IteratorHeap) Push(x any) {
 }
 
 type MergingIterator struct {
+	iters  []interfaces.Iterator // 原始子迭代器: 扫描耗尽后堆会变空, 必须保留原始集合才能 Rewind/Seek/Close;
 	itHeap IteratorHeap
 	opt    *interfaces.Options
 }
 
 func NewMergingIterator(iters []interfaces.Iterator, opt *interfaces.Options) *MergingIterator {
-	hp := make(IteratorHeap, 0)
-	for _, iter := range iters {
-		if iter != nil {
-			iter.Rewind()
-			if iter.Valid() {
-				hp = append(hp, iter)
-			}
-		}
+	m := &MergingIterator{
+		iters: iters,
+		opt:   opt,
 	}
-	return &MergingIterator{
-		itHeap: hp,
-		opt:    opt,
-	}
+	m.Rewind()
+	return m
 }
 
 func (m *MergingIterator) Rewind() {
-	for _, iter := range m.itHeap {
+	m.itHeap = m.itHeap[:0]
+	for _, iter := range m.iters {
+		if iter == nil {
+			continue
+		}
 		iter.Rewind()
+		if iter.Valid() {
+			m.itHeap = append(m.itHeap, iter)
+		}
 	}
 	m.fix()
 }
@@ -241,8 +241,15 @@ func (m *MergingIterator) Next() {
 }
 
 func (m *MergingIterator) Seek(key []byte) {
-	for _, iter := range m.itHeap {
+	m.itHeap = m.itHeap[:0]
+	for _, iter := range m.iters {
+		if iter == nil {
+			continue
+		}
 		iter.Seek(key)
+		if iter.Valid() {
+			m.itHeap = append(m.itHeap, iter)
+		}
 	}
 	m.fix()
 }
@@ -252,7 +259,7 @@ func (m *MergingIterator) fix() {
 }
 
 func (m *MergingIterator) Close() error {
-	for _, iter := range m.itHeap {
+	for _, iter := range m.iters {
 		if iter != nil {
 			if err := iter.Close(); err != nil {
 				common.Err(err)

@@ -3,7 +3,6 @@ package TrainKV
 import (
 	"bytes"
 	"fmt"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
@@ -42,10 +41,10 @@ func TestValueLog_Entry(t *testing.T) {
 	b := new(model.Request)
 	b.Entries = []*model.Entry{e2}
 	// 直接写入vlog中
-	err := log.Write([]*model.Request{b})
+	_, err := log.Write([]*model.Request{b})
 	assert.Nil(t, err)
 	// 从vlog中使用 value ptr指针中查询写入的分段vlog文件
-	buf1, lf1, err1 := log.ReadValueBytes(b.ValPtr[0])
+	buf1, lf1, err1 := log.ReadValueBytes(&b.ValPtr[0])
 	defer lf1.Lock.RUnlock()
 	fmt.Printf("err1: %s\n", err1)
 	e1, _ := lf1.DecodeEntry(buf1, b.ValPtr[0].Offset)
@@ -88,15 +87,15 @@ func TestVlogBase(t *testing.T) {
 	b.Entries = []*model.Entry{e1, e2}
 
 	// 直接写入vlog中
-	err = log.Write([]*model.Request{b})
+	_, err = log.Write([]*model.Request{b})
 	require.NoError(t, err)
 
 	require.Len(t, b.ValPtr, 2)
 	fmt.Printf("Pointer written: %+v %+v\n", b.ValPtr[0], b.ValPtr[1])
 
 	// 从vlog中使用 value ptr指针中查询写入的分段vlog文件
-	buf1, lf1, err1 := log.ReadValueBytes(b.ValPtr[0])
-	buf2, lf2, err2 := log.ReadValueBytes(b.ValPtr[1])
+	buf1, lf1, err1 := log.ReadValueBytes(&b.ValPtr[0])
+	buf2, lf2, err2 := log.ReadValueBytes(&b.ValPtr[1])
 
 	require.NoError(t, err1)
 	require.NoError(t, err2)
@@ -188,6 +187,7 @@ func TestValueGC(t *testing.T) {
 		item, err := txn.Get(e.Key) // 无 ts
 		if err != nil {
 			fmt.Printf("err:%s when key is:%s\n", err, e.Key)
+			continue // 已删除的 key 无 item, 跳过取值;
 		}
 		value := getItemValue(t, item)
 		if int64(len(value)) > vlogOpt.ValueThreshold {
@@ -196,14 +196,6 @@ func TestValueGC(t *testing.T) {
 		fmt.Printf("key:%s, val:%s, err:%s\n", e.Key, value, err)
 	}
 	txn.Discard()
-}
-
-func newRandEntry(sz int) *model.Entry {
-	v := make([]byte, sz)
-	rand.Read(v[:rand.Intn(sz)])
-	e := model.BuildEntry()
-	e.Value = v
-	return e
 }
 
 func getItemValue(t *testing.T, item *model.Entry) (val []byte) {
@@ -224,6 +216,7 @@ func TestVlogWriteRotationErrorPropagated(t *testing.T) {
 	dir := t.TempDir()
 	opt := lsm.GetDefaultOpt(dir)
 	opt.ValueLogFileSize = 100 // 极小,强制写入中轮转;
+	opt.ValueThreshold = 10    // 使 200B 的 value 落入 vlog (否则走 LSM 路径, 不会触发轮转);
 	opt.ValueLogMaxEntries = 1000
 	db, _, _ := Open(opt)
 	defer db.Close()
