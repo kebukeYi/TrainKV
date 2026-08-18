@@ -34,6 +34,7 @@ type SSTable struct {
 func OpenSStable(opt *utils.FileOptions) *SSTable {
 	mmapFile, err := file.OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
 	if err != nil {
+		fmt.Printf("open mmap file err: %v\n", err)
 		return nil
 	}
 	return &SSTable{file: mmapFile, fid: opt.FID, mux: &sync.RWMutex{}}

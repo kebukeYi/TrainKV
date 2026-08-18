@@ -14,6 +14,7 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/interfaces"
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/kebukeYi/TrainKV/v2/pb"
+	"github.com/kebukeYi/TrainKV/v2/skl"
 	"github.com/kebukeYi/TrainKV/v2/utils"
 	pkg_err "github.com/pkg/errors"
 )
@@ -28,7 +29,7 @@ type Table struct {
 	Name string
 }
 
-func OpenTable(lm *LevelsManger, tableName string, builder *sstBuilder) (*Table, error) {
+func OpenTable(lm *LevelsManger, tableName string, builder *SstBuilder) (*Table, error) {
 	var (
 		t   *Table
 		err error
@@ -220,8 +221,10 @@ func (t *Table) IncrRef() {
 }
 
 func (t *Table) DecrRef() error {
-	atomic.AddInt32(&t.ref, -1)
-	if t.ref == 0 {
+	// 用 AddInt32 的返回值判断归零, 不能事后普通读 t.ref:
+	// 多个协程 (如 split 并行 compaction) 会并发 DecrRef, 普通读与原子写竞争;
+	newRef := atomic.AddInt32(&t.ref, -1)
+	if newRef == 0 {
 		// TODO 从缓存中删除自己的数据块;
 		for i := 0; i < len(t.sst.Indexs().GetOffsets()); i++ {
 			t.lm.cache.blockData.Del(t.blockCacheKey(i))
@@ -263,7 +266,8 @@ type TableIterator struct {
 
 func (t *Table) NewTableIterator(opt *interfaces.Options) *TableIterator {
 	t.IncrRef()
-	return &TableIterator{opt: opt, t: t, biter: &blockIterator{}, name: t.Name}
+	// Item key 的稳定副本走分块 arena, 避免每 key 一次堆分配 (nil 时 blockIterator 退回 SafeCopy);
+	return &TableIterator{opt: opt, t: t, biter: &blockIterator{arena: skl.NewChunkedArena(64 << 10)}, name: t.Name}
 }
 func (tier *TableIterator) Name() string {
 	return tier.name
@@ -272,6 +276,8 @@ func (tier *TableIterator) Item() interfaces.Item {
 	return tier.biter.it
 }
 func (tier *TableIterator) Rewind() {
+	// 借用契约: Rewind 前所有 Item 均已消费, 旧 key 副本失效, arena 重置以回收内存;
+	tier.biter.arena = nil
 	if tier.opt.IsAsc {
 		tier.SeekToFirst()
 	} else {

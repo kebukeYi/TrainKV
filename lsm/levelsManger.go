@@ -20,6 +20,8 @@ type LevelsManger struct {
 	cache            *LevelsCache  // 缓存 block 和 sst.index() 数据
 	manifestFile     *ManifestFile // 增删 sst 元信息
 	stopCh           chan struct{} // 通知 getTxnDoneIndexFromCh 退出;
+	stopWG           sync.WaitGroup // 等待 getTxnDoneIndexFromCh 真正退出;
+	discardStatsWG   sync.WaitGroup // 等待 compaction 的 discardStats 发送协程退出;
 	compactIngStatus *compactIngStatus
 }
 
@@ -42,7 +44,11 @@ func (lsm *LSM) InitLevelManger(opt *Options) *LevelsManger {
 	if err := lm.loadManifestFile(); err != nil {
 		common.Panic(err)
 	}
-	go lm.getTxnDoneIndexFromCh()
+	lm.stopWG.Add(1)
+	go func() {
+		defer lm.stopWG.Done()
+		lm.getTxnDoneIndexFromCh()
+	}()
 	if err := lm.build(); err != nil {
 		common.Panic(err)
 	}
@@ -182,7 +188,7 @@ func (lm *LevelsManger) flush(imm *MemoryTable) (err error) {
 	sstName := utils.FileNameSSTable(lm.opt.WorkDir, fid)
 
 	builder := NewSSTBuilder(lm.opt)
-	skipListIterator := imm.skipList.NewSkipListIterator(strconv.FormatUint(fid, 10) + MemTableName)
+	skipListIterator := imm.skipList.NewSkipListIterator(strconv.FormatUint(fid, 10)+MemTableName, false)
 	defer skipListIterator.Close() // 涉及到 immemoryTable 的清除和相关 wal 的清理;
 	for skipListIterator.Rewind(); skipListIterator.Valid(); skipListIterator.Next() {
 		entry := skipListIterator.Item().Item
@@ -210,6 +216,8 @@ func (lm *LevelsManger) flush(imm *MemoryTable) (err error) {
 
 func (lm *LevelsManger) close() error {
 	close(lm.stopCh)
+	lm.stopWG.Wait()       // 等 getTxnDoneIndexFromCh 退出后再返回, 防止其仍读 opt.TxnDoneIndexCh;
+	lm.discardStatsWG.Wait() // 等 discardStats 发送协程退出, 防止其仍读 Option.DiscardStatsCh;
 	if err := lm.manifestFile.Close(); err != nil {
 		return err
 	}

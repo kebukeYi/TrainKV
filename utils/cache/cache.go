@@ -137,7 +137,10 @@ func (c *Cache) get(key interface{}) (*list.Element, bool) {
 	} else {
 		c.slru.get(element)
 	}
-	return element, true
+	// slru.get 晋升时可能交换两个 list.Element 的 storeItem (stageOne→stageTwo 且 stageTwo 已满),
+	// 使 key→element 的映射发生改变; 必须重新解析, 否则会返回交换后对方 key 的 value;
+	element, ok = c.data[keyToHash]
+	return element, ok
 }
 
 func (c *Cache) Del(key interface{}) (interface{}, bool) {

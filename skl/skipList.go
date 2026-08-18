@@ -2,15 +2,16 @@ package skl
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainKV/v2/interfaces"
-	"github.com/kebukeYi/TrainKV/v2/model"
-	"github.com/kebukeYi/TrainKV/v2/utils"
-	"github.com/pkg/errors"
 	"log"
 	"math"
 	"strings"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/kebukeYi/TrainKV/v2/interfaces"
+	"github.com/kebukeYi/TrainKV/v2/model"
+	"github.com/kebukeYi/TrainKV/v2/utils"
+	"github.com/pkg/errors"
 )
 
 const (
@@ -75,7 +76,7 @@ func (n *skipNode) getVal(arena *Arena) model.ValueExt {
 
 type SkipList struct {
 	arena      *Arena
-	num        int32
+	num        int64
 	headOffset uint32
 	height     int32
 	ref        atomic.Int32
@@ -130,7 +131,7 @@ func (skipList *SkipList) getHeight() int32 {
 }
 func (skipList *SkipList) GetMemSize() int64 {
 	// return skipList.arena.size()
-	return int64(skipList.num)
+	return atomic.LoadInt64(&skipList.num)
 }
 func (skipList *SkipList) findLast() *skipNode {
 	n := skipList.getHead()
@@ -263,6 +264,7 @@ func (skipList *SkipList) Put(e *model.Entry) {
 	var prev [maxHeight + 1]uint32
 	var next [maxHeight + 1]uint32
 	prev[listHeight] = skipList.headOffset
+	// 原地更新
 	for i := int(listHeight) - 1; i >= 0; i-- {
 		// Use higher level to speed up for current level.
 		prev[i], next[i] = skipList.findSpliceForLevel(key, prev[i+1], i)
@@ -271,7 +273,6 @@ func (skipList *SkipList) Put(e *model.Entry) {
 			encValue := encodeVal(vo, v.EncodeValSize())
 			prevNode := skipList.arena.getNode(prev[i])
 			prevNode.setVal(encValue)
-			atomic.AddInt32(&skipList.num, 1)
 			return
 		}
 	}
@@ -298,7 +299,7 @@ func (skipList *SkipList) Put(e *model.Entry) {
 			pnode := skipList.arena.getNode(prev[i])
 			if pnode.casNextOffset(i, next[i], skipList.arena.getNodeOffset(x)) {
 				if i == 0 {
-					atomic.AddInt32(&skipList.num, 1)
+					atomic.AddInt64(&skipList.num, 1)
 				}
 				// Managed to insert x between prev[i] and next[i]. Go to the next level.
 				break
@@ -313,7 +314,7 @@ func (skipList *SkipList) Put(e *model.Entry) {
 				encValue := encodeVal(vo, v.EncodeValSize())
 				prevNode := skipList.arena.getNode(prev[i])
 				prevNode.setVal(encValue)
-				atomic.AddInt32(&skipList.num, 1)
+				atomic.AddInt64(&skipList.num, 1)
 				return
 			}
 		}
@@ -368,18 +369,21 @@ func (skipList *SkipList) Draw(align bool) {
 		fmt.Println()
 	}
 }
-func (skipList *SkipList) NewSkipListIterator(name string) interfaces.Iterator {
+func (skipList *SkipList) NewSkipListIterator(name string, copyItems bool) interfaces.Iterator {
 	skipList.IncrRef()
 	return &SkipListIterator{
-		list: skipList,
-		name: name,
+		list:      skipList,
+		name:      name,
+		copyItems: copyItems,
 	}
 }
 
 type SkipListIterator struct {
-	name string
-	list *SkipList
-	curr *skipNode
+	name      string
+	list      *SkipList
+	curr      *skipNode
+	copyItems bool          // true: Item() 把 key/value 拷入私有分块 arena (防并发写导致 arena 扩容悬垂);
+	arena     *ChunkedArena // copyItems 时的稳定副本来源;
 }
 
 func (s *SkipListIterator) Name() string {
@@ -412,6 +416,8 @@ func (s *SkipListIterator) Valid() bool {
 	return s.curr != nil
 }
 func (s *SkipListIterator) Rewind() {
+	// 借用契约: Rewind 前所有 Item 均已消费, 旧副本失效, arena 重置以回收内存;
+	s.arena = nil
 	s.SeekToFirst()
 }
 func (s *SkipListIterator) Item() interfaces.Item {
@@ -422,6 +428,19 @@ func (s *SkipListIterator) Item() interfaces.Item {
 		ExpiresAt: s.Value().ExpiresAt,
 	}
 	entry.Version = model.ParseTsVersion(entry.Key)
+	if s.copyItems {
+		// 活跃 memtable 扫描期间可能有并发写触发 arena 扩容, 视图会悬垂;
+		// 拷入私有分块 arena (块不移动), 返回的 Item 永久有效;
+		if s.arena == nil {
+			s.arena = NewChunkedArena(64 << 10)
+		}
+		key := s.arena.Alloc(len(entry.Key))
+		copy(key, entry.Key)
+		entry.Key = key
+		val := s.arena.Alloc(len(entry.Value))
+		copy(val, entry.Value)
+		entry.Value = val
+	}
 	return interfaces.Item{Item: entry}
 }
 func (s *SkipListIterator) Seek(key []byte) {

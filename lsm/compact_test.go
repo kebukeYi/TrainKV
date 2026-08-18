@@ -667,10 +667,14 @@ func getAllAndCheck(t *testing.T, lsm *LSM, expected []keyValVersion) {
 
 func runKVTest(t *testing.T, opts *Options, test func(t *testing.T, lsm *LSM)) {
 	if opts == nil {
-		opts = compactOptions
+		// 复制一份, 避免子测试共享全局 compactOptions:
+		// 上一个子测试的 compaction 发送协程可能仍在读 DiscardStatsCh 字段;
+		tmp := *compactOptions
+		opts = &tmp
 	}
-	c := make(chan map[uint32]int64)
-	compactOptions.DiscardStatsCh = &c
+	// 缓冲通道: 避免 compaction 的 discardStats 发送协程阻塞在无人接收的通道上;
+	c := make(chan map[uint32]int64, 16)
+	opts.DiscardStatsCh = &c
 	clearDir(opts.WorkDir)
 	lsm := NewLSM(opts, utils.NewCloser(1))
 	defer lsm.Close()

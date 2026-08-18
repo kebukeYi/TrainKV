@@ -10,6 +10,11 @@ type Iterator interface {
 	Close() error
 }
 
+// ValueReader vlog 读取接口, 供 Item 惰性解码大 value (由 *ValueLog 实现);
+type ValueReader interface {
+	Read(vp *ValuePtr) ([]byte, func(), error)
+}
+
 type Item struct {
 	Item Entry
 }

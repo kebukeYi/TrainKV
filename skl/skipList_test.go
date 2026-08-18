@@ -39,7 +39,7 @@ func TestSkipList_Put(t *testing.T) {
 		e.ExpiresAt = uint64(i)
 		skipList.Put(e)
 	}
-	fmt.Printf("num: %d\n", atomic.LoadInt32(&skipList.num))
+	fmt.Printf("num: %d\n", atomic.LoadInt64(&skipList.num))
 	fmt.Println("========================get(0-90)==================================")
 	// 读取
 	for i := putStart; i <= putEnd; i++ {
@@ -115,7 +115,7 @@ func Benchmark_SkipListBasicCRUD(b *testing.B) {
 		//fmt.Printf("key: %s, value: %s \n", key, searchVal)
 		assert.Equal(b, searchVal, []byte(val))
 	}
-	fmt.Printf("num: %d\n", atomic.LoadInt32(&list.num))
+	fmt.Printf("num: %d\n", atomic.LoadInt64(&list.num))
 }
 
 func TestConcurrentBasic(t *testing.T) {
@@ -195,7 +195,7 @@ func TestSkipListIterator(t *testing.T) {
 	list.Put(entry2_new)
 	assert.Equal(t, entry2_new.Value, list.Get(entry2_new.Key).Value)
 
-	iter := list.NewSkipListIterator("1")
+	iter := list.NewSkipListIterator("1", false)
 	for iter.Rewind(); iter.Valid(); iter.Next() {
 		fmt.Printf("iter key %s, value %s\n ", model.ParseKey(iter.Item().Item.Key), iter.Item().Item.Value)
 	}

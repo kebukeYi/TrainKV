@@ -38,6 +38,7 @@ func OpenMmapFile(fileName string, flag int, maxSz int32) (*MmapFile, error) {
 		}
 		fileSize = int64(maxSz)
 	}
+
 	buf, err := mmap.Mmap(fd, writable, fileSize) // Mmap up to file size.
 	if err != nil {
 		return nil, errors.Wrapf(err, "while mmapping %s with size: %d", fd.Name(), fileSize)

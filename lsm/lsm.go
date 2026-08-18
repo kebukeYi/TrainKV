@@ -163,6 +163,10 @@ func (lsm *LSM) GetSkipListFromMemTable() *skl.SkipList {
 func (lsm *LSM) Rotate() {
 	lsm.Lock()
 	im := lsm.memoryTable
+	if lsm.memoryTable.skipList.Empty() {
+		lsm.Unlock()
+		return
+	}
 	lsm.immemoryTables = append(lsm.immemoryTables, lsm.memoryTable)
 	lsm.memoryTable = lsm.NewMemoryTable()
 	lsm.Unlock()
@@ -173,7 +177,8 @@ func (lsm *LSM) Rotate() {
 func (lsm *LSM) StartFlushMemTable(closer *utils.Closer) {
 	defer closer.Done()
 	flushIMemoryTable := func(im *MemoryTable) {
-		if im == nil {
+		// 判断 im中 是否有数据;
+		if im == nil || im.Size() > 0 {
 			return
 		}
 		if err := lsm.LevelManger.flush(im); err != nil {

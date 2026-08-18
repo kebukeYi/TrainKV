@@ -145,3 +145,49 @@
 | WriteRequest | allocs/op | 15 | 15 | 15 | 0%(路径未涉及) |
 
 > 注:ns/op 受 fsync 噪声主导(串行 ~4ms),Parallel 稳定在 2.0-2.3ms;allocs/op 是稳定指标。
+
+---
+
+# 附:读路径迭代器优化实施报告(方向 1→2→3)
+
+> 背景:读写性能测试暴露了两个读路径问题并逐一解决——
+> ① **block 缓存幽灵 key**(W-TinyLFU 晋升交换后 `Cache.get` 未重新解析映射,~1.4% 读静默 miss,已修复并有 `benchmk/flush_integrity_test.go` 回归);
+> ② 迭代器每 key 2-3 次 SafeCopy 分配、大 value 扫描逐条拷贝 1MB。本文记录 ② 的三步实施。
+
+## 方向 1:合并层去拷贝 + memtable 稳定 Item
+
+- `MergingIterator.Item()` 直接返回子迭代器 Item,删除每 key 2 次 `SafeCopy`;
+- 新增 `skl.ChunkedArena`(分块分配器,64KB/块,块不移动,返回切片永久有效);
+- `SkipListIterator` 增加 `copyItems` 模式:活跃 memtable 扫描用副本(防并发写导致 arena 扩容悬垂),immutable/flush 用视图(不可变跳表无并发写,视图稳定)。
+
+## 方向 2:SST 扫描 key 拷贝进 arena
+
+- `blockIterator.setIndex` 的 key 拷贝(原 `SafeCopy`)改走 `ChunkedArena`;
+- `TableIterator` 创建时注入 arena;SST 扫描 Item = arena key 副本 + mmap value 视图,合并层零拷贝。
+
+## 方向 3:大 value 惰性读
+
+- `interfaces.Item` 增加 `VP`/`Vlog` 字段与 `Value()` 方法(`model.ValueReader` 由 `*ValueLog` 实现);
+- `TxnIterator.Item()` 对 `BitValuePointer` 条目只记录 12B 位置,不再立即拷贝 1MB;
+- **契约变化**:Item 为借用语义(`Rewind` 后旧 Item 失效,arena 重置回收);大 value 取值改用 `item.Value()`。
+
+## 基准结果(count=3 中位数)
+
+| 基准 | 指标 | 优化前 | 优化后 |
+|---|---|---|---|
+| ReadIterate(memtable 全扫 100K) | allocs/op | 200,000 | **832(-99.6%)** |
+| | ns/op | 35.5ms | ~35ms(持平) |
+| ReadIterateSST(新增) | allocs/op / B/op | —(此前不可测) | **0 / 0** |
+| | ns/op | — | 25.7ms |
+| ReadIterateBigValue(新增,500×1MB 惰性) | allocs/op | —(旧实现≈528MB/次) | **3** |
+| | B/op | — | 65KB |
+| | ns/op | — | ~110µs/次 |
+| ReadIterateBigValueEager(按需取值) | B/op | 528MB(每次 Item 都付) | 528MB(**仅调用 Value() 时付**) |
+| Get 路径(命中/未命中/大 value) | allocs/op | 2/2/5 | 2/2/5(无回退) |
+
+## 实施经验补充
+
+- **借用契约是零分配迭代器的前提**:Item 数据在 `Next()` 前有效;`Rewind` 是内存回收边界(arena 重置)。代价是用户不能跨 Rewind 持有 Item——需文档化。
+- **分块 arena 必须"块不移动"**:单块 arena 扩容时旧切片会悬垂,与跳表 arena 扩容问题同源。
+- **分配次数与驻留内存的取舍**:arena 把 N 次小分配换成少量大块,但数据活到迭代器 Close;重复 Rewind 全扫会累积,须在 Rewind 重置(基准从 43ms 回落到 32ms)。
+- **惰性读把"必付成本"变"按需成本"**:扫描 500×1MB 从 61ms/528MB 降到 110µs/65KB,用户真正取值时才付拷贝。

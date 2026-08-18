@@ -51,6 +51,7 @@ func (slru *segmentedLRU) add(newitem storeItem) {
 
 func (slru *segmentedLRU) get(v *list.Element) {
 	item := v.Value.(*storeItem)
+	// 数据在 StageTwo, 则直接返回,不用提权;
 	if item.stage == STAGE_TWO {
 		slru.stageTwo.MoveToFront(v)
 		return
@@ -71,8 +72,8 @@ func (slru *segmentedLRU) get(v *list.Element) {
 	// 新数据加入 StageTwo，需要淘汰旧数据
 	// StageTwo 中淘汰的数据不会消失，会进入 StageOne
 	// StageOne 中，访问频率更低的数据，有可能会被淘汰
-	twolruBack := slru.stageTwo.Back()
-	bitem := twolruBack.Value.(*storeItem)
+	t := slru.stageTwo.Back()
+	bitem := t.Value.(*storeItem)
 
 	*bitem, *item = *item, *bitem
 
@@ -80,10 +81,10 @@ func (slru *segmentedLRU) get(v *list.Element) {
 	item.stage = STAGE_ONE
 
 	slru.data[item.keyHash] = v
-	slru.data[bitem.keyHash] = twolruBack
+	slru.data[bitem.keyHash] = t
 
 	slru.stageOne.MoveToFront(v)
-	slru.stageTwo.MoveToFront(twolruBack)
+	slru.stageTwo.MoveToFront(t)
 }
 
 func (slru *segmentedLRU) victim() *storeItem {

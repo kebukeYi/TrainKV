@@ -433,7 +433,10 @@ func (txnIter *TxnIterator) Valid() bool {
 	return txnIter.iter.Valid()
 }
 func (txnIter *TxnIterator) Item() interfaces.Item {
+	var lazyVP model.ValuePtr
+	var lazyVlog model.ValueReader
 	for txnIter.iter.Valid() {
+		lazyVlog = nil // 每条目重置惰性标记;
 		entry := txnIter.iter.Item().Item
 		// ① 可见性 + 删除标记过滤(5f99f3e 已加删除过滤,保留)
 		if !txnIter.txn.IsVisible(&entry) {
@@ -446,17 +449,12 @@ func (txnIter *TxnIterator) Item() interfaces.Item {
 			}
 		}
 
-		// ② 大 value 解引用:ValuePtr → vlog 读
+		// ② 大 value 惰性化: 只记录 ValuePtr 位置, Item.Value() 按需从 vlog 解码;
+		//    扫描大 value 不再逐条拷贝 (如 1MB value 扫描直接省 1MB/条);
 		if entry.Value != nil && model.IsValPtr(&entry) {
-			var vp model.ValuePtr
-			vp.Decode(entry.Value)
-			read, callBack, err := txnIter.vlog.Read(&vp)
-			if err != nil {
-				callBack()
-				panic(err)
-			}
-			entry.Value = model.SafeCopy(nil, read)
-			callBack()
+			lazyVP.Decode(entry.Value)
+			lazyVlog = txnIter.vlog
+			entry.Value = nil
 		}
 
 		// ③ 事务自己的 pending 写覆盖(读己之写 + 与 LSM 版本冲突时取 pending)
@@ -474,6 +472,9 @@ func (txnIter *TxnIterator) Item() interfaces.Item {
 			continue
 		}
 		txnIter.lastKey = append(txnIter.lastKey[:0], raw...)
+		if lazyVlog != nil {
+			return interfaces.Item{Item: entry, VP: lazyVP, Vlog: lazyVlog}
+		}
 		return interfaces.Item{Item: entry}
 	}
 	return interfaces.Item{Item: model.Entry{Version: 0}}

@@ -686,7 +686,13 @@ func (lm *LevelsManger) subCompact(iterator interfaces.Iterator, kr keyRange, cd
 	inflightBuilders *utils.Throttle, res chan<- *Table) {
 	discardStats := make(map[uint32]int64)
 	defer func() {
-		go lm.updateDiscardStats(discardStats) // 重新开一个go协程,让其去阻塞,不要耽搁函数返回;
+		// 重新开一个go协程,让其去阻塞,不要耽搁函数返回;
+		// 协程纳入 discardStatsWG, close 时等待其退出, 避免其仍读 Option.DiscardStatsCh;
+		lm.discardStatsWG.Add(1)
+		go func() {
+			defer lm.discardStatsWG.Done()
+			lm.updateDiscardStats(discardStats)
+		}()
 	}()
 
 	// 存在的话, 不能轻易删除数据, 比如高版本的 delete 标记, 随便删除的话, 后续可能读到下层的旧数据;
@@ -723,7 +729,7 @@ func (lm *LevelsManger) subCompact(iterator interfaces.Iterator, kr keyRange, cd
 
 	// 1. 判断key是否需要保留;
 	// 2. 判断key是否需要通知 vlogGC;
-	addKeys := func(builder *sstBuilder) {
+	addKeys := func(builder *SstBuilder) {
 		timeStart := time.Now()
 		var tableRange keyRange
 		var numKeys, numSkips uint64
@@ -829,7 +835,7 @@ func (lm *LevelsManger) subCompact(iterator interfaces.Iterator, kr keyRange, cd
 			break
 		}
 
-		go func(builder *sstBuilder) {
+		go func(builder *SstBuilder) {
 			defer inflightBuilders.Done(nil)
 			newFID := lm.NextFileID()
 			ssName := utils.FileNameSSTable(lm.opt.WorkDir, newFID)
@@ -856,6 +862,9 @@ func IsDeletedOrExpired(e *model.Entry) bool {
 	return e.ExpiresAt <= uint64(time.Now().Unix())
 }
 func (lm *LevelsManger) updateDiscardStats(discardStats map[uint32]int64) {
+	if lm.lsm.Option.DiscardStatsCh == nil {
+		return // 未配置统计通道 (如独立 LSM 场景), 直接丢弃;
+	}
 	select {
 	case *lm.lsm.Option.DiscardStatsCh <- discardStats:
 	}

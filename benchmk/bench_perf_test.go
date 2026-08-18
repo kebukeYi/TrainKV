@@ -13,6 +13,7 @@ package benchmk
 import (
 	"math/rand"
 	"testing"
+	"time"
 
 	"github.com/kebukeYi/TrainKV/v2"
 	"github.com/kebukeYi/TrainKV/v2/common"
@@ -218,6 +219,118 @@ func BenchmarkMixedRead90Write10(b *testing.B) {
 			if _, err := rtxn.Get(GetKey(i % perfKeyNum)); err != nil {
 				b.Fatal(err)
 			}
+		}
+	}
+}
+
+// BenchmarkReadIterateSST 迭代器全量顺序扫描 (数据已 flush 到 SST, 走 block 索引/缓存);
+func BenchmarkReadIterateSST(b *testing.B) {
+	b.ReportAllocs()
+	train := openPerfDB(b)
+	loadMemData(b, train)
+	train.Lsm.Rotate()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(train.Lsm.LevelManger.GetLevelHandler(0).GetTables()) > 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	txn := train.NewTransaction(false)
+	defer txn.Discard()
+	iter := txn.NewIterator(&interfaces.Options{IsAsc: true, IsSetCache: false})
+	defer func() { _ = iter.Close() }()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		count := 0
+		for iter.Rewind(); iter.Valid(); iter.Next() {
+			_ = iter.Item()
+			count++
+		}
+		if count != perfKeyNum {
+			b.Fatalf("scan count=%d, want %d", count, perfKeyNum)
+		}
+	}
+}
+
+// BenchmarkReadIterateBigValue 大 value 惰性扫描: 只扫不取值 (Item 携带 ValuePtr, 不拷贝 1MB);
+func BenchmarkReadIterateBigValue(b *testing.B) {
+	b.ReportAllocs()
+	clearDir(perfDataDir)
+	train, _, _ := TrainKV.Open(lsm.GetDefaultOpt(perfDataDir))
+	defer train.Close()
+	val := make([]byte, 1<<20+1)
+	txn := train.NewTransaction(true)
+	const n = 500
+	for i := 0; i < n; i++ {
+		if err := txn.Set(GetKey(i), val); err != nil {
+			b.Fatal(err)
+		}
+		if i%50 == 0 {
+			if _, err := txn.Commit(); err != nil {
+				b.Fatal(err)
+			}
+			txn = train.NewTransaction(true)
+		}
+	}
+	if _, err := txn.Commit(); err != nil {
+		b.Fatal(err)
+	}
+	rtxn := train.NewTransaction(false)
+	defer rtxn.Discard()
+	iter := rtxn.NewIterator(&interfaces.Options{IsAsc: true, IsSetCache: false})
+	defer func() { _ = iter.Close() }()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		count := 0
+		for iter.Rewind(); iter.Valid(); iter.Next() {
+			_ = iter.Item()
+			count++
+		}
+		if count != n {
+			b.Fatalf("scan count=%d, want %d", count, n)
+		}
+	}
+}
+
+// BenchmarkReadIterateBigValueEager 大 value 扫描并取值 (调用 Item.Value(), 模拟按需消费);
+func BenchmarkReadIterateBigValueEager(b *testing.B) {
+	b.ReportAllocs()
+	clearDir(perfDataDir)
+	train, _, _ := TrainKV.Open(lsm.GetDefaultOpt(perfDataDir))
+	defer train.Close()
+	val := make([]byte, 1<<20+1)
+	txn := train.NewTransaction(true)
+	const n = 500
+	for i := 0; i < n; i++ {
+		if err := txn.Set(GetKey(i), val); err != nil {
+			b.Fatal(err)
+		}
+		if i%50 == 0 {
+			if _, err := txn.Commit(); err != nil {
+				b.Fatal(err)
+			}
+			txn = train.NewTransaction(true)
+		}
+	}
+	if _, err := txn.Commit(); err != nil {
+		b.Fatal(err)
+	}
+	rtxn := train.NewTransaction(false)
+	defer rtxn.Discard()
+	iter := rtxn.NewIterator(&interfaces.Options{IsAsc: true, IsSetCache: false})
+	defer func() { _ = iter.Close() }()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		count := 0
+		for iter.Rewind(); iter.Valid(); iter.Next() {
+			if _, err := iter.Item().Value(); err != nil {
+				b.Fatal(err)
+			}
+			count++
+		}
+		if count != n {
+			b.Fatalf("scan count=%d, want %d", count, n)
 		}
 	}
 }

@@ -11,11 +11,12 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/interfaces"
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/kebukeYi/TrainKV/v2/pb"
+	"github.com/kebukeYi/TrainKV/v2/skl"
 	"github.com/kebukeYi/TrainKV/v2/utils"
 	"github.com/pkg/errors"
 )
 
-type sstBuilder struct {
+type SstBuilder struct {
 	sstSize       int64
 	opt           *Options
 	blockList     []*block
@@ -69,35 +70,35 @@ func (h *entryHeader) decode(buf []byte) {
 	copy(arrPtr[:], buf[:headerSize])
 }
 
-func newSSTBuilderWithSSTableSize(opt *Options, size int64) *sstBuilder {
+func newSSTBuilderWithSSTableSize(opt *Options, size int64) *SstBuilder {
 	size = 2 * size
 	if size > common.MaxAllocatorInitialSize {
 		size = common.MaxAllocatorInitialSize
 	}
-	return &sstBuilder{
+	return &SstBuilder{
 		opt:     opt,
 		sstSize: int64(size),
 	}
 }
 
-func NewSSTBuilder(opt *Options) *sstBuilder {
-	return &sstBuilder{
+func NewSSTBuilder(opt *Options) *SstBuilder {
+	return &SstBuilder{
 		opt:     opt,
 		sstSize: opt.BaseTableSize,
 	}
 }
 
-func (ssb *sstBuilder) AddKey(e *model.Entry) {
+func (ssb *SstBuilder) AddKey(e *model.Entry) {
 	ssb.Add(e, false)
 }
 
-func (ssb *sstBuilder) AddStaleKey(e *model.Entry) {
+func (ssb *SstBuilder) AddStaleKey(e *model.Entry) {
 	// staleDataSize 可作为 sst 合并时的分数;
 	ssb.staleDataSize += int64(len(e.Key) + len(e.Value) + 4 /* entry offset */ + 4 /* header size */)
 	ssb.Add(e, true)
 }
 
-func (ssb *sstBuilder) Add(e *model.Entry, isStale bool) {
+func (ssb *SstBuilder) Add(e *model.Entry, isStale bool) {
 	keyTs := e.Key
 	val := model.ValueExt{
 		Meta:      e.Meta,
@@ -149,13 +150,13 @@ func (ssb *sstBuilder) Add(e *model.Entry, isStale bool) {
 	val.EncodeVal(buf)
 }
 
-func (ssb *sstBuilder) append(data []byte) {
+func (ssb *SstBuilder) append(data []byte) {
 	dst := ssb.allocate(len(data))
 	common.CondPanic(len(data) != copy(dst, data),
 		errors.New("sstBuilder.append data failed."))
 }
 
-func (ssb *sstBuilder) allocate(need int) []byte {
+func (ssb *SstBuilder) allocate(need int) []byte {
 	curb := ssb.curBlock
 	if len(curb.data[curb.endOffset:]) < need {
 		sz := 2 * len(curb.data)
@@ -170,7 +171,7 @@ func (ssb *sstBuilder) allocate(need int) []byte {
 	return curb.data[curb.endOffset-need : curb.endOffset]
 }
 
-func (ssb *sstBuilder) tryNewBlock(e *model.Entry) bool {
+func (ssb *SstBuilder) tryNewBlock(e *model.Entry) bool {
 	if ssb.curBlock == nil {
 		return true
 	}
@@ -195,7 +196,7 @@ func (ssb *sstBuilder) tryNewBlock(e *model.Entry) bool {
 	return ssb.curBlock.estimateSize > int64(ssb.opt.BlockSize)
 }
 
-func (ssb *sstBuilder) keyDiff(keyTs []byte) []byte {
+func (ssb *SstBuilder) keyDiff(keyTs []byte) []byte {
 	var i int
 	for i = 0; i < len(keyTs) && i < len(ssb.curBlock.baseKey); i++ {
 		if keyTs[i] != ssb.curBlock.baseKey[i] {
@@ -205,7 +206,7 @@ func (ssb *sstBuilder) keyDiff(keyTs []byte) []byte {
 	return keyTs[i:]
 }
 
-func (ssb *sstBuilder) flush(lm *LevelsManger, tableName string) (t *Table, err error) {
+func (ssb *SstBuilder) flush(lm *LevelsManger, tableName string) (t *Table, err error) {
 	bd := ssb.done()
 	fid := utils.FID(tableName)
 	t = &Table{lm: lm, fid: fid, Name: strconv.FormatUint(fid, 10) + SSTableName}
@@ -231,7 +232,7 @@ func (ssb *sstBuilder) flush(lm *LevelsManger, tableName string) (t *Table, err 
 	return t, nil
 }
 
-func (ssb *sstBuilder) done() buildData {
+func (ssb *SstBuilder) done() buildData {
 	ssb.finishBlock()
 	if len(ssb.blockList) == 0 {
 		return buildData{}
@@ -252,7 +253,7 @@ func (ssb *sstBuilder) done() buildData {
 	return bd
 }
 
-func (ssb *sstBuilder) Finish() []byte {
+func (ssb *SstBuilder) Finish() []byte {
 	// 构建 table 的数据;
 	bd := ssb.done()
 	buf := make([]byte, bd.size)
@@ -261,7 +262,7 @@ func (ssb *sstBuilder) Finish() []byte {
 	return buf
 }
 
-func (ssb *sstBuilder) buildBlockIndex(bloom []byte) ([]byte, uint32) {
+func (ssb *SstBuilder) buildBlockIndex(bloom []byte) ([]byte, uint32) {
 	tableIndex := &pb.TableIndex{}
 	if len(bloom) > 0 {
 		tableIndex.BloomFilter = bloom
@@ -278,7 +279,7 @@ func (ssb *sstBuilder) buildBlockIndex(bloom []byte) ([]byte, uint32) {
 	return marshal, dataBlockSize
 }
 
-func (ssb *sstBuilder) writeBlockList() []*pb.BlockOffset {
+func (ssb *SstBuilder) writeBlockList() []*pb.BlockOffset {
 	var startOffset uint32
 	var blockOffsets []*pb.BlockOffset
 	for _, bl := range ssb.blockList {
@@ -295,7 +296,7 @@ func (ssb *sstBuilder) writeBlockList() []*pb.BlockOffset {
 }
 
 // 将当前 curBlock 进行收尾,主要是 restart Point[],但是并没有进行填充;
-func (ssb *sstBuilder) finishBlock() {
+func (ssb *SstBuilder) finishBlock() {
 	if ssb.curBlock == nil || len(ssb.curBlock.entryOffsets) == 0 {
 		return
 	}
@@ -316,7 +317,7 @@ func (ssb *sstBuilder) finishBlock() {
 	return
 }
 
-func (ssb *sstBuilder) calculateChecksum(data []byte) []byte {
+func (ssb *SstBuilder) calculateChecksum(data []byte) []byte {
 	checkSum := utils.CalculateChecksum(data)
 	return model.U64ToBytes(checkSum)
 }
@@ -336,15 +337,15 @@ func (bd *buildData) copy(buf []byte) int {
 	return written
 }
 
-func (ssb *sstBuilder) empty() bool {
+func (ssb *SstBuilder) empty() bool {
 	return len(ssb.keyHashes) == 0
 }
 
-func (ssb *sstBuilder) close() bool {
+func (ssb *SstBuilder) close() bool {
 	return len(ssb.keyHashes) == 0
 }
 
-func (ssb *sstBuilder) ReachedCapacity() bool {
+func (ssb *SstBuilder) ReachedCapacity() bool {
 	return ssb.estimateSize > ssb.sstSize
 }
 
@@ -363,6 +364,7 @@ type blockIterator struct {
 	blockID     int
 	prevOverlap uint16 // 同一个 block, 其中的多个 entry 多少都有些关联
 	it          interfaces.Item
+	arena       *skl.ChunkedArena // Item key 的稳定副本来源 (nil 时退回 SafeCopy);
 }
 
 func (itr *blockIterator) setBlock(b *block) {
@@ -444,7 +446,12 @@ func (itr *blockIterator) setIndex(idx int) {
 	}
 	valueOffset := headerSize + header.dif
 	eny := model.Entry{}
-	eny.Key = model.SafeCopy(eny.Key, itr.key)
+	if itr.arena != nil {
+		eny.Key = itr.arena.Alloc(len(itr.key))
+		copy(eny.Key, itr.key)
+	} else {
+		eny.Key = model.SafeCopy(eny.Key, itr.key)
+	}
 	var val model.ValueExt
 	val.DecodeVal(entryData[valueOffset:])
 	itr.val = val.Value
@@ -486,6 +493,7 @@ func (itr *blockIterator) Close() error {
 	itr.key = nil
 	itr.val = nil
 	itr.entryOffsets = nil
+	itr.arena = nil
 	return nil
 }
 
