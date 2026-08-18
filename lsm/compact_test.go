@@ -106,7 +106,7 @@ func createAndSetLevel(lsm *LSM, td []keyValVersion, level int) {
 	lsm.LevelManger.levelHandlers[level].mux.Lock()
 
 	lsm.LevelManger.levelHandlers[level].tables = append(lsm.LevelManger.levelHandlers[level].tables, tab)
-	lsm.LevelManger.levelHandlers[level].addSize(tab)
+	lsm.LevelManger.levelHandlers[level].addSizeLocked(tab) // 已持锁, 用内部版;
 	lsm.LevelManger.levelHandlers[level].mux.Unlock()
 }
 

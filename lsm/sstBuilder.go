@@ -270,6 +270,8 @@ func (ssb *SstBuilder) buildBlockIndex(bloom []byte) ([]byte, uint32) {
 	tableIndex.KeyCount = ssb.keyCount
 	tableIndex.MaxVersion = ssb.maxVersion
 	tableIndex.Offsets = ssb.writeBlockList()
+	// stale 数据量必须持久化进索引, 否则 Lmax→Lmax 合并无从判断 (此前恒为 0);
+	tableIndex.StaleDataSize = uint32(ssb.staleDataSize)
 	var dataBlockSize uint32
 	for i := 0; i < len(ssb.blockList); i++ {
 		dataBlockSize += uint32(ssb.blockList[i].endOffset)

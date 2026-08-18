@@ -18,13 +18,15 @@ type LevelHandler struct {
 	lm             *LevelsManger // 上层引用;
 }
 
-func (leh *LevelHandler) add(r *Table) {
+func (leh *LevelHandler) addAndSize(t *Table) {
 	leh.mux.Lock()
 	defer leh.mux.Unlock()
-	leh.tables = append(leh.tables, r)
+	leh.tables = append(leh.tables, t)
+	leh.addSizeLocked(t)
 }
 
-func (leh *LevelHandler) addSize(t *Table) {
+// addSizeLocked 调用方须已持有 mux;
+func (leh *LevelHandler) addSizeLocked(t *Table) {
 	leh.totalSize += t.Size()
 	leh.totalStaleSize += int64(t.getStaleDataSize())
 }
@@ -36,6 +38,13 @@ func (leh *LevelHandler) getTotalSize() int64 {
 }
 
 func (leh *LevelHandler) subtractSize(t *Table) {
+	leh.mux.Lock()
+	defer leh.mux.Unlock()
+	leh.subtractSizeLocked(t)
+}
+
+// subtractSizeLocked 调用方须已持有 mux;
+func (leh *LevelHandler) subtractSizeLocked(t *Table) {
 	leh.totalSize -= t.Size()
 	leh.totalStaleSize -= int64(t.getStaleDataSize())
 }
@@ -175,14 +184,14 @@ func (leh *LevelHandler) updateTable(toDel, toAdd []*Table) error {
 	newTables := make([]*Table, 0)
 	for _, t := range leh.tables {
 		if _, ok := toDelMap[t.fid]; ok {
-			leh.subtractSize(t)
+			leh.subtractSizeLocked(t)
 		} else {
 			newTables = append(newTables, t)
 		}
 	}
 
 	for _, t := range toAdd {
-		leh.addSize(t)
+		leh.addSizeLocked(t)
 		t.IncrRef()
 		newTables = append(newTables, t)
 	}
@@ -205,7 +214,7 @@ func (leh *LevelHandler) deleteTable(toDel []*Table) error {
 	newTables := make([]*Table, 0)
 	for _, t := range leh.tables {
 		if _, ok := toDelMap[t.fid]; ok {
-			leh.subtractSize(t)
+			leh.subtractSizeLocked(t)
 		} else {
 			newTables = append(newTables, t)
 		}

@@ -15,11 +15,11 @@ type LevelsManger struct {
 	maxFID           atomic.Uint64   // sst 已经分配出去的最大fid,只要创建了 MemoryTable 就算已分配;
 	levelHandlers    []*LevelHandler // 每层的处理器
 	opt              *Options
-	lsm              *LSM          // 上层引用
-	txnDoneIndex     atomic.Uint64 // 所有已读事务的结束索引;
-	cache            *LevelsCache  // 缓存 block 和 sst.index() 数据
-	manifestFile     *ManifestFile // 增删 sst 元信息
-	stopCh           chan struct{} // 通知 getTxnDoneIndexFromCh 退出;
+	lsm              *LSM           // 上层引用
+	txnDoneIndex     atomic.Uint64  // 所有已读事务的结束索引;
+	cache            *LevelsCache   // 缓存 block 和 sst.index() 数据
+	manifestFile     *ManifestFile  // 增删 sst 元信息
+	stopCh           chan struct{}  // 通知 getTxnDoneIndexFromCh 退出;
 	stopWG           sync.WaitGroup // 等待 getTxnDoneIndexFromCh 真正退出;
 	discardStatsWG   sync.WaitGroup // 等待 compaction 的 discardStats 发送协程退出;
 	compactIngStatus *compactIngStatus
@@ -27,7 +27,12 @@ type LevelsManger struct {
 
 // 临时诊断用: 暴露层处理器和表列表;
 func (lm *LevelsManger) GetLevelHandler(i int) *LevelHandler { return lm.levelHandlers[i] }
-func (lm *LevelHandler) GetTables() []*Table                 { return lm.tables }
+func (lm *LevelHandler) GetTables() []*Table {
+	// 需加锁: flush/compaction 协程会并发修改 tables;
+	lm.mux.RLock()
+	defer lm.mux.RUnlock()
+	return lm.tables
+}
 
 func (lm *LevelsManger) NextFileID() uint64 {
 	id := lm.maxFID.Add(1)
@@ -108,8 +113,7 @@ func (lm *LevelsManger) build() error {
 			maxFID = fid
 		}
 		t, _ := OpenTable(lm, filePathName, nil)
-		lm.levelHandlers[tableInfo.LevelID].add(t)
-		lm.levelHandlers[tableInfo.LevelID].addSize(t)
+		lm.levelHandlers[tableInfo.LevelID].addAndSize(t)
 	}
 
 	for i := 0; i < lm.opt.MaxLevelNum; i++ {
@@ -196,7 +200,7 @@ func (lm *LevelsManger) flush(imm *MemoryTable) (err error) {
 	}
 
 	// 此时磁盘中已经生成 .sst 文件;
-	t, _ := OpenTable(lm, sstName, builder)
+	t, err := OpenTable(lm, sstName, builder)
 	// 向 manifest 中添加, 中途失败了呢?
 	// 1. 假设5.wal 刚转化成 5.sst, 添加到 manifest中了, 那么5.wal理应被删除掉;
 	//    但是和5.wal绑定的跳表正在被引用,因此无法直接删除掉5.wal;
@@ -209,14 +213,13 @@ func (lm *LevelsManger) flush(imm *MemoryTable) (err error) {
 		Checksum: []byte{'s', 'k', 'i', 'p'},
 	})
 	common.Panic(err)
-	lm.levelHandlers[0].add(t)
-	lm.levelHandlers[0].addSize(t)
+	lm.levelHandlers[0].addAndSize(t)
 	return nil
 }
 
 func (lm *LevelsManger) close() error {
 	close(lm.stopCh)
-	lm.stopWG.Wait()       // 等 getTxnDoneIndexFromCh 退出后再返回, 防止其仍读 opt.TxnDoneIndexCh;
+	lm.stopWG.Wait()         // 等 getTxnDoneIndexFromCh 退出后再返回, 防止其仍读 opt.TxnDoneIndexCh;
 	lm.discardStatsWG.Wait() // 等 discardStats 发送协程退出, 防止其仍读 Option.DiscardStatsCh;
 	if err := lm.manifestFile.Close(); err != nil {
 		return err

@@ -27,7 +27,7 @@ type compactionPriority struct {
 }
 
 type targets struct {
-	dstLevelId       int
+	dstLevelId       int     // 目标层
 	levelTargetSSize []int64 // 对应 层中所有 .sst 文件的期望总大小; 用于计算 每层的优先级;
 	fileSize         []int64 // 对应 层中单个 .sst 文件的期望大小; 用于设定 合并的生成的目标 sst 文件大小;
 }
@@ -83,7 +83,7 @@ func (lm *LevelsManger) runCompacter(compactorId int, closer *utils.Closer) {
 	for {
 		select {
 		case <-ticker.C:
-			lm.runOnce(compactorId)
+			lm.RunOnce(compactorId)
 			// fmt.Printf("[compactorId:%d] Compaction start.\n", compactorId)
 		case <-closer.CloseSignal:
 			ticker.Stop()
@@ -92,7 +92,9 @@ func (lm *LevelsManger) runCompacter(compactorId int, closer *utils.Closer) {
 	}
 }
 
-func (lm *LevelsManger) runOnce(compactorId int) bool {
+// RunOnce 执行一轮压缩调度 (compactor 协程周期性调用的同一入口);
+// 导出以便外部手动触发压缩 (测试/运维);
+func (lm *LevelsManger) RunOnce(compactorId int) bool {
 	// 计算各个level的待合并分数; 按照大小排列,
 	prios := lm.pickCompactLevels()
 	// 如果是0号协程, 那么就优先合并 l0 层;
@@ -213,6 +215,7 @@ func (lm *LevelsManger) levelTargets() targets {
 
 // 3. 为每一层创建一个压缩信息
 func (lm *LevelsManger) pickCompactLevels() (prios []compactionPriority) {
+	// 寻找压缩目的地 Y(nextLevel) 层
 	levelTargets := lm.levelTargets()
 
 	addPriority := func(level int, score float64) {
@@ -255,7 +258,10 @@ func (lm *LevelsManger) pickCompactLevels() (prios []compactionPriority) {
 
 	out := prios[:0]
 	for _, prio := range prios {
-		if prio.score >= 1.0 {
+		// L0 层总是参与调度: 表数不足 NumLevelZeroTables 时 score<1 会被过滤,
+		// 导致 L0→L0 小表合并 (findTablesL0ToL0) 永远不被调度;
+		// 表数不足时其内部 ≥4 张的检查会快速返回 false, 空转一次无害;
+		if prio.score >= 1.0 || prio.levelId == 0 {
 			out = append(out, prio)
 		}
 	}
@@ -269,14 +275,14 @@ func (lm *LevelsManger) pickCompactLevels() (prios []compactionPriority) {
 }
 
 // 4. 开始遍历寻找 X层 中适合参与压缩的table, l0 -> lY ; l0->l0; lmax->lmax; lx -> lx+1;
-func (lm *LevelsManger) doCompact(id int, prio compactionPriority) error {
+func (lm *LevelsManger) doCompact(compactorId int, prio compactionPriority) error {
 	if prio.dst.dstLevelId == 0 {
 		// 重新统计一次 现有所有 .sst 文件大小情况, 以及期望大小;
 		prio.dst = lm.levelTargets()
 	}
 
 	cd := compactDef{
-		compactorId: id,
+		compactorId: compactorId,
 		prior:       prio,
 		dst:         prio.dst,
 		thisLevel:   lm.levelHandlers[prio.levelId],
@@ -300,12 +306,12 @@ func (lm *LevelsManger) doCompact(id int, prio compactionPriority) error {
 
 	defer lm.compactIngStatus.deleteCompactionDef(cd)
 
-	if err := lm.runCompactDef(id, prio.dst.dstLevelId, cd); err != nil {
-		log.Printf("[Compactor: %d] LOG Compact FAILED with error: %+v: %+v", id, err, cd)
+	if err := lm.runCompactDef(compactorId, prio.dst.dstLevelId, cd); err != nil {
+		log.Printf("[Compactor: %d] LOG Compact FAILED with error: %+v: %+v", compactorId, err, cd)
 		return err
 	}
-	log.Printf("[Compactor: %d] Compaction for level: %d to %d DONE",
-		id, cd.thisLevel.levelID, cd.nextLevel.levelID)
+	log.Printf("[CompactorID: %d] Compaction for level: %d to %d DONE",
+		compactorId, cd.thisLevel.levelID, cd.nextLevel.levelID)
 
 	return nil
 }
@@ -531,11 +537,14 @@ func (lm *LevelsManger) findMaxLevelTables(tables []*Table, cd *compactDef) bool
 		cd.thisTables = []*Table{t}
 
 		needFileSize := cd.dst.fileSize[cd.thisLevel.levelID]
-		// tableSize 已经足够大了, 找到就返回;
+		// tableSize 已经足够大了, 直接选中压缩 (此前 break 落到 return false, 大表永不压缩);
 		if t.Size() >= needFileSize {
-			break
+			if lm.compactIngStatus.compareAndAdd(thisAndNextLevelRLocked{}, *cd) {
+				return true
+			}
+			continue
 		}
-		// 文件不够大, 继续搜寻;
+		// 文件不够大, 合并相邻表凑足大小;
 		collectNextTables(t, needFileSize)
 		if !lm.compactIngStatus.compareAndAdd(thisAndNextLevelRLocked{}, *cd) {
 			cd.nextTables = cd.nextTables[:0]
@@ -560,7 +569,7 @@ func (lm *LevelsManger) sortByStaleDataSize(tables []*Table, cd *compactDef) {
 	})
 }
 
-func (lm *LevelsManger) runCompactDef(id int, level int, cd compactDef) error {
+func (lm *LevelsManger) runCompactDef(compactorId int, dstLevelId int, cd compactDef) error {
 	if len(cd.dst.fileSize) == 0 {
 		return errors.New("#runCompactDef() FileSizes cannot be zero. Targets are not set")
 	}
@@ -568,6 +577,7 @@ func (lm *LevelsManger) runCompactDef(id int, level int, cd compactDef) error {
 	common.CondPanic(len(cd.splits) != 0, errors.New("#runCompactDef, len(cd.splits) != 0"))
 	thisLevel := cd.thisLevel
 	nextLevel := cd.nextLevel
+
 	if thisLevel == nextLevel {
 	} else {
 		lm.addSplits(&cd)
@@ -577,7 +587,7 @@ func (lm *LevelsManger) runCompactDef(id int, level int, cd compactDef) error {
 		cd.splits = append(cd.splits, keyRange{})
 	}
 
-	buildTables, decrTables, err := lm.compactBuildTables(level, cd)
+	buildTables, decrTables, err := lm.compactBuildTables(dstLevelId, cd)
 	if err != nil {
 		return err
 	}
@@ -609,7 +619,7 @@ func (lm *LevelsManger) runCompactDef(id int, level int, cd compactDef) error {
 
 	if dur := time.Since(timeStart); dur >= 1*time.Second {
 		fmt.Printf("[GoRouteid:%d] Compact Input: lx:%d[%d tables] + ly:%d[%d tables]  with %d splits. -> Out: ly:%d[new %d tables]. tableName: [%s] -> [%s], took %v\n",
-			id, thisLevel.levelID, len(cd.thisTables),
+			compactorId, thisLevel.levelID, len(cd.thisTables),
 			nextLevel.levelID, len(cd.nextTables), len(cd.splits),
 			nextLevel.levelID, len(buildTables),
 			strings.Join(from, " "), strings.Join(to, " "),
@@ -618,15 +628,18 @@ func (lm *LevelsManger) runCompactDef(id int, level int, cd compactDef) error {
 	return nil
 }
 
-func (lm *LevelsManger) compactBuildTables(level int, cd compactDef) ([]*Table, func() error, error) {
+func (lm *LevelsManger) compactBuildTables(dstLevelId int, cd compactDef) ([]*Table, func() error, error) {
 	thisTables := cd.thisTables
 	nextTables := cd.nextTables
 	options := &interfaces.Options{IsAsc: true, IsSetCache: false}
 
 	newIterator := func() []interfaces.Iterator {
 		var iters []interfaces.Iterator
+		// switch 判断源头表层, X层,thisLevel;
+		// 拓展: 目标层是 baseLevel,Y层,dst,nextLevel;
 		switch {
-		case level == 0:
+		case cd.thisLevel.levelID == 0:
+			// L0 源: 一次可能选多张重叠表 (L0→dst 的 level 参数是目标层, 不能用于判断源);
 			iters = append(iters, iteratorsReversed(thisTables, options)...)
 		case len(thisTables) > 0:
 			utils.AssertTrue(len(thisTables) == 1)
@@ -645,7 +658,7 @@ func (lm *LevelsManger) compactBuildTables(level int, cd compactDef) ([]*Table, 
 		}
 		go func(kr keyRange) {
 			defer inflightBuilders.Done(nil)
-			iterators := newIterator() // 全量表参与迭代;
+			iterators := newIterator() // 全量表参与迭代, 包括 X层, Y层;
 			iterator := NewMergingIterator(iterators, options)
 			defer iterator.Close() // 逐个解开 table 引用
 			lm.subCompact(iterator, kr, cd, inflightBuilders, res)
@@ -783,13 +796,16 @@ func (lm *LevelsManger) subCompact(iterator interfaces.Iterator, kr keyRange, cd
 					// 只有在遇到 删除标记 或者 key的保留数量达到阈值时, 才会跳过后面的不同版本key(原生key相同);
 					skipKey = model.SafeCopy(skipKey, entry.Key)
 					// 设置后续的key需要跳过后, 再进行判断 当前key 是否需要保留:
+					// 末层保留: 进入末层的删除标记保留为 stale, 由 Lmax→Lmax 统一回收;
+					// (若此处丢弃, 末层永远不会积累 stale 数据, findMaxLevelTables 形同虚设)
+					keepForLastLevel := cd.nextLevel.isLastLevel() && expired
 					switch {
 					case !expired && lastKeyVersion:
 					// 情况1: 不是删除标记 && 但是key版本数量够了; 当前key不用删除, 把后续的版本key清除即可;
 					// 保留;
-					case hasOverlap:
-						// 情况2: (是删除标记 || (不是删除标记 && key版本保留可够也可不够) && 和nnL层有重叠区间;
-						// 保留;
+					case hasOverlap || keepForLastLevel:
+						// 情况2: (是删除标记 || (不是删除标记 && key版本保留可够也可不够) && 和nnL层有重叠区间);
+						// 或: 删除标记进入末层; 保留;
 					default:
 						// 其余情况: 删除标记 || 重叠区间不多 || key保留版本数量足够;
 						numSkips++

@@ -29,7 +29,7 @@ type ValueLog struct {
 	DirPath                string
 	filesLock              sync.RWMutex // 防止 vlogFile 意外被删除;
 	filesMap               map[uint32]*VLogFile
-	maxFid                 uint32 // vlog 组件的最大id
+	maxFid                 atomic.Uint32 // vlog 组件的最大id
 	FilesToDel             []uint32
 	activeIteratorNum      int32
 	writableFileOffset     uint32
@@ -81,13 +81,13 @@ func (vlog *ValueLog) Open(replayFn model.LogEntry) error {
 			return errors.Wrapf(err, "Open existing file: %q", lf.FileName())
 		}
 		// 如果当前文件不是 最后一个文件, 执行属性赋值操作;
-		if fid < vlog.maxFid {
+		if fid < vlog.maxFid.Load() {
 			if err = lf.Init(); err != nil {
 				return err
 			}
 		}
 	}
-	lastVLogFile, ok := vlog.filesMap[vlog.maxFid]
+	lastVLogFile, ok := vlog.filesMap[vlog.maxFid.Load()]
 	common.CondPanic(!ok, errors.New("vlog.filesMap[vlog.maxFid] not found"))
 	// 主要是获得 最后一个 vlog 文件的 可写offset位置, 并没有做过多数据判断;
 	endOffset, err := vlog.iterator(lastVLogFile, 0, replayFn)
@@ -126,8 +126,8 @@ func (vlog *ValueLog) fillVlogFileMap() error {
 		found[fid] = true
 		vlogFile := &VLogFile{FID: uint32(fid), Lock: sync.RWMutex{}}
 		vlog.filesMap[uint32(fid)] = vlogFile
-		if vlog.maxFid < uint32(fid) {
-			vlog.maxFid = uint32(fid)
+		if vlog.maxFid.Load() < uint32(fid) {
+			vlog.maxFid.Store(uint32(fid))
 		}
 	}
 	return nil
@@ -194,7 +194,7 @@ func (vlog *ValueLog) getVlogFileLocked(vp *model.ValuePtr) (*VLogFile, error) {
 	if !ok {
 		return nil, errors.Errorf("file with ID: %d not found", vp.Fid)
 	}
-	if vp.Fid == vlog.maxFid {
+	if vp.Fid == vlog.maxFid.Load() {
 		if vp.Offset >= vlog.getWriteOffset() {
 			return nil, errors.Errorf("Invalid value pointer offset: %d greater than current offset: %d", vp.Offset, vlog.writableFileOffset)
 		}
@@ -241,7 +241,7 @@ func (vlog *ValueLog) Write(reqs []*model.Request) (wrote bool, err error) {
 		return wrote, common.Wrap(err, "#Write while validating reqs")
 	}
 	vlog.filesLock.RLock()
-	curVlogFile := vlog.filesMap[vlog.maxFid]
+	curVlogFile := vlog.filesMap[vlog.maxFid.Load()]
 	vlog.filesLock.RUnlock()
 	vlog.buf.Reset()
 
@@ -272,13 +272,13 @@ func (vlog *ValueLog) Write(reqs []*model.Request) (wrote bool, err error) {
 			if err := curVlogFile.DoneWriting(vlog.getWriteOffset()); err != nil {
 				return err
 			}
-			newFid := atomic.AddUint32(&vlog.maxFid, 1)
+			newFid := vlog.maxFid.Add(1)
 			common.CondPanic(newFid <= 0, fmt.Errorf("vlogFile newid has overflown uint32: %v", newFid))
 			var err error
 			curVlogFile, err = vlog.createVlogFile(newFid)
 			if err != nil {
 				// 轮转失败: 回滚 maxFid, 下次写入仍指向旧文件 (AppendBuffer 会自动扩容), 避免取到 filesMap 中不存在的文件;
-				atomic.AddUint32(&vlog.maxFid, ^uint32(0))
+				vlog.maxFid.Add(^uint32(0))
 				return err
 			}
 			atomic.AddInt32(&vlog.Db.logRotates, 1)
@@ -335,7 +335,7 @@ func (vlog *ValueLog) Write(reqs []*model.Request) (wrote bool, err error) {
 // 保证 WAL 中 ValuePtr 指向的 value 已持久化;
 func (vlog *ValueLog) Sync() error {
 	vlog.filesLock.RLock()
-	curVlogFile := vlog.filesMap[vlog.maxFid]
+	curVlogFile := vlog.filesMap[vlog.maxFid.Load()]
 	vlog.filesLock.RUnlock()
 	if curVlogFile == nil {
 		return nil
@@ -387,7 +387,7 @@ func (vlog *ValueLog) Close() error {
 	vlog.runGCOver.Wait()
 
 	var err error
-	maxFid := vlog.maxFid
+	maxFid := vlog.maxFid.Load()
 	// 由于每次启动kv, 都将创建新vlog; 因此, 每次关闭前, 进行判断最新的vlog是否有数据写入, 没有写入的话,那就执行删除掉;
 	// 避免 无效文件过多;
 	for _, vLogFile := range vlog.filesMap {
@@ -496,7 +496,7 @@ func (vlog *ValueLog) createVlogFile(fid uint32) (*VLogFile, error) {
 	vlog.filesLock.Lock()
 	defer vlog.filesLock.Unlock()
 	vlog.filesMap[fid] = vlogFile
-	vlog.maxFid = fid
+	vlog.maxFid.Store(fid)
 	atomic.StoreUint32(&vlog.writableFileOffset, 0) // 新创建的 vlogFile 文件, 无魔数片头, 直接从0开始写入;
 	vlog.entriesWrittenNum = 0
 	return vlogFile, nil
@@ -685,7 +685,7 @@ func (vlog *ValueLog) pickVlogFile(discardRatio float64) *VLogFile {
 
 	vlog.VLogFileDisCardStaInfo.mux.RLock()
 	for _, sortedFileId := range sortedFileIDs {
-		if sortedFileId == vlog.maxFid {
+		if sortedFileId == vlog.maxFid.Load() {
 			continue
 		}
 		if vlog.VLogFileDisCardStaInfo.FileMap[sortedFileId] > candidate.discard {
@@ -709,7 +709,7 @@ func (vlog *ValueLog) pickVlogFile(discardRatio float64) *VLogFile {
 // GC: 对vlog中的每个kv进行判断: LSM中有的话, 说明有效数据(哪怕有更高版本的删除标记); 就再重新写到新文件中,否则就丢弃掉;
 func (vlog *ValueLog) gcReWriteLog(logFile *VLogFile) error {
 	vlog.filesLock.RLock()
-	maxFid := vlog.maxFid
+	maxFid := vlog.maxFid.Load()
 	vlog.filesLock.RUnlock()
 	common.CondPanic((logFile.FID) >= maxFid, fmt.Errorf("fid to move: %d. Current max fid: %d", logFile.FID, maxFid))
 
@@ -721,6 +721,10 @@ func (vlog *ValueLog) gcReWriteLog(logFile *VLogFile) error {
 		count++
 		lsmEntry, err := vlog.Db.Lsm.Get(vlogEntry.Key)
 		if err != nil {
+			// 版本已不在 LSM: 被压缩清除 (被更新/删除覆盖, NumVersionsToKeep=1) → 该 vlog 条目已死, 丢弃;
+			if errors.Is(err, common.ErrKeyNotFound) {
+				return nil
+			}
 			return err
 		}
 

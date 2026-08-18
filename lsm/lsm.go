@@ -177,8 +177,8 @@ func (lsm *LSM) Rotate() {
 func (lsm *LSM) StartFlushMemTable(closer *utils.Closer) {
 	defer closer.Done()
 	flushIMemoryTable := func(im *MemoryTable) {
-		// 判断 im中 是否有数据;
-		if im == nil || im.Size() > 0 {
+		// 空表直接跳过 (避免 0 字节 SST 构建), 有数据的表才 flush;
+		if im == nil || im.Size() == 0 {
 			return
 		}
 		if err := lsm.LevelManger.flush(im); err != nil {
