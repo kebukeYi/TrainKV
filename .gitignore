@@ -4,10 +4,13 @@
 # Binaries for programs and plugins
 *.exe
 *.xml
+*.iml
 *.exe~
 *.dll
 *.so
 *.dylib
+*.json
+*.json.bak
 
 # Test binary, built with `go test -c`
 *.test
