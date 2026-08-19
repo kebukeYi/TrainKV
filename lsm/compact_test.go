@@ -26,12 +26,12 @@ var compactOptions = &Options{
 	BloomFalsePositive: 0.01,      // 误差率
 	CacheNums:          10 * 1024, //
 
-	ValueThreshold:      1,       // 1B; 1 << 20(1MB)
-	ValueLogMaxEntries:  100,     // 1000000
-	ValueLogFileSize:    1 << 29, // 512MB; 1<<30-1(1GB);
-	ValueLogFileMaxSize: math.MaxUint32,
-	SyncWrites:          false, // 设置 wsl 和 vlogfile 的同步写
-	VerifyValueChecksum: false, // false
+	ValueThreshold:      1,              // 1B; 1 << 20(1MB)
+	ValueLogMaxEntries:  100,            // 1000000
+	ValueLogFileSize:    1 << 29,        // 512MB; 1<<30-1(1GB);
+	ValueLogFileMaxSize: math.MaxUint32, // 4GB
+	SyncWrites:          false,          // 设置 wsl 和 vlogfile 的同步写
+	VerifyValueChecksum: false,          // false
 	DiscardStatsCh:      nil,
 
 	MaxBatchCount: 100,
@@ -42,7 +42,7 @@ var compactOptions = &Options{
 	LevelSizeMultiplier: 10,
 	TableSizeMultiplier: 2,
 	BaseTableSize:       2 << 20, // 2 << 20(2MB)
-	NumLevelZeroTables:  5,
+	NumLevelZeroTables:  10,
 	MaxLevelNum:         common.MaxLevelNum,
 	SSTKeyRangCheckNums: 5000,
 	NumVersionsToKeep:   1,

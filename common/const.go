@@ -19,13 +19,13 @@ const (
 	ManifestFileCrcLen                = 8
 	DefaultFileFlag                   = os.O_RDWR | os.O_CREATE | os.O_APPEND
 	DefaultFileMode                   = 0666 // 666
-	MaxHeaderSize                     = 21   // 基于可变长编码,vlogFile其最可能的编码;
+	MaxHeaderSize                     = 21   // 基于可变长编码, vlogFile其最可能的编码;
 	VlogHeaderSize                    = 0
-	WriteChBatchThreshold             = 900 // 写通道攒批请求数达到该值即强制写盘, 须小于 KvWriteChCapacity(1000);
+	WriteChBatchThreshold             = 900 // 写通道, 攒批请求数达到该值即强制写盘, 须小于 KvWriteChCapacity(1000);
 )
 
-const LevelMaxStaleDataSize = 10 << 20 // 10MB
-const MaxAllocatorInitialSize = 256 << 20
+const LevelMaxStaleDataSize = 10 << 20    // 10MB
+const MaxAllocatorInitialSize = 256 << 20 // 256MB
 
 // entry meta
 const (

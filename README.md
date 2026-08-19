@@ -1,38 +1,49 @@
-<div align="center">
-<strong>
-<samp>
-
-[English](https://github.com/kebukeYi/TrainKV/blob/main/README.md) · [简体中文](https://github.com/kebukeYi/TrainKV/blob/main/README_CN.md)
-
-</samp>
-</strong>
-</div>
-
 # TrainKV
 
-[![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://go.dev/)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+A lightweight embedded key-value store in pure Go, built on the LSM-tree architecture with value-log separation — inspired by [Badger](https://github.com/dgraph-io/badger).
 
-TrainKV is a lightweight embedded Key-Value storage engine based on LSM-Tree architecture with key-value separation support.
+TrainKV is designed for learning and practical use: a compact, readable codebase (~10k LOC, no CGO) with production-grade concerns — MVCC transactions, group commit, block cache, bloom filters, background compaction and value-log garbage collection — all covered by end-to-end tests and race-detector verification.
 
 ## Features
 
-- **LSM-Tree Storage Engine** - Multi-level compaction with L0-L7 levels
-- **SkipList MemTable** - Lock-free skip list with Arena allocator
-- **KV Separation** - Large values stored in Value Log to reduce write amplification
-- **W-TinyLFU Cache** - Adaptive cache with Bloom Filter + Count-Min Sketch
-- **Mmap I/O** - Memory-mapped file for efficient random reads
-- **Crash Recovery** - WAL + CRC32 checksum + Manifest metadata
-- **Value Log GC** - Automatic garbage collection based on discard ratio
-- **Transaction Support** - ACID-compliant transaction operations with optional conflict detection
+- **LSM-tree storage**: write-optimized memtable (skip list + WAL) flushing to sorted SSTables (L0–L6), with background compaction.
+- **Value-log separation**: values above `ValueThreshold` are stored in a value log (vlog); the LSM keeps a 12-byte pointer. Reads of big values go through mmap with lazy resolution.
+- **MVCC transactions**: timestamp-ordered read/write transactions with conflict detection (optional), read-your-writes, and safe version reclamation.
+- **Group commit**: concurrent writers are batched through a write channel, amortizing fsync across requests.
+- **Block cache (W-TinyLFU)**: adaptive hot/cold caching of SST blocks; bloom filters prune reads.
+- **Crash safety**: WAL replay, MANIFEST-based table tracking, vlog value pointers are synced before WAL.
+- **vlog GC**: dead value reclamation driven by compaction-generated discard statistics.
 
-## Installation
+## Architecture
 
-```sh
-go get github.com/kebukeYi/TrainKV/v2@latest
+```
+┌──────────────────────────────  TrainKV  ──────────────────────────────┐
+│                                                                       │
+│  Transaction API ── writeCh (group commit) ── handleWriteCh           │
+│        │                                       │                      │
+│        │ txn.Set/Get/Delete                    ├─ vlog.Write (big values)
+│        │                                       ├─ LSM.Put              │
+│        ▼                                       │   ├─ WAL + skip list  │
+│  LSM ── memtable ──flush──► SST (L0) ──compaction──► L1..L6            │
+│        │  ▲                    │  ▲                                   │
+│        │  │ block cache        │  │ bloom filter + block index        │
+│        ▼  └────────────────────┘  └───────────────────┐               │
+│  MANIFEST ── table metadata        compaction ── discard stats ──► vlog GC
+└───────────────────────────────────────────────────────────────────────┘
 ```
 
-## Quick Start
+Key components:
+
+| Component | Role |
+|---|---|
+| `skl` | Lock-free skip list + arena allocator for the memtable |
+| `lsm` | Memtable/WAL, SST build & read (block index, bloom), L0–L6 compaction |
+| `utils/cache` | W-TinyLFU block cache (win-LRU + segmented-LRU + CMSketch) |
+| `vlog` | Value log: append-only big-value storage, GC by discard ratio |
+| `MANIFEST` | Persistent table registry for crash recovery |
+| `txn` | MVCC transactions: timestamps, conflict detection, read-your-writes |
+
+## Quick start
 
 ```go
 package main
@@ -47,10 +58,9 @@ import (
 )
 
 func main() {
-	// 未指定具体工作目录时, 程序会创建临时目录, 程序正常关闭时会清理临时目录;
-	dirPath := ""
-	defaultOpt := lsm.GetDefaultOpt(dirPath)
-	db, err, callBack := TrainKV.Open(defaultOpt)
+	// Empty dir -> a temp dir is created and cleaned up on Close.
+	opt := lsm.GetDefaultOpt("")
+	db, err, callBack := TrainKV.Open(opt)
 	if err != nil {
 		panic(err)
 	}
@@ -59,86 +69,118 @@ func main() {
 		_ = callBack()
 	}()
 
-	key := []byte("key")
-	val := []byte("value1")
-
-	txn1 := db.NewTransaction(true)
-
-	// set key.
-	if err = txn1.Set(key, val); err != nil {
+	// Write transaction.
+	txn := db.NewTransaction(true)
+	if err := txn.Set([]byte("key1"), []byte("value1")); err != nil {
+		panic(err)
+	}
+	if _, err := txn.Commit(); err != nil {
 		panic(err)
 	}
 
-	// update key again.
-	val2 := []byte("value2")
-	if err = txn1.Set(key, val2); err != nil {
-		panic(err)
-	}
-
-	txn2 := db.NewTransaction(true)
-	// To test a valid key.
-	if err = txn2.Set([]byte("newKey"), []byte("newValue")); err != nil {
-		panic(err)
-	}
-	_, err = txn2.Commit()
+	// Read transaction.
+	rtxn := db.NewTransaction(false)
+	defer rtxn.Discard()
+	entry, err := rtxn.Get([]byte("key1"))
 	if err != nil {
 		panic(err)
 	}
+	fmt.Printf("key1 = %s\n", entry.Value)
 
-	// get key.
-	if entry, err := txn1.Get(key); err != nil || entry == nil {
-		fmt.Printf("err:%v; txn.get(key): %s;\n", err, key)
-	} else {
-		fmt.Printf("txn.get(%s), value=%s, meta:%d, version=%d;\n",
-			model.ParseKey(entry.Key), entry.Value, entry.Meta, entry.Version)
-	}
-
-	// Delete key.
-	if err := txn1.Delete(key); err != nil {
-		panic(err)
-	}
-
-	// get key again.
-	if entry, err := txn1.Get(key); err != nil || entry == nil {
-		fmt.Printf("err: %v; txn.get(%s);\n", err, key)
-	} else {
-		fmt.Printf("txn.get(%s), value=%s, meta:%d, version=%d;\n",
-			model.ParseKey(entry.Key), entry.Value, entry.Meta, entry.Version)
-	}
-
-	// Iterator keys(Only valid values are returned).
-	iter := txn1.NewIterator(&interfaces.Options{IsAsc: true, IsSetCache: true})
-	defer func() { err = iter.Close() }()
-	iter.Rewind()
-	for iter.Valid() {
+	// Iterate (only visible, non-deleted entries are returned).
+	iter := rtxn.NewIterator(&interfaces.Options{IsAsc: true, IsSetCache: true})
+	defer func() { _ = iter.Close() }()
+	for iter.Rewind(); iter.Valid(); iter.Next() {
 		it := iter.Item()
-		if it.Item.Version != 0 {
-			fmt.Printf("txn.Iterator key=%s, value=%s, meta:%d, version=%d;\n", model.ParseKey(it.Item.Key), it.Item.Value, it.Item.Meta, it.Item.Version)
-		}
-		iter.Next()
+		fmt.Printf("%s = %s\n", model.ParseKey(it.Item.Key), it.Item.Value)
 	}
-	commitTs, err := txn1.Commit()
-	if err != nil {
+
+	// Delete.
+	dtxn := db.NewTransaction(true)
+	if err := dtxn.Delete([]byte("key1")); err != nil {
 		panic(err)
 	}
-	fmt.Printf("txn.Commit(), commitTs=%d;\n", commitTs)
+	if _, err := dtxn.Commit(); err != nil {
+		panic(err)
+	}
+
+	// vlog GC: reclaim dead big values (driven by compaction stats).
+	_ = db.RunValueLogGC(0.5)
 }
-
 ```
 
-## Architecture
+See `example/main.go` for a runnable version.
 
+## API overview
+
+| API | Description |
+|---|---|
+| `TrainKV.Open(opt)` | Open (or create) a database; returns `(db, err, callBack)` — the callback removes the temp dir if `opt.WorkDir` was empty |
+| `db.NewTransaction(update bool)` | Start a read (`false`) or write (`true`) transaction |
+| `txn.Set / Get / Delete` | Data operations |
+| `txn.Commit() / Discard() / RollBack()` | Finish a transaction |
+| `txn.NewIterator(&interfaces.Options{...})` | Scan with MVCC visibility |
+| `db.RunValueLogGC(ratio)` | Trigger vlog garbage collection |
+| `db.BatchSet / db.WriteRequest` | Lower-level batched write API |
+
+Key options (`lsm.GetDefaultOpt`): `MemTableSize` (64MB), `ValueThreshold` (1MB — values above go to vlog), `SyncWrites` (true — fsync vlog + WAL per batch), `BlockSize` (4KB), `CacheNums` (10240), `NumLevelZeroTables` (5), `MaxLevelNum` (7), `DetectConflicts` (true).
+
+## Contracts
+
+These contracts keep the hot paths allocation-free and race-free. Please follow them:
+
+1. **Transactions**: a transaction must not be used after `Commit()` or `Discard()` (it is pooled and may be reused by another caller).
+2. **Iterator items are borrowed**: the `Item` returned by `iter.Item()` is valid only until the next `Next()`/`Rewind()`/`Seek()`. `Rewind()` invalidates all previously returned items (the backing arena is reset).
+3. **Big values are lazy**: for entries stored in the vlog, `Item.Item.Value` is `nil` — call `iter.Item().Value()` to resolve, and consume it before the next `Next()`.
+
+## Performance
+
+Measured on an Intel i5-7300HQ (WSL2), Go 1.25, `-benchtime=2s -count=3` (medians). `SyncWrites=true` (production config); allocs/op is the stable metric — ns/op on the write path is fsync-dominated.
+
+### Write path
+
+| Benchmark | Scenario | ns/op | allocs/op |
+|---|---|---|---|
+| WriteTxnSet | serial single txn, 128B | ~3.8ms | **5** |
+| TrainKVTxnSetParallel | 4 goroutines | **~2.1ms** | **8** |
+| TrainKVBatchSet10 | 10 entries/txn | ~4.7ms | 64 |
+| TrainKVTxnSetBigValue | 1MB value (kv-separated) | ~25ms | 8 |
+| WriteRequest | low-level batch API | ~4.0ms | 15 |
+
+### Read path
+
+| Benchmark | Scenario | ns/op | allocs/op |
+|---|---|---|---|
+| ReadGetHitSeq | memtable hit | **~1.2µs** (0.8M ops/s) | 2 |
+| ReadGetMiss | not found | ~0.9µs | 2 |
+| ReadIterate | scan 100K keys (memtable) | ~35ms | **832** (was 200,000) |
+| ReadIterateSST | scan 100K keys (SST) | ~26ms | **0** |
+| ReadIterateBigValue | scan 500 × 1MB (lazy) | ~110µs | **3** (no MB copies) |
+
+The read path is allocation-free on scans (chunked arena) and resolves big values on demand instead of copying them eagerly.
+
+## Testing
+
+All five core paths — read, write, compaction, restart/recovery, vlog GC — have end-to-end tests, and the full suite passes under `-race`:
+
+- `TestFlushReadIntegrity` — 100K keys read back after flush: 0 missing
+- `TestDBAutoCompaction` — 60K writes + updates + deletes → compaction → full read-back, with concurrent reads
+- `TestValueLogGCFull` — vlog GC end-to-end: stats → pick → rewrite → delete old file → reopen
+- `TestCompactionL0ToL0 / L0ToLmax / TestLastLevelCompaction` — all three compaction paths
+- `TestCrashRecovery` — WAL replay after simulated power loss
+
+```bash
+go test ./... -race -count=1          # full suite with race detector
+go test ./benchmk/ -bench=. -benchmem -benchtime=2s -count=3   # benchmarks
 ```
-┌─────────────────────────────────────────┐
-│              TrainKV API                │
-├─────────────────────────────────────────┤
-│  MemTable (SkipList)  │   Value Log     │
-├───────────────────────┼─────────────────┤
-│      Immutable MemTables (Queue)        │
-├─────────────────────────────────────────┤
-│            LSM-Tree Levels              │
-│  L0 → L1 → L2 → ... → L7 (SSTable)      │
-├─────────────────────────────────────────┤
-│   Mmap File I/O  │  WAL  │  Manifest    │
-└─────────────────────────────────────────┘
-```
+
+## Documentation
+
+- `docs/improvements-summary.md` — plain-language summary of the optimization & bug-fix campaign
+- `docs/improvements-detail.md` — code-level details of every change
+- `docs/todo-list.md` — prioritized backlog (crash-recovery deep scenarios, soak tests, remaining perf items)
+- `docs/write-path-optimization.md` — the original write-path optimization report
+
+## License
+
+MIT — see [LICENSE](LICENSE).

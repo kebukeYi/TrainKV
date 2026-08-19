@@ -2,13 +2,9 @@ package benchmk
 
 // 全方位读写流程性能基准;
 //
-// 读流程: memtable 命中(顺序/随机)、未命中、vlog 大 value、迭代器全量扫描;
-// 写流程: 串行单条(128B/4KB)、批量 10 条、并发、大 value(1MB, kv 分离)、直写 API;
+// 读流程: memtable 命中(顺序/随机)、未命中(不存在的key)、vlog 大 value、迭代器全量扫描(不进cache);
+// 写流程: 串行单条(128B/4KB)、批量 10 条、并发、大 value(1MB, kv 分离)、直写API;
 // 混合:   9:1 读:写;
-//
-// 注意: 当前工作区 flush→SST 路径存在预存数据问题(flush 后约 1.4% key 丢失、
-// 连续轮转时偶发 panic), 故读流程基准的数据全部驻留 memtable(100K*512B=50MB<64MB),
-// 不触发轮转; SST 读路径暂无法可靠测出性能数字, 详见测试报告。
 
 import (
 	"math/rand"
@@ -21,7 +17,7 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/lsm"
 )
 
-var perfDataDir = "/usr/golanddata/triankv/perf2"
+var perfDataDir = "/usr/golanddata/trainkv/perf2"
 
 const (
 	perfKeyNum = 100000 // 读数据集规模: 100K * 512B ≈ 50MB, 小于 64MB memtable, 不触发轮转;
@@ -32,6 +28,7 @@ const (
 func loadMemData(b *testing.B, train *TrainKV.TrainKV) {
 	txn := train.NewTransaction(true)
 	for i := 0; i < perfKeyNum; i++ {
+		// val: 512B
 		if err := txn.Set(GetKey(i), GetValue()); err != nil {
 			b.Fatal(err)
 		}
@@ -60,6 +57,7 @@ func openPerfDB(b *testing.B) *TrainKV.TrainKV {
 func BenchmarkWriteTxnSet(b *testing.B) {
 	b.ReportAllocs()
 	train := openPerfDB(b)
+
 	val := make([]byte, 128)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -96,6 +94,7 @@ func BenchmarkWriteTxnSet4K(b *testing.B) {
 func BenchmarkReadGetHitSeq(b *testing.B) {
 	b.ReportAllocs()
 	train := openPerfDB(b)
+	// 数据都在 memtable 中;
 	loadMemData(b, train)
 	txn := train.NewTransaction(false)
 	defer txn.Discard()
@@ -112,6 +111,7 @@ func BenchmarkReadGetHitRandom(b *testing.B) {
 	b.ReportAllocs()
 	train := openPerfDB(b)
 	loadMemData(b, train)
+
 	order := rand.New(rand.NewSource(42)).Perm(perfKeyNum)
 	txn := train.NewTransaction(false)
 	defer txn.Discard()
@@ -128,6 +128,7 @@ func BenchmarkReadGetMiss(b *testing.B) {
 	b.ReportAllocs()
 	train := openPerfDB(b)
 	loadMemData(b, train)
+
 	txn := train.NewTransaction(false)
 	defer txn.Discard()
 	b.ResetTimer()
@@ -259,6 +260,8 @@ func BenchmarkReadIterateBigValue(b *testing.B) {
 	clearDir(perfDataDir)
 	train, _, _ := TrainKV.Open(lsm.GetDefaultOpt(perfDataDir))
 	defer train.Close()
+
+	// 构造 500MB 到vlog中;
 	val := make([]byte, 1<<20+1)
 	txn := train.NewTransaction(true)
 	const n = 500
@@ -276,8 +279,12 @@ func BenchmarkReadIterateBigValue(b *testing.B) {
 	if _, err := txn.Commit(); err != nil {
 		b.Fatal(err)
 	}
+
 	rtxn := train.NewTransaction(false)
 	defer rtxn.Discard()
+
+	// NewSkipListIterator().
+	// blockIterator.NewChunkedArena(64MB)
 	iter := rtxn.NewIterator(&interfaces.Options{IsAsc: true, IsSetCache: false})
 	defer func() { _ = iter.Close() }()
 	b.ResetTimer()
@@ -299,6 +306,7 @@ func BenchmarkReadIterateBigValueEager(b *testing.B) {
 	clearDir(perfDataDir)
 	train, _, _ := TrainKV.Open(lsm.GetDefaultOpt(perfDataDir))
 	defer train.Close()
+
 	val := make([]byte, 1<<20+1)
 	txn := train.NewTransaction(true)
 	const n = 500
@@ -316,6 +324,7 @@ func BenchmarkReadIterateBigValueEager(b *testing.B) {
 	if _, err := txn.Commit(); err != nil {
 		b.Fatal(err)
 	}
+
 	rtxn := train.NewTransaction(false)
 	defer rtxn.Discard()
 	iter := rtxn.NewIterator(&interfaces.Options{IsAsc: true, IsSetCache: false})

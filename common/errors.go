@@ -81,9 +81,7 @@ func Panic(err error) {
 		panic(err)
 	}
 }
-func Panic2(_ interface{}, err error) {
-	Panic(err)
-}
+
 func CondPanic(condition bool, err error) {
 	if condition {
 		Panic(err)

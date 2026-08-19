@@ -27,6 +27,7 @@ type LevelsManger struct {
 
 // 临时诊断用: 暴露层处理器和表列表;
 func (lm *LevelsManger) GetLevelHandler(i int) *LevelHandler { return lm.levelHandlers[i] }
+
 func (lm *LevelHandler) GetTables() []*Table {
 	// 需加锁: flush/compaction 协程会并发修改 tables;
 	lm.mux.RLock()

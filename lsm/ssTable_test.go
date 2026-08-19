@@ -2,14 +2,15 @@ package lsm
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainKV/v2/common"
-	"github.com/kebukeYi/TrainKV/v2/interfaces"
-	"github.com/kebukeYi/TrainKV/v2/model"
-	"github.com/kebukeYi/TrainKV/v2/utils"
 	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
+
+	"github.com/kebukeYi/TrainKV/v2/common"
+	"github.com/kebukeYi/TrainKV/v2/interfaces"
+	"github.com/kebukeYi/TrainKV/v2/model"
+	"github.com/kebukeYi/TrainKV/v2/utils"
 )
 
 var dirPath = "/usr/golanddata/trainkv/sst"
@@ -41,4 +42,5 @@ func TestOpenSStable(t *testing.T) {
 			model.ParseKey(entry.Key), entry.Value, entry.Meta, entry.Version)
 		iterator.Next()
 	}
+	iterator.Close()
 }

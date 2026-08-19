@@ -1,9 +1,7 @@
 package benchmk
 
 import (
-	"fmt"
 	"math/rand"
-	"os"
 	"strconv"
 	"time"
 )
@@ -29,19 +27,4 @@ func GetValue() []byte {
 		val = append(val, alphabet[rand.Int()%36])
 	}
 	return val
-}
-
-func ClearDir(dir string) {
-	_, err := os.Stat(dir)
-	if err == nil {
-		if err = os.RemoveAll(dir); err != nil {
-			fmt.Printf("clear dir %s failed;\n", dir)
-			panic(err)
-		}
-	}
-	err = os.MkdirAll(dir, os.ModePerm)
-	if err != nil {
-		_ = fmt.Sprintf("create dir %s failed;\n", dir)
-		panic(err)
-	}
 }

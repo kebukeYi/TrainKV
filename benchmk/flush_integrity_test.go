@@ -46,7 +46,7 @@ func TestFlushReadIntegrity(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	// 全量读回, 期望 0 丢失;
+	// 全量读回, 0 丢失;
 	rtxn := train.NewTransaction(false)
 	defer rtxn.Discard()
 	misses := 0

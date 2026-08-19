@@ -45,9 +45,12 @@ func NewTransactionManager(options *lsm.Options) *TransactionManager {
 	tm.commitMark.Init(tm.closer, nil)
 	return tm
 }
+
 func (m *TransactionManager) Stop() {
+	//需要等待 2次 done();
 	m.closer.CloseAndWait()
 }
+
 func (m *TransactionManager) startTs(update bool) uint64 {
 	m.tsLock.Lock()
 	// 每次申请时, 申请到最新的index, 然后就等待其结束;
@@ -55,19 +58,22 @@ func (m *TransactionManager) startTs(update bool) uint64 {
 	startTs := m.nextTxnTs - 1
 	m.startMark.Begin(startTs)
 	m.tsLock.Unlock()
+	// 只有纯读事务会在这里等待;
 	if !update {
-		// 读事务在开启这一刻就向自己承诺:"所有编号 ≤ startTs 的提交,你都应该看得见";
-		// 写事务的承诺延迟到首次读 LSM 时兑现(ensureStartTsReady), 纯写事务不付这笔等待;
+		// 纯读事务在开启这一刻就向自己承诺:"所有编号 ≤ startTs 的提交, 都应该看得见";
+		// 写事务的承诺, 延迟到首次读 LSM 时兑现(ensureStartTsReady), 纯写事务不付这笔等待;
 		err := m.commitMark.WaitForIndexDone(context.Background(), startTs)
 		common.Check(err)
 	}
 	return startTs
 }
+
 func (m *TransactionManager) incrementNextTs() {
 	m.tsLock.Lock()
 	m.nextTxnTs++
 	m.tsLock.Unlock()
 }
+
 func (m *TransactionManager) DiscardTs() uint64 {
 	return m.startMark.GetDoneIndex()
 }
@@ -109,7 +115,7 @@ func (m *TransactionManager) newCommitTs(txn *Transaction) (uint64, bool) {
 	m.commitMark.Begin(commitTs)
 	utils.AssertTrue(commitTs >= m.lastCleanupTs)
 	if m.detectConflicts {
-		// 拷贝写 key 哈希快照; txn.conflictKeys 事务结束后即被池化清除;
+		// 拷贝 当前事务的 写key[]哈希快照, 目的是 txn.conflictKeys[] 在事务结束后, 即被池化清除,减少引用,降低GC;
 		keys := make([]uint64, 0, len(txn.conflictKeys))
 		for k := range txn.conflictKeys {
 			keys = append(keys, k)
@@ -185,6 +191,7 @@ func (db *TrainKV) NewTransaction(update bool) *Transaction {
 	} else {
 		txn = &Transaction{}
 	}
+	// 注意: txnPool 取出时必须复位, Get 拿回来的对象带着上次事务的残留数据!!!
 	txn.db = db
 	txn.update = update
 	txn.count = 1
@@ -192,22 +199,29 @@ func (db *TrainKV) NewTransaction(update bool) *Transaction {
 	txn.commitTs = 0
 	txn.discard = false
 	txn.startDone = false
+	// 只有纯读事务 才会等;
 	txn.startTsReady = !update
 	txn.readKeys = nil
+	// 对空slice(nil) 切片操作合法; len=0 , cap>0;
 	txn.keyBufs = txn.keyBufs[:0]
 	txn.numIterators.Store(0)
+	// 判断: 纯写事务 or 读写事务 or 纯读事务;
 	if update {
+		// 开启了冲突检测
 		if db.Opt.DetectConflicts {
-			// conflictKeys 在提交时快照进 commitedTxns, 事务结束后可池化复用;
+			// conflictKeys 在提交时, 快照复制 进 commitedTxns[], 事务结束后可池化复用;
+			// 判断 == nil 只是判断是否是 新建 Transaction{}
 			if txn.conflictKeys == nil {
 				txn.conflictKeys = make(map[uint64]struct{})
 			}
 		}
-		// pendingKeys 在 Discard 时 clear, 底层 bucket 池化复用;
+		// pendingKeys 在 Discard 时 clear, 底层 池化复用;
 		if txn.pendingKeys == nil {
+			// 判断 == nil 只是判断是否是 新建 Transaction{}
 			txn.pendingKeys = make(map[uint64]*model.Entry)
 		}
 	} else {
+		// 纯读事务
 		txn.pendingKeys = nil
 		txn.conflictKeys = nil
 	}
@@ -216,7 +230,7 @@ func (db *TrainKV) NewTransaction(update bool) *Transaction {
 }
 
 // ensureStartTsReady 兑现 "所有 ≤ startTs 的提交都可见" 的承诺;
-// 写事务只有在真正读 LSM 时才需要, 纯写事务全程不付这笔等待;
+// 写事务只有在真正读 LSM 时才需要, 纯写事务全程不付这笔等待,只需 lock() 等待 commitTs ;
 func (t *Transaction) ensureStartTsReady() {
 	if t.startTsReady {
 		return
@@ -261,7 +275,7 @@ func (t *Transaction) modify(e *model.Entry) error {
 	e.Version = t.startTs
 	// e.key is without ts;
 	// pendingKeys 以 64 位哈希为键, 省去 string(e.Key) 的转换分配;
-	// 读取时仍用 bytes.Equal 校验真实 key, 哈希碰撞只可能造成概率极低的写覆盖, 与 Badger 同策略;
+	// 读取时仍用 bytes.Equal 校验真实 key, 哈希碰撞只可能造成概率极低的写覆盖;
 	t.pendingKeys[hash1] = e
 	return nil
 }
@@ -364,20 +378,24 @@ func (t *Transaction) commitAndSendToDB() (func() (uint64, error), error) {
 	t.keyBufs = t.keyBufs[:0]
 	for _, entry := range t.pendingKeys {
 		entry.Version = commitTs
+		// len(key)+8 的整体空间, 池化;
 		bufPtr := model.KeyWithTsPooled(entry.Key, commitTs)
 		entry.Key = *bufPtr
+		// 保存 指针*[len(key)+8]的整体空间, 目的是之后的归还;
 		t.keyBufs = append(t.keyBufs, bufPtr)
 		entry.Meta |= common.BitTxn
 		entries = append(entries, entry)
 	}
 
-	// finTxn 结束标记 entry 及其 ts 序列化缓冲均为池化事务的私有 scratch, 提交完成后即可复用;
+	// finTxn 结束标记 entry 及其 ts 序列化缓冲均为池化事务的 私有领域, 提交完成后, 不清理即可复用;
 	entry := t.finEntry
 	if entry == nil {
 		entry = &model.Entry{}
 		t.finEntry = entry
 	}
+	// 复用;
 	t.finTsBuf = strconv.AppendUint(t.finTsBuf[:0], commitTs, 10)
+	// 复用;
 	entry.Key = txnKeyBytes
 	entry.Value = t.finTsBuf
 	entry.Version = commitTs
@@ -418,13 +436,15 @@ func (t *Transaction) Discard() {
 	// 两个 map 均已池化复用: pendingKeys 无外部引用; conflictKeys 在提交时已快照, 外部不再持有;
 	clear(t.pendingKeys)
 	clear(t.conflictKeys)
-	// 提交路径取出的 key+8 缓冲在请求落盘后不再被引用, 归还池中复用;
+	// 提交路径取出的 key+8 缓冲块, 在请求落盘后不再被引用, 归还池中复用;
 	for _, b := range t.keyBufs {
 		model.KeyTsBufPool.Put(b)
 	}
 	t.keyBufs = t.keyBufs[:0]
+	// 归还池中;
 	t.db.txnPool.Put(t)
 }
+
 func (t *Transaction) RollBack() {
 	t.pendingKeys = nil
 	t.conflictKeys = nil

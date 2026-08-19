@@ -27,6 +27,7 @@ func (it Item) Value() ([]byte, error) {
 	if it.VP.Len == 0 || it.Vlog == nil {
 		return it.Item.Value, nil
 	}
+
 	read, callBack, err := it.Vlog.Read(&it.VP)
 	if err != nil {
 		if callBack != nil {

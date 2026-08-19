@@ -2,13 +2,13 @@ package model
 
 import (
 	"encoding/binary"
-	"fmt"
-	"github.com/kebukeYi/TrainKV/v2/common"
 	"hash"
 	"hash/crc32"
 	"io"
 	"math/rand"
 	"time"
+
+	"github.com/kebukeYi/TrainKV/v2/common"
 )
 
 type LogEntry func(e *Entry, vp *ValuePtr) error
@@ -45,26 +45,6 @@ func randStr(length int) string {
 		result = append(result, bytes[rand.Intn(len(bytes))])
 	}
 	return string(result)
-}
-
-func BuildBigEntry(key []byte, bigValSize uint64) *Entry {
-	value := make([]byte, bigValSize)
-	return &Entry{
-		Key:       key,
-		Value:     value,
-		ExpiresAt: 0,
-	}
-}
-
-func BuildEntry() *Entry {
-	key := []byte(fmt.Sprintf("%s%s", randStr(16), "12345678"))
-	value := []byte(randStr(128))
-	expiresAt := uint64(time.Now().Add(12*time.Hour).UnixNano() / 1e6)
-	return &Entry{
-		Key:       key,
-		Value:     value,
-		ExpiresAt: expiresAt,
-	}
 }
 
 func (e *Entry) WithTTL(dur time.Duration) *Entry {

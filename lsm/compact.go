@@ -20,20 +20,20 @@ import (
 )
 
 type compactionPriority struct {
-	levelId  int
-	score    float64
-	adjusted float64
-	dst      targets
+	levelId  int     // 本层合并优先级
+	score    float64 // 合并分数
+	adjusted float64 // 调整过得分数
+	dst      targets // 源头 -> 目标层
 }
 
 type targets struct {
 	dstLevelId       int     // 目标层
-	levelTargetSSize []int64 // 对应 层中所有 .sst 文件的期望总大小; 用于计算 每层的优先级;
-	fileSize         []int64 // 对应 层中单个 .sst 文件的期望大小; 用于设定 合并的生成的目标 sst 文件大小;
+	levelTargetSSize []int64 // 对应 每层中所有 .sst 文件的期望总大小; 用于计算 每层的优先级;
+	fileSize         []int64 // 对应 每层中单个 .sst 文件的期望大小; 用于设定 合并的生成的目标 sst 文件大小;
 }
 
 type compactDef struct {
-	compactorId int
+	compactorId int // 每一次 合并任务的描述
 	prior       compactionPriority
 	dst         targets
 	thisLevel   *LevelHandler
@@ -44,7 +44,7 @@ type compactDef struct {
 
 	thisRange keyRange
 	nextRange keyRange
-	splits    []keyRange
+	splits    []keyRange // 分割 key 区间, 以加快并行合并
 
 	thisSize int64
 }
@@ -78,13 +78,13 @@ func (lm *LevelsManger) runCompacter(compactorId int, closer *utils.Closer) {
 		randomDelay.Stop()
 		return
 	}
+	// 是否可优化成 实时按照情况运行;
 	ticker := time.NewTicker(50000 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
 			lm.RunOnce(compactorId)
-			// fmt.Printf("[compactorId:%d] Compaction start.\n", compactorId)
 		case <-closer.CloseSignal:
 			ticker.Stop()
 			return
@@ -95,13 +95,15 @@ func (lm *LevelsManger) runCompacter(compactorId int, closer *utils.Closer) {
 // RunOnce 执行一轮压缩调度 (compactor 协程周期性调用的同一入口);
 // 导出以便外部手动触发压缩 (测试/运维);
 func (lm *LevelsManger) RunOnce(compactorId int) bool {
-	// 计算各个level的待合并分数; 按照大小排列,
+	// 计算各个level的待合并分数, 按照大小排列;
 	prios := lm.pickCompactLevels()
+
 	// 如果是0号协程, 那么就优先合并 l0 层;
 	if compactorId == 0 {
-		// 将 合并level-0层的优先级调高;
+		// 合并level-0层的优先级调高;
 		prios = moveL0toFront(prios)
 	}
+
 	for _, prio := range prios {
 		if prio.levelId == 0 && compactorId == 0 {
 		} else if prio.adjusted < 1.0 {
@@ -412,7 +414,7 @@ func (lm *LevelsManger) findTablesL0ToL0(cd *compactDef) bool {
 		lm.compactIngStatus.tables[t.fid] = struct{}{}
 	}
 	// LO->L0: 把一堆重叠的小文件合并成一个大文件, 减少文件数量;
-	cd.dst.fileSize[0] = math.MaxUint32
+	cd.dst.fileSize[0] = math.MaxUint32 // 4GB
 	return true
 }
 
@@ -591,6 +593,7 @@ func (lm *LevelsManger) runCompactDef(compactorId int, dstLevelId int, cd compac
 	if err != nil {
 		return err
 	}
+
 	defer func() {
 		if err2 := decrTables(); err2 == nil {
 			err = err2

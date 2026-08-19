@@ -206,6 +206,7 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 		var r *model.Request
 		select {
 		case <-closer.CloseSignal:
+			// 收到关闭信号, 迅速收集 req, 然后再发送;
 			for {
 				select {
 				case r = <-db.writeCh:
@@ -224,6 +225,7 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 			// 批次交出去之前绝不回到外层 select, 否则已攒批次会被搁置在 reqs 中,
 			// 只有等到下一个请求到来才有机会被处理;
 			collected := true
+			// 在这for{}收集过程中, 突然宕机怎么办?
 			for collected && reqLen < common.WriteChBatchThreshold {
 				select {
 				case r = <-db.writeCh:
@@ -233,6 +235,7 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 					collected = false
 				}
 			}
+
 			// 令牌空闲时直接在本协程写盘: 串行提交场景下每批省去一个写协程的创建与调度;
 			// 令牌被占用时(上一批仍在写), 才派发协程排队写, 本协程继续攒批;
 			select {
@@ -404,6 +407,7 @@ func (txn *Transaction) NewIterator(opt *interfaces.Options) *TxnIterator {
 	txn.db.vlog.incrIteratorCount()
 	iters := make([]interfaces.Iterator, 0)
 	iters = append(iters, txn.db.Lsm.NewLsmIterator(opt)...)
+
 	// 把 pending 迭代器 也 接进合并集合:
 	if pi := txn.newPendingWritesIterator(opt.IsAsc); pi != nil {
 		iters = append(iters, pi)

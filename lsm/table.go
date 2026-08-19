@@ -14,7 +14,6 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/interfaces"
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/kebukeYi/TrainKV/v2/pb"
-	"github.com/kebukeYi/TrainKV/v2/skl"
 	"github.com/kebukeYi/TrainKV/v2/utils"
 	pkg_err "github.com/pkg/errors"
 )
@@ -267,7 +266,7 @@ type TableIterator struct {
 func (t *Table) NewTableIterator(opt *interfaces.Options) *TableIterator {
 	t.IncrRef()
 	// Item key 的稳定副本走分块 arena, 避免每 key 一次堆分配 (nil 时 blockIterator 退回 SafeCopy);
-	return &TableIterator{opt: opt, t: t, biter: &blockIterator{arena: skl.NewChunkedArena(64 << 10)}, name: t.Name}
+	return &TableIterator{opt: opt, t: t, biter: &blockIterator{arena: utils.NewChunkedArena(64 << 10)}, name: t.Name}
 }
 func (tier *TableIterator) Name() string {
 	return tier.name

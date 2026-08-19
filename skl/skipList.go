@@ -382,8 +382,8 @@ type SkipListIterator struct {
 	name      string
 	list      *SkipList
 	curr      *skipNode
-	copyItems bool          // true: Item() 把 key/value 拷入私有分块 arena (防并发写导致 arena 扩容悬垂);
-	arena     *ChunkedArena // copyItems 时的稳定副本来源;
+	copyItems bool                // true: Item() 把 key/value 拷入私有分块 arena (防并发写导致 arena 扩容悬垂);
+	arena     *utils.ChunkedArena // copyItems 时的稳定副本来源;
 }
 
 func (s *SkipListIterator) Name() string {
@@ -432,7 +432,7 @@ func (s *SkipListIterator) Item() interfaces.Item {
 		// 活跃 memtable 扫描期间可能有并发写触发 arena 扩容, 视图会悬垂;
 		// 拷入私有分块 arena (块不移动), 返回的 Item 永久有效;
 		if s.arena == nil {
-			s.arena = NewChunkedArena(64 << 10)
+			s.arena = utils.NewChunkedArena(64 << 10)
 		}
 		key := s.arena.Alloc(len(entry.Key))
 		copy(key, entry.Key)

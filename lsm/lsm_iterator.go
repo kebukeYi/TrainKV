@@ -18,7 +18,7 @@ func (lsm *LSM) NewLsmIterator(opt *interfaces.Options) []interfaces.Iterator {
 	iter := &lsmIterator{}
 	iter.iters = make([]interfaces.Iterator, 0)
 	lsm.RLock()
-	// 活跃 memtable 扫描期间可能有并发写 (arena 扩容), Item 需稳定副本;
+	// 活跃 memtable 扫描期间可能有并发写 (skipList.arena 扩容), Item 需稳定副本;
 	iter.iters = append(iter.iters, lsm.memoryTable.skipList.NewSkipListIterator(lsm.memoryTable.name, true))
 	for _, imemoryTable := range lsm.immemoryTables {
 		// 不可变跳表无并发写, arena 不会扩容, 视图稳定;
@@ -41,6 +41,7 @@ func NewConcatIterator(tables []*Table, opt *interfaces.Options) *ConcatIterator
 	for i := 0; i < len(tables); i++ {
 		tables[i].IncrRef()
 	}
+	// 每层多个 table 的迭代器;
 	return &ConcatIterator{
 		tables: tables,
 		iters:  make([]interfaces.Iterator, len(tables)),
@@ -220,8 +221,8 @@ func (m *MergingIterator) Item() interfaces.Item {
 	if !m.Valid() {
 		return interfaces.Item{} // 或者返回错误
 	}
-	// 子迭代器的 Item 已是稳定副本 (blockIterator: key 独立拷贝 + value mmap 视图;
-	// SkipListIterator: copyItems 时拷入分块 arena), 直接返回, 省去每 key 2 次 SafeCopy;
+	// 如果是:blockIterator: 子迭代器的 Item 已是稳定副本 (blockIterator: key 独立拷贝 + value mmap 视图;
+	// 如果是:SkipListIterator: copyItems 时拷入分块 arena), 直接返回, 省去每 key 2 次 SafeCopy;
 	return m.itHeap[0].Item()
 }
 

@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/kebukeYi/TrainKV/v2"
+	"github.com/kebukeYi/TrainKV/v2/common"
 	"github.com/kebukeYi/TrainKV/v2/interfaces"
 	"github.com/kebukeYi/TrainKV/v2/lsm"
 	"github.com/kebukeYi/TrainKV/v2/model"
+	"github.com/kebukeYi/TrainKV/v2/utils"
 )
 
 func main() {
@@ -27,12 +30,12 @@ func main() {
 
 	txn1 := db.NewTransaction(true)
 
-	// set key.
+	// t1 set key1.
 	if err = txn1.Set(key, val); err != nil {
 		panic(err)
 	}
 
-	// t1 update key again.
+	// t1 update key1 again.
 	val2 := []byte("value1_1")
 	if err = txn1.Set(key, val2); err != nil {
 		panic(err)
@@ -50,26 +53,18 @@ func main() {
 	fmt.Printf("txn2.Commit(), commits=%d;\n", commit2)
 
 	// t1 get key1.
-	if entry, err := txn1.Get(key); err != nil || entry == nil {
-		fmt.Printf("txn1.get(%s), err:%v; \n", key, err)
-	} else {
-		fmt.Printf("txn1.get(%s), value=%s, meta:%d, version=%d;\n",
-			entry.Key, entry.Value, entry.Meta, entry.Version)
-	}
+	entry, _ := txn1.Get(key)
+	utils.AssertTrue(bytes.Equal(entry.Value, val2))
 
-	// Delete key.
+	// t1 Delete key1.
 	if err := txn1.Delete(key); err != nil {
 		panic(err)
 	}
 	fmt.Printf("txn1.delete(%s);\n", key)
 
-	// get key again.
-	if entry, err := txn1.Get(key); err != nil || entry == nil {
-		fmt.Printf("txn1.get(%s), err: %v; \n", key, err)
-	} else {
-		fmt.Printf("txn1.get(%s), value=%s, meta:%d, version=%d;\n",
-			entry.Key, entry.Value, entry.Meta, entry.Version)
-	}
+	// t1 get key1 again.
+	_, err = txn1.Get(key)
+	utils.AssertTrue(err == common.ErrKeyNotFound)
 
 	// Iterator keys(Only valid values are returned).
 	iter := txn1.NewIterator(&interfaces.Options{IsAsc: true, IsSetCache: true})

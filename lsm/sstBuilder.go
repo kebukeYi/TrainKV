@@ -11,7 +11,6 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/interfaces"
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/kebukeYi/TrainKV/v2/pb"
-	"github.com/kebukeYi/TrainKV/v2/skl"
 	"github.com/kebukeYi/TrainKV/v2/utils"
 	"github.com/pkg/errors"
 )
@@ -366,7 +365,7 @@ type blockIterator struct {
 	blockID     int
 	prevOverlap uint16 // 同一个 block, 其中的多个 entry 多少都有些关联
 	it          interfaces.Item
-	arena       *skl.ChunkedArena // Item key 的稳定副本来源 (nil 时退回 SafeCopy);
+	arena       *utils.ChunkedArena // Item key 的稳定副本来源 (nil 时退回 SafeCopy);
 }
 
 func (itr *blockIterator) setBlock(b *block) {

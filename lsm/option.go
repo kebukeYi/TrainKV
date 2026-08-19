@@ -41,7 +41,7 @@ type Options struct {
 	LevelSizeMultiplier int         // 决定 level 之间期望 总体文件 size 比例, 默认是 10倍;
 	TableSizeMultiplier int         // 决定每层 文件 递增倍数;
 	BaseTableSize       int64       // 基层中 文件所期望的文件大小;
-	NumLevelZeroTables  int         // 第 0 层中, 允许存在的表数量;
+	NumLevelZeroTables  int         // 第 0 层中, 允许存在的最大表数量;
 	MaxLevelNum         int         // 最大层数,默认是 7 层;
 	SSTKeyRangCheckNums int         // 默认是 5000;
 	NumVersionsToKeep   int         // 相同key, 可存在的不同版本数量;

@@ -2,16 +2,17 @@ package benchmk
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainKV/v2"
-	"github.com/kebukeYi/TrainKV/v2/common"
-	"github.com/kebukeYi/TrainKV/v2/lsm"
-	"github.com/kebukeYi/TrainKV/v2/model"
-	"github.com/stretchr/testify/assert"
 	"math/rand"
 	"os"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/kebukeYi/TrainKV/v2"
+	"github.com/kebukeYi/TrainKV/v2/common"
+	"github.com/kebukeYi/TrainKV/v2/lsm"
+	"github.com/kebukeYi/TrainKV/v2/model"
+	"github.com/stretchr/testify/assert"
 )
 
 var benchMarkDir = "/usr/golanddata/triankv/benchmk2"
@@ -29,41 +30,8 @@ func clearDir(dir string) {
 	}
 }
 
-func BenchmarkTrainKVTxnSet(b *testing.B) {
-	// go test -bench=BenchmarkNormalEntry -benchtime=3s -count=2 -failfast
-	// go test -bench=BenchmarkNormalEntry -benchtime=100000x -count=5 -failfast
-	b.ResetTimer()
-	b.ReportAllocs()
-	clearDir(benchMarkDir)
-	train, _, _ := TrainKV.Open(lsm.GetDefaultOpt(benchMarkDir))
-	defer train.Close()
-
-	for i := 0; i < b.N; i++ {
-		key := []byte(fmt.Sprintf("key=%d", i))
-		//valSize := 5 + 1 // val: 6B
-		valSize := 127 + 1 // val: 12B
-		//valSize := 10<<20 + 1 // val: 10.01MB
-		//valSize := 64<<20 + 1 // val: 64.01MB
-		txn := train.NewTransaction(true)
-		entry := model.BuildBigEntry(key, uint64(valSize))
-		err := txn.Set(entry.Key, entry.Value)
-		assert.Nil(b, err)
-		_, err = txn.Commit()
-		common.Panic(err)
-	}
-
-	txn := train.NewTransaction(false)
-	for i := 0; i < b.N; i++ {
-		key := []byte(fmt.Sprintf("key=%d", i))
-		_, err := txn.Get(key)
-		assert.Nil(b, err)
-
-		key = []byte(randStr(18))
-		_, err = txn.Get(key)
-		assert.Error(b, err)
-	}
-	txn.Discard()
-}
+// go test -bench=BenchmarkNormalEntry -benchtime=3s -count=2 -failfast
+// go test -bench=BenchmarkNormalEntry -benchtime=100000x -count=5 -failfast
 
 // BenchmarkTrainKVTxnSetBigValue 大 value(kv 分离)写路径: value 超过 ValueThreshold(1MB) 走 vlog;
 func BenchmarkTrainKVTxnSetBigValue(b *testing.B) {
@@ -121,9 +89,9 @@ func BenchmarkWriteRequest(b *testing.B) {
 	}
 }
 
+// 并发提交: 多个事务的写请求被 handleWriteCh 攒成一批, 共享一次 fsync (group commit);
+// 与串行 BenchmarkTrainKVTxnSet 对比, 观察每 op 摊销的刷盘开销;
 func BenchmarkTrainKVTxnSetParallel(b *testing.B) {
-	// 并发提交: 多个事务的写请求被 handleWriteCh 攒成一批, 共享一次 fsync (group commit);
-	// 与串行 BenchmarkTrainKVTxnSet 对比, 观察每 op 摊销的刷盘开销;
 	b.ResetTimer()
 	b.ReportAllocs()
 	clearDir(benchMarkDir)
@@ -146,8 +114,8 @@ func BenchmarkTrainKVTxnSetParallel(b *testing.B) {
 	})
 }
 
+// API 层攒批: 一个事务 10 条 entry 共享一次 fsync, 观察每 op 摊销的刷盘开销;
 func BenchmarkTrainKVBatchSet10(b *testing.B) {
-	// API 层攒批: 一个事务 10 条 entry 共享一次 fsync, 观察每 op 摊销的刷盘开销;
 	b.ResetTimer()
 	b.ReportAllocs()
 	clearDir(benchMarkDir)
