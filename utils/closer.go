@@ -1,9 +1,11 @@
 package utils
 
 import (
-	"github.com/pkg/errors"
+	"fmt"
 	"log"
 	"sync"
+
+	"github.com/pkg/errors"
 )
 
 type Closer struct {
@@ -34,7 +36,7 @@ func (c *Closer) Add(n int) {
 
 func AssertTrue(b bool) {
 	if !b {
-		log.Fatalf("%+v", errors.Errorf("Assert failed"))
+		log.Fatalf("%+v", fmt.Sprintf("Assert failed"))
 	}
 }
 func AssertTruef(b bool, format string, args ...interface{}) {

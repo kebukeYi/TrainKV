@@ -193,7 +193,7 @@ func (lm *LevelsManger) flush(imm *MemoryTable) (err error) {
 	sstName := utils.FileNameSSTable(lm.opt.WorkDir, fid)
 
 	builder := NewSSTBuilder(lm.opt)
-	skipListIterator := imm.skipList.NewSkipListIterator(strconv.FormatUint(fid, 10)+MemTableName, false)
+	skipListIterator := imm.skipList.NewSkipListIterator(strconv.FormatUint(fid, 10)+MemTableName)
 	defer skipListIterator.Close() // 涉及到 immemoryTable 的清除和相关 wal 的清理;
 	for skipListIterator.Rewind(); skipListIterator.Valid(); skipListIterator.Next() {
 		entry := skipListIterator.Item().Item

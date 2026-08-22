@@ -1,8 +1,9 @@
 package lsm
 
 import (
-	"github.com/kebukeYi/TrainKV/v2/utils"
 	"testing"
+
+	"github.com/kebukeYi/TrainKV/v2/utils"
 )
 
 var manifestTestPath = "/usr/golanddata/trainkv/manifest"

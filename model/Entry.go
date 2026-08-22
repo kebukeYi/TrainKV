@@ -6,6 +6,7 @@ import (
 	"hash/crc32"
 	"io"
 	"math/rand"
+	"sync"
 	"time"
 
 	"github.com/kebukeYi/TrainKV/v2/common"
@@ -27,11 +28,21 @@ type Entry struct {
 	ValThreshold int64
 }
 
+var EntryPool = sync.Pool{New: func() any { return &Entry{} }}
+
 func NewEntry(key, val []byte) *Entry {
-	return &Entry{
-		Key:   key,
-		Value: val,
-	}
+	e := EntryPool.Get().(*Entry)
+	e.Key, e.Value = key, val
+	e.ExpiresAt, e.Meta, e.Version = 0, 0, 0
+	e.HeaderLen, e.Offset, e.ValThreshold = 0, 0, 0
+	return e
+}
+
+func (e *Entry) Release() {
+	// 归还前清理引用，防止内存泄漏
+	e.Key = nil
+	e.Value = nil
+	EntryPool.Put(e)
 }
 
 // 生成随机字符串作为key和value;

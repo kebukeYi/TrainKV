@@ -2,9 +2,6 @@ package skl
 
 import (
 	"fmt"
-	"github.com/kebukeYi/TrainKV/v2/model"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -12,6 +9,10 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/kebukeYi/TrainKV/v2/model"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var r = rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -26,7 +27,8 @@ func RandString(len int) string {
 }
 
 func TestSkipList_Put(t *testing.T) {
-	skipList := NewSkipList(3000)
+	// 固定容量 arena: 91 条记录 ≈ 5.5KB, 需大于该值;
+	skipList := NewSkipList(10000)
 	putStart := 0
 	putEnd := 90
 	fmt.Println("========================put(0-60)==================================")
@@ -54,7 +56,7 @@ func TestSkipList_Put(t *testing.T) {
 }
 
 func TestSkipListUpdate(t *testing.T) {
-	list := NewSkipList(1000)
+	list := NewSkipList(5000)
 	for i := 0; i < 20; i++ {
 		list.Put(model.NewEntry([]byte(RandString(10)), []byte(RandString(10))))
 	}
@@ -195,7 +197,7 @@ func TestSkipListIterator(t *testing.T) {
 	list.Put(entry2_new)
 	assert.Equal(t, entry2_new.Value, list.Get(entry2_new.Key).Value)
 
-	iter := list.NewSkipListIterator("1", false)
+	iter := list.NewSkipListIterator("1")
 	for iter.Rewind(); iter.Valid(); iter.Next() {
 		fmt.Printf("iter key %s, value %s\n ", model.ParseKey(iter.Item().Item.Key), iter.Item().Item.Value)
 	}

@@ -1,8 +1,9 @@
 package cache
 
 import (
-	"github.com/kebukeYi/TrainKV/v2/utils"
 	"math"
+
+	"github.com/kebukeYi/TrainKV/v2/utils"
 )
 
 type Filter []byte

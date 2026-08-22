@@ -1,7 +1,6 @@
 package skl
 
 import (
-	"fmt"
 	"sync/atomic"
 	"unsafe"
 
@@ -15,39 +14,24 @@ const (
 	offsetSize = int(unsafe.Sizeof(uint32(0)))
 )
 
+// Arena 固定容量分配器: 容量在 NewArena 时一次性确定, 禁止扩容;
+// 数据只追加不复用, 已返回的切片在 arena 存活期内永久有效 (不会因扩容迁移而悬垂);
 type Arena struct {
-	data       []byte
-	sizes      uint32
-	shouldGrow bool
+	data  []byte
+	sizes uint32
 }
 
 func NewArena(n int64) *Arena {
 	return &Arena{
-		data:       make([]byte, n),
-		sizes:      1,
-		shouldGrow: true,
+		data:  make([]byte, n),
+		sizes: 1,
 	}
 }
 
 func (a *Arena) allocate(sz uint32) uint32 {
 	offset := atomic.AddUint32(&a.sizes, sz)
-	if !a.shouldGrow {
-		fmt.Printf("Arena size: %d, len(d.data): %d ,grow: %v; \n", a.sizes, len(a.data), a.shouldGrow)
-		utils.AssertTrue(int(offset) <= len(a.data))
-		return offset - sz
-	}
-	if int(offset) > len(a.data)-MaxSkipNodeSize {
-		growBy := uint32(len(a.data))
-		if growBy > 1<<30 {
-			growBy = 1 << 30
-		}
-		if growBy < sz {
-			growBy = sz
-		}
-		newData := make([]byte, len(a.data)+int(growBy))
-		utils.AssertTrue(len(a.data) == copy(newData, a.data))
-		a.data = newData
-	}
+	// 固定容量: 调用方 (memtable 轮转预判) 必须保证不越界, 越界即视为内部错误;
+	utils.AssertTrue(int(offset) <= len(a.data))
 	return offset - sz
 }
 

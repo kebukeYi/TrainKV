@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"fmt"
 	"sort"
 	"strconv"
 	"sync"
@@ -14,7 +15,6 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/lsm"
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/kebukeYi/TrainKV/v2/utils"
-	"github.com/pkg/errors"
 )
 
 type TransactionManager struct {
@@ -276,12 +276,19 @@ func (t *Transaction) modify(e *model.Entry) error {
 	// e.key is without ts;
 	// pendingKeys 以 64 位哈希为键, 省去 string(e.Key) 的转换分配;
 	// 读取时仍用 bytes.Equal 校验真实 key, 哈希碰撞只可能造成概率极低的写覆盖;
+	// 同一事务内重复写同一 key(或哈希碰撞)会顶掉旧条目, 旧条目归还池中, 避免池化对象泄漏;
+	if old, ok := t.pendingKeys[hash1]; ok {
+		old.Release()
+	}
 	t.pendingKeys[hash1] = e
 	return nil
 }
+
 func exceedsSize(prefix string, max int64, key []byte) error {
-	return errors.Errorf("%s with size %d exceeded %d limit. %s:\n%s", prefix, len(key), max, prefix, hex.Dump(key[:1<<10]))
+	return fmt.Errorf("%s with size %d exceeded %d limit. %s:\n%s",
+		prefix, len(key), max, prefix, hex.Dump(key[:1<<10]))
 }
+
 func (t *Transaction) checkSize(e *model.Entry) error {
 	count := t.count + 1
 	size := t.size + int64(e.EstimateSize(t.db.Opt.ValueThreshold)+10)
@@ -335,10 +342,8 @@ func (t *Transaction) Get(keyNoTs []byte) (*model.Entry, error) {
 }
 
 func (t *Transaction) Delete(key []byte) error {
-	entry := &model.Entry{
-		Key:  key,
-		Meta: common.BitDelete,
-	}
+	entry := model.NewEntry(key, nil)
+	entry.Meta = common.BitDelete
 	return t.modify(entry)
 }
 
@@ -433,6 +438,9 @@ func (t *Transaction) Discard() {
 	}
 	t.discard = true
 	t.db.transactionManager.doneStart(t)
+	for _, en := range t.pendingKeys {
+		en.Release()
+	}
 	// 两个 map 均已池化复用: pendingKeys 无外部引用; conflictKeys 在提交时已快照, 外部不再持有;
 	clear(t.pendingKeys)
 	clear(t.conflictKeys)
@@ -446,6 +454,10 @@ func (t *Transaction) Discard() {
 }
 
 func (t *Transaction) RollBack() {
+	// 归还池化的 entry, 避免从 EntryPool 借出的对象随事务废弃而泄漏;
+	for _, en := range t.pendingKeys {
+		en.Release()
+	}
 	t.pendingKeys = nil
 	t.conflictKeys = nil
 	t.readKeys = nil

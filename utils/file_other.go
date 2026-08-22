@@ -3,20 +3,20 @@
 package utils
 
 import (
-	"github.com/pkg/errors"
+	"fmt"
 	"os"
 )
 
 func SyncDir(dir string) error {
 	df, err := os.Open(dir)
 	if err != nil {
-		return errors.Wrapf(err, "while opening %s", dir)
+		return fmt.Errorf("while opening %s,err:%w", dir, err)
 	}
 	if err := df.Sync(); err != nil {
-		return errors.Wrapf(err, "while syncing %s", dir)
+		return fmt.Errorf("while syncing %s,err:%w", dir, err)
 	}
 	if err := df.Close(); err != nil {
-		return errors.Wrapf(err, "while closing %s", dir)
+		return fmt.Errorf("while closing %s,err:%w", dir, err)
 	}
 	return nil
 }

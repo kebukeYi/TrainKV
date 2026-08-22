@@ -1,8 +1,9 @@
 package utils
 
 import (
-	"github.com/cespare/xxhash/v2"
 	"unsafe"
+
+	"github.com/cespare/xxhash/v2"
 )
 
 func KeyToHash(key interface{}) (uint64, uint64) {

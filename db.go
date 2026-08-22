@@ -2,9 +2,11 @@ package TrainKV
 
 import (
 	"bytes"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/gofrs/flock"
 	"github.com/kebukeYi/TrainKV/v2/common"
@@ -12,7 +14,6 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/lsm"
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/kebukeYi/TrainKV/v2/utils"
-	"github.com/pkg/errors"
 )
 
 type TrainKV struct {
@@ -128,24 +129,6 @@ func (db *TrainKV) MaxVersion() uint64 {
 	return db.Lsm.MaxVersion()
 }
 
-func (db *TrainKV) set(entry *model.Entry) error {
-	if entry.Key == nil || len(entry.Key) == 0 {
-		return common.ErrEmptyKey
-	}
-	entry.Version = model.ParseTsVersion(entry.Key)
-	err := db.BatchSet([]*model.Entry{entry})
-	return err
-}
-
-func (db *TrainKV) del(key []byte) error {
-	return db.set(&model.Entry{
-		Key:       key,
-		Value:     nil,
-		Meta:      common.BitDelete,
-		ExpiresAt: 0,
-	})
-}
-
 func (db *TrainKV) RunValueLogGC(discardRatio float64) error {
 	if discardRatio >= 1.0 || discardRatio <= 0.0 {
 		return nil
@@ -192,6 +175,7 @@ func (db *TrainKV) SendToWriteCh(entries []*model.Entry) (*model.Request, error)
 func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 	defer closer.Done()
 	var reqLen int64
+	var lastBatchReqLen int64 // 上一批请求数, 用于识别并发提交场景 (串行提交恒为 1);
 	reqs := make([]*model.Request, 0, 10)
 	blockChan := make(chan struct{}, 1) //限制:每次只允许一个协程去写数据;
 
@@ -236,11 +220,33 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 				}
 			}
 
+			// SyncWrites 下并发提交的汇合窗口: 短暂等待同一同步周期内先后到达的请求加入本批,
+			// 让一次刷盘覆盖更多提交; 串行提交(本批与上一批均仅 1 个请求)不等待, 无额外延迟;
+			if db.Lsm.Option.SyncWrites && reqLen < common.WriteChBatchThreshold &&
+				(reqLen > 1 || lastBatchReqLen > 1) {
+				timer := time.NewTimer(common.SyncGroupCommitWait)
+				waiting := true
+				for waiting && reqLen < common.WriteChBatchThreshold {
+					select {
+					case r = <-db.writeCh:
+						reqs = append(reqs, r)
+						reqLen = int64(len(reqs))
+					case <-timer.C:
+						waiting = false
+					}
+				}
+				timer.Stop() // 阈值触发的提前退出, 回收定时器;
+			}
+			lastBatchReqLen = reqLen
+
 			// 令牌空闲时直接在本协程写盘: 串行提交场景下每批省去一个写协程的创建与调度;
 			// 令牌被占用时(上一批仍在写), 才派发协程排队写, 本协程继续攒批;
 			select {
 			case blockChan <- struct{}{}:
-				common.Err(db.WriteRequest(reqs))
+				err := db.WriteRequest(reqs)
+				if err != nil {
+					return
+				}
 				<-blockChan
 				reqs = reqs[:0] // 复用批次切片底层数组;
 			default:
@@ -279,25 +285,27 @@ func (db *TrainKV) WriteRequest(reqs []*model.Request) error {
 	if db.Lsm.Option.SyncWrites && wrote {
 		if err = db.vlog.Sync(); err != nil {
 			done(err)
-			return errors.Wrap(err, "#WriteRequest.vlog.Sync()")
+			return fmt.Errorf("#WriteRequest.vlog.Sync(),err:%w", err)
 		}
 	}
-
+	//entries := 0
 	for _, req := range reqs {
 		if len(req.Entries) == 0 {
 			continue
 		}
+		//entries += len(req.Entries)
 		if err = db.writeToLSM(req); err != nil {
 			done(err)
-			return errors.Wrap(err, "#WriteRequest.writeToLSM()")
+			return fmt.Errorf("#WriteRequest.writeToLSM(),err:%w", err)
 		}
 	}
-
+	//fmt.Printf("entries.size:%d \n", entries)
+	//if entries >= 50 && db.Lsm.Option.SyncWrites {
 	if db.Lsm.Option.SyncWrites {
 		// 每次批量写入后统一刷盘一次, 提交方会在 Wg.Done 之后才返回;
 		if err = db.Lsm.SyncWalFile(); err != nil {
 			done(err)
-			return errors.Wrap(err, "#WriteRequest.SyncWalFile()")
+			return fmt.Errorf("#WriteRequest.SyncWalFile(),err:%w", err)
 		}
 	}
 
@@ -307,7 +315,7 @@ func (db *TrainKV) WriteRequest(reqs []*model.Request) error {
 
 func (db *TrainKV) writeToLSM(req *model.Request) error {
 	if len(req.ValPtr) != len(req.Entries) {
-		return errors.Errorf("#writeToLSM: Ptrs and Entries don't match: %+v", req)
+		return fmt.Errorf("#writeToLSM: Ptrs and Entries don't match: %+v", req)
 	}
 	for i, entry := range req.Entries {
 		if db.ShouldWriteValueToLSM(entry) {

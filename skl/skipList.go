@@ -11,7 +11,6 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/interfaces"
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/kebukeYi/TrainKV/v2/utils"
-	"github.com/pkg/errors"
 )
 
 const (
@@ -93,12 +92,16 @@ func NewSkipList(arenaSize int64) *SkipList {
 		headOffset: headOffset,
 		height:     1,
 	}
-	skip.ref.Store(1)
+	skip.IncrRef()
 	return skip
 }
 func (skipList *SkipList) IncrRef() {
 	skipList.ref.Add(1)
 }
+
+// 1. 创建 .sst 文件
+// 2. .sst 加入到 manifest 文件中
+// 3. 最后 执行 跳表解除引用
 func (skipList *SkipList) DecrRef() {
 	newRef := skipList.ref.Add(-1)
 	if newRef > 0 {
@@ -132,6 +135,19 @@ func (skipList *SkipList) getHeight() int32 {
 func (skipList *SkipList) GetMemSize() int64 {
 	// return skipList.arena.size()
 	return atomic.LoadInt64(&skipList.num)
+}
+
+// MemBytes 返回 arena 已分配的字节数 (含头节点); 供 memtable 轮转预判使用;
+func (skipList *SkipList) MemBytes() int64 {
+	return skipList.arena.size()
+}
+
+// EstimateEntryMemSize 估算单条 entry 写入 arena 所需字节数的上界;
+// 固定容量 arena 无法扩容, 轮转预判必须用上界估算, 保证写入后绝不越界;
+func EstimateEntryMemSize(e *model.Entry) int64 {
+	// 节点: AllocateNode 最大分配 MaxSkipNodeSize+nodeAlign (maxHeight 时);
+	// value: EncodeValSize = len(value) + 1B meta + varint(ExpiresAt) ≤ len(value)+11;
+	return int64(MaxSkipNodeSize+nodeAlign) + int64(len(e.Key)) + int64(len(e.Value)) + 11
 }
 func (skipList *SkipList) findLast() *skipNode {
 	n := skipList.getHead()
@@ -369,21 +385,18 @@ func (skipList *SkipList) Draw(align bool) {
 		fmt.Println()
 	}
 }
-func (skipList *SkipList) NewSkipListIterator(name string, copyItems bool) interfaces.Iterator {
+func (skipList *SkipList) NewSkipListIterator(name string) interfaces.Iterator {
 	skipList.IncrRef()
 	return &SkipListIterator{
-		list:      skipList,
-		name:      name,
-		copyItems: copyItems,
+		list: skipList,
+		name: name,
 	}
 }
 
 type SkipListIterator struct {
-	name      string
-	list      *SkipList
-	curr      *skipNode
-	copyItems bool                // true: Item() 把 key/value 拷入私有分块 arena (防并发写导致 arena 扩容悬垂);
-	arena     *utils.ChunkedArena // copyItems 时的稳定副本来源;
+	name string
+	list *SkipList
+	curr *skipNode
 }
 
 func (s *SkipListIterator) Name() string {
@@ -416,8 +429,6 @@ func (s *SkipListIterator) Valid() bool {
 	return s.curr != nil
 }
 func (s *SkipListIterator) Rewind() {
-	// 借用契约: Rewind 前所有 Item 均已消费, 旧副本失效, arena 重置以回收内存;
-	s.arena = nil
 	s.SeekToFirst()
 }
 func (s *SkipListIterator) Item() interfaces.Item {
@@ -428,19 +439,6 @@ func (s *SkipListIterator) Item() interfaces.Item {
 		ExpiresAt: s.Value().ExpiresAt,
 	}
 	entry.Version = model.ParseTsVersion(entry.Key)
-	if s.copyItems {
-		// 活跃 memtable 扫描期间可能有并发写触发 arena 扩容, 视图会悬垂;
-		// 拷入私有分块 arena (块不移动), 返回的 Item 永久有效;
-		if s.arena == nil {
-			s.arena = utils.NewChunkedArena(64 << 10)
-		}
-		key := s.arena.Alloc(len(entry.Key))
-		copy(key, entry.Key)
-		entry.Key = key
-		val := s.arena.Alloc(len(entry.Value))
-		copy(val, entry.Value)
-		entry.Value = val
-	}
 	return interfaces.Item{Item: entry}
 }
 func (s *SkipListIterator) Seek(key []byte) {
@@ -464,6 +462,6 @@ func (s *SkipListIterator) Close() error {
 
 func AssertTruef(b bool, format string, args ...interface{}) {
 	if !b {
-		log.Fatalf("%+v", errors.Errorf(format, args...))
+		log.Fatalf("%+v", fmt.Errorf(format, args...))
 	}
 }

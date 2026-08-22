@@ -2,8 +2,9 @@ package lsm
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestEmptyBuilder(t *testing.T) {

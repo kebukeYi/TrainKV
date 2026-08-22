@@ -46,7 +46,9 @@ func (lsm *LSM) Put(entry *model.Entry) (err error) {
 		return common.ErrEmptyKey
 	}
 
-	if int64(lsm.memoryTable.wal.Size())+int64(EstimateWalEncodeSize(entry)) > lsm.Option.MemTableSize {
+	// 固定容量 arena: 以"已用字节 + 本条条目上界估算"是否超过容量来决定轮转;
+	// 保证写入后 arena 绝不越界 (旧逻辑按 WAL 大小轮转, 无法约束 arena 用量);
+	if lsm.memoryTable.MemBytes()+skl.EstimateEntryMemSize(entry) > lsm.Option.MemTableSize {
 		lsm.Rotate()
 	}
 

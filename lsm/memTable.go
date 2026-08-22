@@ -103,6 +103,11 @@ func (m *MemoryTable) Size() int64 {
 	return m.skipList.GetMemSize()
 }
 
+// MemBytes 返回 skipList arena 已分配字节数; 固定容量 arena 下以此驱动轮转, 保证写入不越界;
+func (m *MemoryTable) MemBytes() int64 {
+	return m.skipList.MemBytes()
+}
+
 func (m *MemoryTable) close(needRemoveWal bool) error {
 	if needRemoveWal || m.wal.Size() == 0 {
 		if err := m.wal.CloseAndRemove(); err != nil {

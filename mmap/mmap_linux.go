@@ -4,10 +4,11 @@
 package mmap
 
 import (
-	"golang.org/x/sys/unix"
 	"os"
 	"reflect"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 func mmap(fd *os.File, writable bool, size int64) ([]byte, error) {

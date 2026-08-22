@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,6 +53,40 @@ func BenchmarkTrainKVTxnSetBigValue(b *testing.B) {
 	}
 }
 
+// API 层攒批: 一个事务 10 条 entry 共享一次 fsync, 观察每 op 摊销的刷盘开销;
+func BenchmarkTrainKVBatchSet10(b *testing.B) {
+	b.ResetTimer()
+	b.ReportAllocs()
+	clearDir(benchMarkDir)
+	train, _, _ := TrainKV.Open(lsm.GetDefaultOpt(benchMarkDir))
+	defer train.Close()
+
+	for i := 0; i < b.N; i++ {
+		txn := train.NewTransaction(true)
+		for j := 0; j < 10; j++ {
+			key := fmt.Sprintf("key=%d-%d", i, j)
+			val := fmt.Sprintf("val%d-%d", i, j)
+			if err := txn.Set([]byte(key), []byte(val)); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if _, err := txn.Commit(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func randStr(length int) string {
+	str := "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	bytes := []byte(str)
+	result := []byte{}
+	rand.Seed(time.Now().UnixNano() + int64(rand.Intn(100)))
+	for i := 0; i < length; i++ {
+		result = append(result, bytes[rand.Intn(len(bytes))])
+	}
+	return string(result)
+}
+
 func BenchmarkWriteRequest(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -87,63 +120,4 @@ func BenchmarkWriteRequest(b *testing.B) {
 		_, err = txn.Get(key)
 		assert.Error(b, err)
 	}
-}
-
-// 并发提交: 多个事务的写请求被 handleWriteCh 攒成一批, 共享一次 fsync (group commit);
-// 与串行 BenchmarkTrainKVTxnSet 对比, 观察每 op 摊销的刷盘开销;
-func BenchmarkTrainKVTxnSetParallel(b *testing.B) {
-	b.ResetTimer()
-	b.ReportAllocs()
-	clearDir(benchMarkDir)
-	train, _, _ := TrainKV.Open(lsm.GetDefaultOpt(benchMarkDir))
-	defer train.Close()
-
-	var counter atomic.Uint64
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			i := counter.Add(1)
-			key := []byte(fmt.Sprintf("key=%d", i))
-			txn := train.NewTransaction(true)
-			if err := txn.Set(key, make([]byte, 128)); err != nil {
-				b.Fatal(err)
-			}
-			if _, err := txn.Commit(); err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-}
-
-// API 层攒批: 一个事务 10 条 entry 共享一次 fsync, 观察每 op 摊销的刷盘开销;
-func BenchmarkTrainKVBatchSet10(b *testing.B) {
-	b.ResetTimer()
-	b.ReportAllocs()
-	clearDir(benchMarkDir)
-	train, _, _ := TrainKV.Open(lsm.GetDefaultOpt(benchMarkDir))
-	defer train.Close()
-
-	for i := 0; i < b.N; i++ {
-		txn := train.NewTransaction(true)
-		for j := 0; j < 10; j++ {
-			key := fmt.Sprintf("key=%d-%d", i, j)
-			val := fmt.Sprintf("val%d-%d", i, j)
-			if err := txn.Set([]byte(key), []byte(val)); err != nil {
-				b.Fatal(err)
-			}
-		}
-		if _, err := txn.Commit(); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func randStr(length int) string {
-	str := "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	bytes := []byte(str)
-	result := []byte{}
-	rand.Seed(time.Now().UnixNano() + int64(rand.Intn(100)))
-	for i := 0; i < length; i++ {
-		result = append(result, bytes[rand.Intn(len(bytes))])
-	}
-	return string(result)
 }

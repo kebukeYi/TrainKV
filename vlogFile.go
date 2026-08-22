@@ -4,18 +4,19 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/kebukeYi/TrainKV/v2/common"
-	"github.com/kebukeYi/TrainKV/v2/file"
-	"github.com/kebukeYi/TrainKV/v2/lsm"
-	"github.com/kebukeYi/TrainKV/v2/model"
-	"github.com/kebukeYi/TrainKV/v2/utils"
-	"github.com/pkg/errors"
+
 	"hash/crc32"
 	"io"
 	"math"
 	"os"
 	"sync"
 	"sync/atomic"
+
+	"github.com/kebukeYi/TrainKV/v2/common"
+	"github.com/kebukeYi/TrainKV/v2/file"
+	"github.com/kebukeYi/TrainKV/v2/lsm"
+	"github.com/kebukeYi/TrainKV/v2/model"
+	"github.com/kebukeYi/TrainKV/v2/utils"
 )
 
 type VLogFile struct {
@@ -32,14 +33,15 @@ func (vlog *VLogFile) Open(opt *utils.FileOptions) error {
 	vlog.Lock = sync.RWMutex{}
 	vlog.f, err = file.OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
 	if err != nil {
-		return errors.Wrapf(err, "Unable to open mmap file: %q", opt.FileName)
+		return fmt.Errorf("unable to open mmap file: %q,err:%w", opt.FileName, err)
 	}
 	info, err := vlog.f.Fd.Stat()
 	if err != nil {
 		return common.WarpErr("#Open Unable to run VLogFile.Stat", err)
 	}
 	vlog.size = uint32(info.Size()) // 看最终截断的长度;
-	common.CondPanic(vlog.size > math.MaxUint32, fmt.Errorf("file size: %d greater than %d", vlog.size, uint32(math.MaxUint32)))
+	common.CondPanicf(vlog.size > math.MaxUint32,
+		"file size: %d greater than %d \n", vlog.size, uint32(math.MaxUint32))
 	return nil
 }
 
@@ -60,7 +62,7 @@ func (vlog *VLogFile) DoneWriting(offset uint32) error {
 	if vlog.opt.SyncWrites {
 		// vlog 文件被预分配到 MaxSz, 只同步即将截断保留的 [0, offset) 区间;
 		if err := vlog.f.SyncRange(offset); err != nil {
-			return errors.Wrapf(err, "Unable to sync value log: %q", vlog.FileName())
+			return fmt.Errorf("unable to sync value log: %q,err:%w", vlog.FileName(), err)
 		}
 	}
 
@@ -69,11 +71,11 @@ func (vlog *VLogFile) DoneWriting(offset uint32) error {
 	defer vlog.Lock.Unlock()
 
 	if err := vlog.f.Truncate(int64(offset)); err != nil {
-		return errors.Wrapf(err, "Unable to truncate file: %q", vlog.FileName())
+		return fmt.Errorf("unable to truncate file: %q,err:%w", vlog.FileName(), err)
 	}
 
 	if err := vlog.Init(); err != nil {
-		return errors.Wrapf(err, "failed to initialize file %s", vlog.FileName())
+		return fmt.Errorf("failed to initialize file %s,err:%w", vlog.FileName(), err)
 	}
 	return nil
 }
@@ -97,14 +99,14 @@ func (vlog *VLogFile) SetSize(offset uint32) {
 func (vlog *VLogFile) Init() error {
 	info, err := vlog.f.Fd.Stat()
 	if err != nil {
-		return errors.Wrapf(err, "Unable to check stat for %q", vlog.FileName())
+		return fmt.Errorf("unable to check stat for %q,err:%w", vlog.FileName(), err)
 
 	}
 	size := info.Size()
 	if size == 0 {
 		return nil
 	}
-	common.CondPanic(size > math.MaxUint32, fmt.Errorf("[LogFile.Init] sz > math.MaxUint32"))
+	common.CondPanicf(size > math.MaxUint32, "[vLogFile.Init()] info.size:%d > math.MaxUint32;\n", size)
 	vlog.size = uint32(size)
 	return nil
 }

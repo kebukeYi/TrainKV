@@ -1,6 +1,7 @@
 package file
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -8,7 +9,6 @@ import (
 
 	"github.com/kebukeYi/TrainKV/v2/common"
 	"github.com/kebukeYi/TrainKV/v2/mmap"
-	"github.com/pkg/errors"
 )
 
 type MmapFile struct {
@@ -20,7 +20,7 @@ type MmapFile struct {
 func OpenMmapFile(fileName string, flag int, maxSz int32) (*MmapFile, error) {
 	fd, err := os.OpenFile(fileName, flag, common.DefaultFileMode)
 	if err != nil {
-		return nil, errors.Wrapf(err, "unable to open: %s", fileName)
+		return nil, fmt.Errorf("unable to open: %s, err:%w", fileName, err)
 	}
 	writable := true
 	if flag == os.O_RDONLY {
@@ -28,20 +28,20 @@ func OpenMmapFile(fileName string, flag int, maxSz int32) (*MmapFile, error) {
 	}
 	fi, err := fd.Stat()
 	if err != nil {
-		return nil, errors.Wrapf(err, "cannot stat file: %s", fileName)
+		return nil, fmt.Errorf("unable to open: %s, err:%w", fileName, err)
 	}
 	fileSize := fi.Size()
 	if fileSize == 0 && maxSz > 0 {
 		// 说明是新创建文件流程, 进行截断文件;
 		if err := fd.Truncate(int64(maxSz)); err != nil {
-			return nil, errors.Wrapf(err, "error while truncation")
+			return nil, fmt.Errorf("error while truncation, err:%w", err)
 		}
 		fileSize = int64(maxSz)
 	}
 
 	buf, err := mmap.Mmap(fd, writable, fileSize) // Mmap up to file size.
 	if err != nil {
-		return nil, errors.Wrapf(err, "while mmapping %s with size: %d", fd.Name(), fileSize)
+		return nil, fmt.Errorf("while mmapping %s with size: %d,err:%w", fd.Name(), fileSize, err)
 	}
 
 	// 为了处理文件系统缓存或确保目录元数据正确更新;
@@ -92,6 +92,20 @@ func (m *MmapFile) SyncRange(n uint32) error {
 	return mmap.Msync(m.Buf[:n])
 }
 
+// SyncDirtyRange 只同步映射区 [off, n) 内的脏页; 调用方需保证 [0, off) 已在上一次同步完成,
+// 供 WAL 每次提交只同步新增区间, 避免对不断增长的已写前缀反复做整区页表扫描;
+func (m *MmapFile) SyncDirtyRange(off, n uint32) error {
+	if m == nil || n <= off {
+		return nil
+	}
+	if int64(n) > int64(len(m.Buf)) {
+		n = uint32(len(m.Buf))
+	}
+	// msync 要求起始地址页对齐: 向下取整到页边界, 多同步的一页属于已同步前缀, 无副作用;
+	start := off &^ (uint32(os.Getpagesize()) - 1)
+	return mmap.Msync(m.Buf[start:n])
+}
+
 func (m *MmapFile) Bytes(off, sz int) ([]byte, error) {
 	if len(m.Buf[off:]) < sz {
 		return nil, io.EOF
@@ -119,7 +133,7 @@ func (m *MmapFile) AppendBuffer(offset uint32, buf []byte) error {
 	}
 	dLen := copy(m.Buf[offset:end], buf)
 	if dLen != needSize {
-		return errors.Errorf("#AppendBuffer dLen != needSize AppendBuffer failed")
+		return errors.New("#AppendBuffer dLen != needSize AppendBuffer failed")
 	}
 	return nil
 }
@@ -158,13 +172,13 @@ func (m *MmapFile) Close() error {
 func SyncDir(dir string) error {
 	df, err := os.Open(dir)
 	if err != nil {
-		return errors.Wrapf(err, "while opening %s", dir)
+		return fmt.Errorf("while opening %s,err:%w", dir, err)
 	}
 	if err := df.Sync(); err != nil {
-		return errors.Wrapf(err, "while syncing %s", dir)
+		return fmt.Errorf("while syncing %s,err:%w", dir, err)
 	}
 	if err := df.Close(); err != nil {
-		return errors.Wrapf(err, "while closing %s", dir)
+		return fmt.Errorf("while closing %s,err:%w", dir, err)
 	}
 	return nil
 }

@@ -3,6 +3,7 @@ package lsm
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"strconv"
@@ -15,7 +16,6 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/kebukeYi/TrainKV/v2/pb"
 	"github.com/kebukeYi/TrainKV/v2/utils"
-	pkg_err "github.com/pkg/errors"
 )
 
 const SSTableName string = ".sst"
@@ -58,7 +58,7 @@ func OpenTable(lm *LevelsManger, tableName string, builder *SstBuilder) (*Table,
 	itr := t.NewTableIterator(&interfaces.Options{IsAsc: false, IsSetCache: false})
 	defer itr.Close()
 	itr.Rewind()
-	common.CondPanic(!itr.Valid(), pkg_err.Errorf("failed to read index, form maxKey,err:%s", itr.err))
+	common.CondPanicf(!itr.Valid(), "failed to read index, form maxKey,err:%v \n", itr.err)
 
 	maxKey := itr.Item().Item.Key
 	t.sst.SetMaxKey(maxKey)
@@ -155,9 +155,9 @@ func (t *Table) getBlock(idx int, IsSetCache bool) (*block, error) {
 	}
 	var err error
 	if b.data, err = t.read(b.offset, int(ko.GetSize_())); err != nil {
-		return nil, pkg_err.Wrapf(err,
-			"failed to read from sstable: %d at offset: %d, len: %d",
-			t.sst.FID(), b.offset, ko.GetSize_())
+		return nil, fmt.Errorf(
+			"failed to read from ssTable: %d at offset: %d, len: %d,err:%w",
+			t.sst.FID(), b.offset, ko.GetSize_(), err)
 	}
 	readPos := len(b.data) - 4 // 1. First read checksum length.
 	b.chkLen = int(binary.BigEndian.Uint32(b.data[readPos : readPos+4]))
@@ -204,9 +204,9 @@ func (t *Table) indexFIDKey() uint64 {
 }
 
 func (t *Table) blockCacheKey(idx int) uint64 {
-	common.CondPanicf(t.fid >= math.MaxUint32, "t.fid >= math.MaxUint32")
-	common.CondPanicf(uint32(idx) >= math.MaxUint32, "uint32(idx) >=  math.MaxUint32")
-	return uint64(t.fid)<<32 | uint64(idx)
+	common.CondPanicf(t.fid >= math.MaxUint32, "t.fid:%d >= math.MaxUint32", t.fid)
+	common.CondPanicf(uint32(idx) >= math.MaxUint32, "t.blockIdx:%d >=  math.MaxUint32", idx)
+	return (t.fid)<<32 | uint64(idx)
 }
 
 func (t *Table) Size() int64 { return t.sst.Size() }
@@ -398,7 +398,7 @@ func (tier *TableIterator) seekFrom(key []byte) {
 	// 情况1:idx in (0,n), 找到了大于key的block,因此返回n-1, 返回前一个block, 试图寻找(有可能依然没有);
 	// 情况2:idx=n, 那就说明没有找到大于key的block,因此返回n,返回库中存在的最大值;
 	tier.SeekBlock(idx-1, key)
-	if pkg_err.Is(tier.err, common.ErrBlockEOF) {
+	if errors.Is(tier.err, common.ErrBlockEOF) {
 		// 如果此时的 idx 等于 len(), 那么idx-1 就是最后一个block;
 		if blockOffsetLen == idx {
 			// 最后一个都还是没有找到的话, 那就没有了;

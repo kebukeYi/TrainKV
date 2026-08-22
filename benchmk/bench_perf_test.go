@@ -7,7 +7,9 @@ package benchmk
 // 混合:   9:1 读:写;
 
 import (
+	"fmt"
 	"math/rand"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,12 +22,22 @@ import (
 var perfDataDir = "/usr/golanddata/trainkv/perf2"
 
 const (
-	perfKeyNum = 100000 // 读数据集规模: 100K * 512B ≈ 50MB, 小于 64MB memtable, 不触发轮转;
+	perfKeyNum = 100000 // 读数据集规模: 100K * 512B ≈ 50MB, 大于 10MB memtable, 触发轮转;
 	perfBatch  = 500    // 装载时的批大小;
 )
 
-// loadMemData 装载 perfKeyNum 个 key(512B value), 数据全部驻留 memtable;
-func loadMemData(b *testing.B, train *TrainKV.TrainKV) {
+func openPerfDB(b *testing.B) *TrainKV.TrainKV {
+	clearDir(perfDataDir)
+	defaultOpt := lsm.GetDefaultOpt(perfDataDir)
+	//defaultOpt.MemTableSize = 10 << 20
+	defaultOpt.SyncWrites = true
+	train, _, _ := TrainKV.Open(defaultOpt)
+	b.Cleanup(func() { _ = train.Close() })
+	return train
+}
+
+// loadData 装载 perfKeyNum 个key(512B value);
+func loadData(b *testing.B, train *TrainKV.TrainKV) {
 	txn := train.NewTransaction(true)
 	for i := 0; i < perfKeyNum; i++ {
 		// val: 512B
@@ -44,17 +56,10 @@ func loadMemData(b *testing.B, train *TrainKV.TrainKV) {
 	}
 }
 
-func openPerfDB(b *testing.B) *TrainKV.TrainKV {
-	clearDir(perfDataDir)
-	train, _, _ := TrainKV.Open(lsm.GetDefaultOpt(perfDataDir))
-	b.Cleanup(func() { _ = train.Close() })
-	return train
-}
-
 // ---------------- 写流程 ----------------
 
 // BenchmarkWriteTxnSet 串行事务单条提交, 128B value, 纯写(无读阶段);
-func BenchmarkWriteTxnSet(b *testing.B) {
+func BenchmarkWriteTxnSet128B(b *testing.B) {
 	b.ReportAllocs()
 	train := openPerfDB(b)
 
@@ -71,7 +76,46 @@ func BenchmarkWriteTxnSet(b *testing.B) {
 	}
 }
 
+// 并发提交: 多个事务的写请求被 handleWriteCh 攒成一批, 共享一次 fsync (group commit);
+// 与串行 BenchmarkTrainKVTxnSet-128B 对比, 观察每 op 摊销的刷盘开销;
+func BenchmarkWriteTxnSet128BParallel(b *testing.B) {
+	b.ResetTimer()
+	b.ReportAllocs()
+	clearDir(benchMarkDir)
+	train := openPerfDB(b)
+	defer train.Close()
+
+	var counter atomic.Uint64
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			i := counter.Add(1)
+			key := []byte(fmt.Sprintf("key=%d", i))
+			txn := train.NewTransaction(true)
+			if err := txn.Set(key, make([]byte, 128)); err != nil {
+				b.Fatal(err)
+			}
+			if _, err := txn.Commit(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
 // BenchmarkWriteTxnSet4K 串行事务单条提交, 4KB value(仍低于 1MB 阈值, 走 LSM 直写);
+// wal_no_sync ↓
+// mem all_obj
+// 540230            106961 ns/op           28069 B/op         24 allocs/op
+// 修复了 common.Conpainc(bool, error.new())
+// 534298             74711 ns/op           26075 B/op         12 allocs/op
+// 增加 model.NewEntry() 池化;
+// 593797             92589 ns/op           27596 B/op         12 allocs/op
+// 340298             70449 ns/op           23898 B/op         10 allocs/op
+// wal_sync ↓
+//
+//	1369           8988261 ns/op             210 B/op          5 allocs/op
+//	1375           9227016 ns/op             212 B/op          5 allocs/op
+//	1311           8863622 ns/op             118 B/op          4 allocs/op
+//	1116           9112040 ns/op             119 B/op          4 allocs/op
 func BenchmarkWriteTxnSet4K(b *testing.B) {
 	b.ReportAllocs()
 	train := openPerfDB(b)
@@ -88,14 +132,35 @@ func BenchmarkWriteTxnSet4K(b *testing.B) {
 	}
 }
 
-// ---------------- 读流程 ----------------
-
-// BenchmarkReadGetHitSeq 顺序命中, 数据在 memtable;
-func BenchmarkReadGetHitSeq(b *testing.B) {
+// BenchmarkWriteTxnSet4KParallel 并发事务提交; 验证 SyncWrites 下攒批同步的效果:
+// 并发提交汇合到同一批次, 一次刷盘覆盖多个提交;
+func BenchmarkWriteTxnSet4KParallel(b *testing.B) {
 	b.ReportAllocs()
 	train := openPerfDB(b)
-	// 数据都在 memtable 中;
-	loadMemData(b, train)
+	val := make([]byte, 4<<10)
+	var seq int64
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			i := atomic.AddInt64(&seq, 1)
+			txn := train.NewTransaction(true)
+			if err := txn.Set(GetKey(int(i)), val); err != nil {
+				b.Fatal(err)
+			}
+			if _, err := txn.Commit(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+// ---------------- 读流程 ----------------
+
+// BenchmarkReadGetHitSeq 顺序命中;
+func BenchmarkReadGetHitSeq(b *testing.B) {
+	train := openPerfDB(b)
+	loadData(b, train)
+	b.ReportAllocs()
 	txn := train.NewTransaction(false)
 	defer txn.Discard()
 	b.ResetTimer()
@@ -108,10 +173,9 @@ func BenchmarkReadGetHitSeq(b *testing.B) {
 
 // BenchmarkReadGetHitRandom 随机命中(预生成随机序, 排除 rand 调用对测时的干扰);
 func BenchmarkReadGetHitRandom(b *testing.B) {
-	b.ReportAllocs()
 	train := openPerfDB(b)
-	loadMemData(b, train)
-
+	loadData(b, train)
+	b.ReportAllocs()
 	order := rand.New(rand.NewSource(42)).Perm(perfKeyNum)
 	txn := train.NewTransaction(false)
 	defer txn.Discard()
@@ -127,7 +191,7 @@ func BenchmarkReadGetHitRandom(b *testing.B) {
 func BenchmarkReadGetMiss(b *testing.B) {
 	b.ReportAllocs()
 	train := openPerfDB(b)
-	loadMemData(b, train)
+	loadData(b, train)
 
 	txn := train.NewTransaction(false)
 	defer txn.Discard()
@@ -176,7 +240,7 @@ func BenchmarkReadGetBigValue(b *testing.B) {
 func BenchmarkReadIterate(b *testing.B) {
 	b.ReportAllocs()
 	train := openPerfDB(b)
-	loadMemData(b, train)
+	loadData(b, train)
 	txn := train.NewTransaction(false)
 	defer txn.Discard()
 	iter := txn.NewIterator(&interfaces.Options{IsAsc: true, IsSetCache: false})
@@ -200,7 +264,7 @@ func BenchmarkReadIterate(b *testing.B) {
 func BenchmarkMixedRead90Write10(b *testing.B) {
 	b.ReportAllocs()
 	train := openPerfDB(b)
-	loadMemData(b, train)
+	loadData(b, train)
 	val := make([]byte, 128)
 	rtxn := train.NewTransaction(false)
 	defer rtxn.Discard()
@@ -228,7 +292,7 @@ func BenchmarkMixedRead90Write10(b *testing.B) {
 func BenchmarkReadIterateSST(b *testing.B) {
 	b.ReportAllocs()
 	train := openPerfDB(b)
-	loadMemData(b, train)
+	loadData(b, train)
 	train.Lsm.Rotate()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {

@@ -2,10 +2,11 @@ package model
 
 import (
 	"encoding/binary"
-	"github.com/kebukeYi/TrainKV/v2/common"
 	"reflect"
 	"time"
 	"unsafe"
+
+	"github.com/kebukeYi/TrainKV/v2/common"
 )
 
 const vptrSize = unsafe.Sizeof(ValuePtr{})

@@ -3,13 +3,13 @@ package utils
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/kebukeYi/TrainKV/v2/common"
-	"github.com/pkg/errors"
 	"hash/crc32"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/kebukeYi/TrainKV/v2/common"
 )
 
 type FileOptions struct {
@@ -66,7 +66,7 @@ func VerifyChecksum(data []byte, expected []byte) error {
 	actual := uint64(crc32.Checksum(data, common.CastigationCryTable))
 	expectedU64 := binary.BigEndian.Uint64(expected)
 	if actual != expectedU64 {
-		return errors.Wrapf(common.ErrChecksumMismatch, "actual: %d, expected: %d", actual, expectedU64)
+		return fmt.Errorf("actual: %d, expected: %d,err:%w", actual, expectedU64, common.ErrChecksumMismatch)
 	}
 	return nil
 }

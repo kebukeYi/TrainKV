@@ -5,7 +5,7 @@ import "sync"
 type Throttle struct {
 	once      sync.Once
 	wg        sync.WaitGroup
-	ch        chan struct{}
+	ch        chan struct{} // 限制最多多少线程并发;
 	errCh     chan error
 	finishErr error
 }

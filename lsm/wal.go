@@ -23,13 +23,14 @@ const (
 )
 
 type WAL struct {
-	file     *file.MmapFile
-	opt      *utils.FileOptions
-	lock     sync.Mutex
-	buf      *bytes.Buffer
-	crcTable *crc32.Table // 写路径经 handleWriteCh 串行化, 无需每记录新建哈希对象;
-	writeAt  uint32
-	readAt   uint32
+	file       *file.MmapFile
+	opt        *utils.FileOptions
+	lock       sync.Mutex
+	buf        *bytes.Buffer
+	crcTable   *crc32.Table // 写路径经 handleWriteCh 串行化, 无需每记录新建哈希对象;
+	writeAt    uint32
+	readAt     uint32
+	lastSynced uint32 // 已同步的写入前缀; 每次只同步 [lastSynced, writeAt) 新增区间;
 }
 
 func OpenWalFile(opt *utils.FileOptions) *WAL {
@@ -155,18 +156,22 @@ func (w *WAL) WalDecode(reader io.Reader) (*model.Entry, error) {
 	return entry, nil
 }
 
-// EstimateWalEncodeSize WalEncode | header(klen,vlen,meta,expir) | key | value | crc32 |
-func EstimateWalEncodeSize(e *model.Entry) int {
-	return WalHeaderSize + len(e.Key) + len(e.Value) + crcSize // crc 4B
-}
-
 func (w *WAL) Size() uint32 {
 	return atomic.LoadUint32(&w.writeAt)
 }
 
 func (w *WAL) SyncFile() error {
-	// WAL 文件被预截断到 MemTableSize, 只同步已写入前缀即可, 整区 msync 会拖慢每次提交;
-	return w.file.SyncRange(w.Size())
+	// WAL 文件被预截断到 MemTableSize, 只需同步新增区间 [lastSynced, Size):
+	// 已同步前缀无需重复 msync, 整区同步会随 WAL 增长线性拖慢每次提交;
+	size := w.Size()
+	if size <= w.lastSynced {
+		return nil
+	}
+	if err := w.file.SyncDirtyRange(w.lastSynced, size); err != nil {
+		return err
+	}
+	w.lastSynced = size
+	return nil
 }
 
 func (w *WAL) SetSize(offset uint32) {

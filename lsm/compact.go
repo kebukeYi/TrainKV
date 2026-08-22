@@ -238,8 +238,8 @@ func (lm *LevelsManger) pickCompactLevels() (prios []compactionPriority) {
 		addPriority(i, float64(size/levelTargets.levelTargetSSize[i]))
 	}
 
-	common.CondPanic(len(prios) != len(lm.levelHandlers),
-		errors.New("[pickCompactLevels] len(prios) != len(lm.levels)"))
+	common.CondPanicMessage(len(prios) != len(lm.levelHandlers),
+		"[pickCompactLevels] len(prios) != len(lm.levels)")
 
 	// 如果 Li-1 的score > 1.0 ; 那么 Li-1 = Li-1/Li; 否则下探;
 	// 假如 Li.score >= 1.0, Li-1.score 就会变小, 那么我们就倾向于 Li层的压缩;
@@ -309,11 +309,10 @@ func (lm *LevelsManger) doCompact(compactorId int, prio compactionPriority) erro
 	defer lm.compactIngStatus.deleteCompactionDef(cd)
 
 	if err := lm.runCompactDef(compactorId, prio.dst.dstLevelId, cd); err != nil {
-		log.Printf("[Compactor: %d] LOG Compact FAILED with error: %+v: %+v", compactorId, err, cd)
+		//log.Printf("[Compactor: %d] LOG Compact FAILED with error: %+v: %+v \n", compactorId, err, cd)
 		return err
 	}
-	log.Printf("[CompactorID: %d] Compaction for level: %d to %d DONE",
-		compactorId, cd.thisLevel.levelID, cd.nextLevel.levelID)
+	//log.Printf("[CompactorID: %d] Compaction for level: %d to %d DONE \n", compactorId, cd.thisLevel.levelID, cd.nextLevel.levelID)
 
 	return nil
 }
@@ -376,8 +375,8 @@ func (lm *LevelsManger) findTablesL0ToL0(cd *compactDef) bool {
 	cd.nextRange = keyRange{}
 	cd.nextTables = nil
 
-	common.CondPanic(cd.thisLevel.levelID != 0, errors.New("fillTablesL0ToL0 cd.thisLevel.levelNum != 0"))
-	common.CondPanic(cd.nextLevel.levelID != 0, errors.New("fillTablesL0ToL0 cd.nextLevel.levelNum != 0"))
+	common.CondPanicMessage(cd.thisLevel.levelID != 0, "fillTablesL0ToL0 cd.thisLevel.levelNum != 0")
+	common.CondPanicMessage(cd.nextLevel.levelID != 0, "fillTablesL0ToL0 cd.nextLevel.levelNum != 0")
 
 	lm.levelHandlers[0].mux.RLock()
 	defer lm.levelHandlers[0].mux.RUnlock()
@@ -501,7 +500,7 @@ func (lm *LevelsManger) findMaxLevelTables(tables []*Table, cd *compactDef) bool
 		nextIdx := sort.Search(len(sortedTables), func(i int) bool {
 			return model.CompareKeyWithTs(sortedTables[i].sst.minKey, t.sst.minKey) >= 0
 		})
-		common.CondPanic(sortedTables[nextIdx].fid != t.fid, errors.New("sortedTables[j].ID() != t.ID()"))
+		common.CondPanicMessage(sortedTables[nextIdx].fid != t.fid, "sortedTables[j].ID() != t.ID()")
 		totalSize := t.Size()
 		nextIdx++
 		for nextIdx < len(sortedTables) {
@@ -576,7 +575,7 @@ func (lm *LevelsManger) runCompactDef(compactorId int, dstLevelId int, cd compac
 		return errors.New("#runCompactDef() FileSizes cannot be zero. Targets are not set")
 	}
 	timeStart := time.Now()
-	common.CondPanic(len(cd.splits) != 0, errors.New("#runCompactDef, len(cd.splits) != 0"))
+	common.CondPanicMessage(len(cd.splits) != 0, "#runCompactDef, len(cd.splits) != 0")
 	thisLevel := cd.thisLevel
 	nextLevel := cd.nextLevel
 
@@ -620,7 +619,7 @@ func (lm *LevelsManger) runCompactDef(compactorId int, dstLevelId int, cd compac
 
 	to := tablesToString(buildTables)
 
-	if dur := time.Since(timeStart); dur >= 1*time.Second {
+	if dur := time.Since(timeStart); dur >= 50*time.Second {
 		fmt.Printf("[GoRouteid:%d] Compact Input: lx:%d[%d tables] + ly:%d[%d tables]  with %d splits. -> Out: ly:%d[new %d tables]. tableName: [%s] -> [%s], took %v\n",
 			compactorId, thisLevel.levelID, len(cd.thisTables),
 			nextLevel.levelID, len(cd.nextTables), len(cd.splits),
@@ -656,6 +655,7 @@ func (lm *LevelsManger) compactBuildTables(dstLevelId int, cd compactDef) ([]*Ta
 	inflightBuilders := utils.NewThrottle(8 + len(cd.splits))
 
 	for _, kr := range cd.splits {
+		// 限流器, 超过阈值,将会阻塞; 进一步限制写放大;
 		if err := inflightBuilders.Do(); err != nil {
 			return nil, nil, fmt.Errorf("cannot start subcompaction: %+v", err)
 		}
@@ -746,7 +746,7 @@ func (lm *LevelsManger) subCompact(iterator interfaces.Iterator, kr keyRange, cd
 	// 1. 判断key是否需要保留;
 	// 2. 判断key是否需要通知 vlogGC;
 	addKeys := func(builder *SstBuilder) {
-		timeStart := time.Now()
+		// timeStart := time.Now()
 		var tableRange keyRange
 		var numKeys, numSkips uint64
 		var rangeCheck int
@@ -827,7 +827,7 @@ func (lm *LevelsManger) subCompact(iterator interfaces.Iterator, kr keyRange, cd
 				builder.AddKey(&entry)
 			}
 		} // for over
-		fmt.Printf("[%d] LOG Compact. Added %d keys. Skipped %d keys. Iteration took: %v", cd.compactorId, numKeys, numSkips, time.Since(timeStart).Round(time.Millisecond))
+		// fmt.Printf("[gid:%d] LOG Compact. Added %d keys. Skipped %d keys. Iteration took: %v \n;", cd.compactorId, numKeys, numSkips, time.Since(timeStart).Round(time.Millisecond))
 	} // addKeys Over
 
 	if len(kr.left) > 0 {
@@ -1019,7 +1019,7 @@ func (cs *compactIngStatus) deleteCompactionDef(cd compactDef) {
 		if _, ok := cs.tables[t.fid]; ok {
 			delete(cs.tables, t.fid)
 		} else {
-			common.CondPanic(!ok, fmt.Errorf("#deleteCompactionDef cs.tables is nil"))
+			common.CondPanicMessage(!ok, "#deleteCompactionDef cs.tables is nil")
 		}
 	}
 }

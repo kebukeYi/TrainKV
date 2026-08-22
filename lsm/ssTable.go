@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,7 +15,6 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/kebukeYi/TrainKV/v2/pb"
 	"github.com/kebukeYi/TrainKV/v2/utils"
-	"github.com/pkg/errors"
 )
 
 type SSTable struct {
@@ -78,7 +78,7 @@ func (sst *SSTable) initTable() (firstBlock *pb.BlockOffset, err error) {
 	indexData := sst.readCheckError(readPos, sst.idxLen)
 
 	if err := utils.VerifyChecksum(indexData, expectedChk); err != nil {
-		return nil, errors.Wrapf(err, "failed to verify checksum for table: %s", sst.file.Fd.Name())
+		return nil, fmt.Errorf("failed to verify checksum for table: %s,err:%w", sst.file.Fd.Name(), err)
 	}
 	indexTable := &pb.TableIndex{}
 	if err := proto.UnmarshalMerge(indexData, indexTable); err != nil {
@@ -90,7 +90,7 @@ func (sst *SSTable) initTable() (firstBlock *pb.BlockOffset, err error) {
 	if len(indexTable.GetOffsets()) > 0 {
 		return indexTable.GetOffsets()[0], nil
 	}
-	return nil, errors.New("ssTable read indexTable fail, data offset[] is nil.")
+	return nil, errors.New("ssTable read indexTable fail, data offset[] is nil")
 }
 
 func (sst *SSTable) Indexs() *pb.TableIndex {

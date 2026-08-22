@@ -88,6 +88,12 @@ func CondPanic(condition bool, err error) {
 	}
 }
 
+func CondPanicMessage(condition bool, message string) {
+	if condition {
+		Panic(errors.New(message))
+	}
+}
+
 // CondPanicf 与 CondPanic 相同, 但错误信息延迟到条件成立时才构造;
 // 热路径上的防御性断言须使用它, 避免每次调用都执行 fmt.Errorf 造成分配;
 func CondPanicf(condition bool, format string, args ...interface{}) {

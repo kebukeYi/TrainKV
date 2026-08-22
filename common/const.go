@@ -3,6 +3,7 @@ package common
 import (
 	"hash/crc32"
 	"os"
+	"time"
 )
 
 const (
@@ -21,7 +22,8 @@ const (
 	DefaultFileMode                   = 0666 // 666
 	MaxHeaderSize                     = 21   // 基于可变长编码, vlogFile其最可能的编码;
 	VlogHeaderSize                    = 0
-	WriteChBatchThreshold             = 900 // 写通道, 攒批请求数达到该值即强制写盘, 须小于 KvWriteChCapacity(1000);
+	WriteChBatchThreshold             = 900  // 写通道, 攒批请求数达到该值即强制写盘, 须小于 KvWriteChCapacity(1000);
+	SyncGroupCommitWait               = time.Millisecond // SyncWrites 攒批汇合窗口: 本批已有多请求时, 等待该时长吸收并发提交再刷盘, 减少同步次数;
 )
 
 const LevelMaxStaleDataSize = 10 << 20    // 10MB

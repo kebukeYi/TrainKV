@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -12,7 +13,6 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/kebukeYi/TrainKV/v2/pb"
 	"github.com/kebukeYi/TrainKV/v2/utils"
-	"github.com/pkg/errors"
 )
 
 type SstBuilder struct {
@@ -133,8 +133,11 @@ func (ssb *SstBuilder) Add(e *model.Entry, isStale bool) {
 		diffKey = ssb.keyDiff(keyTs)
 	}
 
-	common.CondPanic(!(len(keyTs)-len(diffKey) <= math.MaxUint16), fmt.Errorf("tableBuilder.add: len(key)-len(diffKey) <= math.MaxUint16"))
-	common.CondPanic(!(len(diffKey) <= math.MaxUint16), fmt.Errorf("tableBuilder.add: len(diffKey) <= math.MaxUint16"))
+	common.CondPanicMessage(!(len(keyTs)-len(diffKey) <= math.MaxUint16),
+		"tableBuilder.add: len(key)-len(diffKey) <= math.MaxUint16")
+
+	common.CondPanicMessage(!(len(diffKey) <= math.MaxUint16),
+		"tableBuilder.add: len(diffKey) <= math.MaxUint16")
 
 	header := &entryHeader{
 		overlap: uint16(len(keyTs) - len(diffKey)),
@@ -151,8 +154,7 @@ func (ssb *SstBuilder) Add(e *model.Entry, isStale bool) {
 
 func (ssb *SstBuilder) append(data []byte) {
 	dst := ssb.allocate(len(data))
-	common.CondPanic(len(data) != copy(dst, data),
-		errors.New("sstBuilder.append data failed."))
+	common.CondPanicMessage(len(data) != copy(dst, data), "sstBuilder.append data failed")
 }
 
 func (ssb *SstBuilder) allocate(need int) []byte {
@@ -179,7 +181,7 @@ func (ssb *SstBuilder) tryNewBlock(e *model.Entry) bool {
 	}
 
 	sz := uint32((len(ssb.curBlock.entryOffsets)+1)*4 + 4 + 8 + 4)
-	common.CondPanic(!(sz < math.MaxUint32), errors.New("block size too large,integer overflow!"))
+	common.CondPanicMessage(!(sz < math.MaxUint32), "block size too large,integer overflow!")
 
 	// (endOffset+1)*4+ len(key)+len(value)
 	entriesOffsetsSize := int64((len(ssb.curBlock.entryOffsets)+1)*4 +
@@ -189,8 +191,8 @@ func (ssb *SstBuilder) tryNewBlock(e *model.Entry) bool {
 
 	ssb.curBlock.estimateSize = int64(ssb.curBlock.endOffset) + int64(6 /*header size for entry*/) +
 		int64(len(e.Key)) + int64(e.EncodeSize()) + entriesOffsetsSize
-	common.CondPanic(!(uint64(ssb.curBlock.endOffset)+uint64(ssb.curBlock.estimateSize) <
-		math.MaxUint32), errors.New("Integer overflow"))
+	common.CondPanicMessage(!(uint64(ssb.curBlock.endOffset)+uint64(ssb.curBlock.estimateSize) <
+		math.MaxUint32), "curBlock.endOffset overflow")
 
 	return ssb.curBlock.estimateSize > int64(ssb.opt.BlockSize)
 }
@@ -217,7 +219,7 @@ func (ssb *SstBuilder) flush(lm *LevelsManger, tableName string) (t *Table, err 
 	})
 	buf := make([]byte, bd.size)
 	written := bd.copy(buf)
-	common.CondPanic(written != len(buf), fmt.Errorf("tableBuilder.flush written != len(buf)"))
+	common.CondPanicMessage(written != len(buf), "tableBuilder.flush written != len(buf)")
 	mmapBuf, err := t.sst.Bytes(0, int(bd.size))
 	if err != nil {
 		return nil, err
@@ -257,7 +259,7 @@ func (ssb *SstBuilder) Finish() []byte {
 	bd := ssb.done()
 	buf := make([]byte, bd.size)
 	written := bd.copy(buf)
-	common.CondPanic(written != len(buf), fmt.Errorf("tableBuilder.flush written != len(buf)"))
+	common.CondPanicMessage(written != len(buf), "tableBuilder.flush written != len(buf)")
 	return buf
 }
 

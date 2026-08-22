@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -20,7 +21,6 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/lsm"
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/kebukeYi/TrainKV/v2/utils"
-	"github.com/pkg/errors"
 )
 
 const discardStatsFlushThreshold = 100
@@ -69,7 +69,7 @@ func (vlog *ValueLog) Open(replayFn model.LogEntry) error {
 	files := vlog.sortedFiles()
 	for _, fid := range files {
 		lf, ok := vlog.filesMap[fid]
-		common.CondPanic(!ok, fmt.Errorf("vlog.filesMap[fid] fid not found"))
+		common.CondPanicMessage(!ok, "vlog.filesMap[fid] fid not found")
 		var err error
 		if err = lf.Open(&utils.FileOptions{
 			FID:      uint64(fid),
@@ -78,7 +78,7 @@ func (vlog *ValueLog) Open(replayFn model.LogEntry) error {
 			Path:     vlog.DirPath,
 			MaxSz:    vlog.Db.Opt.ValueLogFileSize,
 		}); err != nil {
-			return errors.Wrapf(err, "Open existing file: %q", lf.FileName())
+			return fmt.Errorf("open existing file: %s,err:%w", lf.FileName(), err)
 		}
 		// 如果当前文件不是 最后一个文件, 执行属性赋值操作;
 		if fid < vlog.maxFid.Load() {
@@ -88,11 +88,11 @@ func (vlog *ValueLog) Open(replayFn model.LogEntry) error {
 		}
 	}
 	lastVLogFile, ok := vlog.filesMap[vlog.maxFid.Load()]
-	common.CondPanic(!ok, errors.New("vlog.filesMap[vlog.maxFid] not found"))
+	common.CondPanicMessage(!ok, "vlog.filesMap[vlog.maxFid] not found")
 	// 主要是获得 最后一个 vlog 文件的 可写offset位置, 并没有做过多数据判断;
 	endOffset, err := vlog.iterator(lastVLogFile, 0, replayFn)
 	if err != nil {
-		return errors.Wrapf(err, "file.Seek to end path:[%s]", lastVLogFile.FileName())
+		return fmt.Errorf("file.Seek to end path:[%s],err:%w", lastVLogFile.FileName(), err)
 	}
 	atomic.StoreUint32(&vlog.writableFileOffset, endOffset)
 	if err = vlog.sendDiscardStats(); err != nil {
@@ -160,20 +160,20 @@ func (vlog *ValueLog) Read(vp *model.ValuePtr) ([]byte, func(), error) {
 		hash32 := crc32.New(common.CastigationCryTable)
 		if _, err := hash32.Write(buf[:len(buf)-crc32.Size]); err != nil {
 			model.RunCallback(callBack)
-			return nil, nil, errors.Wrapf(err, "failed to write hash for vp %+v", vp)
+			return nil, nil, fmt.Errorf("failed to write hash for vp %+v,err:%w", vp, err)
 		}
 		checkSum := buf[len(buf)-crc32.Size:]
 		if hash32.Sum32() != binary.BigEndian.Uint32(checkSum) {
 			model.RunCallback(callBack)
-			return nil, nil, errors.Wrapf(common.ErrChecksumMismatch, "value corrupted for vp: %+v", vp)
+			return nil, nil, fmt.Errorf("value corrupted for vp: %+v,err:%w", vp, common.ErrChecksumMismatch)
 		}
 	}
 	var head model.EntryHeader
 	headerLen := head.Decode(buf)
 	kvData := buf[headerLen:]
 	if uint32(len(kvData)) < head.KLen+head.VLen {
-		// fmt.Printf("ValueLog.Read: Invalid read vp: %+v\n", vp)
-		return nil, callBack, errors.Errorf("Invalid read: len: %d read at:[%d:%d]", len(kvData), head.KLen, head.KLen+head.VLen)
+		return nil, callBack, fmt.Errorf("invalid read: len: %d read at:[%d:%d]",
+			len(kvData), head.KLen, head.KLen+head.VLen)
 	}
 	return kvData[head.KLen : head.KLen+head.VLen], callBack, nil
 }
@@ -192,11 +192,12 @@ func (vlog *ValueLog) getVlogFileLocked(vp *model.ValuePtr) (*VLogFile, error) {
 	defer vlog.filesLock.RUnlock()
 	vLogFile, ok := vlog.filesMap[vp.Fid]
 	if !ok {
-		return nil, errors.Errorf("file with ID: %d not found", vp.Fid)
+		return nil, fmt.Errorf("file with ID: %d not found", vp.Fid)
 	}
 	if vp.Fid == vlog.maxFid.Load() {
 		if vp.Offset >= vlog.getWriteOffset() {
-			return nil, errors.Errorf("Invalid value pointer offset: %d greater than current offset: %d", vp.Offset, vlog.writableFileOffset)
+			return nil, fmt.Errorf("invalid value pointer offset: %d greater than current offset: %d",
+				vp.Offset, vlog.writableFileOffset)
 		}
 	}
 	vLogFile.Lock.RLock()
@@ -216,7 +217,7 @@ func (vlog *ValueLog) validateWrites(reqs []*model.Request) error {
 		size := estimateRequestSize(req)
 		estimatedVlogOffset := writableFileOffset + size
 		if estimatedVlogOffset > uint64(vlog.Opt.ValueLogFileMaxSize) {
-			return errors.Errorf("Request size offset %d is bigger than ValueLogFileMaxSize %d",
+			return fmt.Errorf("request size offset %d is bigger than ValueLogFileMaxSize %d",
 				estimatedVlogOffset, vlog.Opt.ValueLogFileMaxSize)
 		}
 		if estimatedVlogOffset >= uint64(vlog.Opt.ValueLogFileMaxSize) {
@@ -254,7 +255,7 @@ func (vlog *ValueLog) Write(reqs []*model.Request) (wrote bool, err error) {
 		offset := vlog.getWriteOffset()
 		// vlogFile 会自动扩容;
 		if err := curVlogFile.Write(offset, data); err != nil {
-			return errors.Wrapf(err, "Unable to write to value log file: %q", curVlogFile.FileName())
+			return fmt.Errorf("unable to write to value log file: %q,err:%w", curVlogFile.FileName(), err)
 		}
 		vlog.buf.Reset()
 		atomic.AddUint32(&vlog.writableFileOffset, uint32(len(data)))
@@ -273,7 +274,7 @@ func (vlog *ValueLog) Write(reqs []*model.Request) (wrote bool, err error) {
 				return err
 			}
 			newFid := vlog.maxFid.Add(1)
-			common.CondPanic(newFid <= 0, fmt.Errorf("vlogFile newid has overflown uint32: %v", newFid))
+			common.CondPanicf(newFid <= 0, "vlogFile newFid has overflown uint32: %v", newFid)
 			var err error
 			curVlogFile, err = vlog.createVlogFile(newFid)
 			if err != nil {
@@ -447,7 +448,7 @@ func (vlog *ValueLog) handleDiscardStats() {
 		}}
 		request, err := vlog.Db.SendToWriteCh(entries)
 		if err != nil {
-			return errors.Wrapf(err, "write discard stats to db")
+			return fmt.Errorf("write discard stats to db,err:%w", err)
 		}
 		return request.Wait()
 	}
@@ -559,7 +560,7 @@ func (vlog *ValueLog) iterator(vlogFile *VLogFile, offset uint32, fn model.LogEn
 
 	// We're not at the end of the file. Let's Seek to the offset and start reading.
 	if _, err := vlogFile.Seek(int64(offset), io.SeekStart); err != nil {
-		return 0, errors.Wrapf(err, "Unable to seek, name:%s", vlogFile.FileName())
+		return 0, fmt.Errorf("unable to seek, name:%s,err:%w", vlogFile.FileName(), err)
 	}
 
 	reader := bufio.NewReader(vlogFile.FD())
@@ -575,8 +576,7 @@ LOOP:
 		case err == common.ErrEmptyVlogFile:
 			break LOOP
 		case err != nil:
-			fmt.Printf("unable to decode entry, err:%v \n", err)
-			return recordEntryOffset, err
+			return recordEntryOffset, fmt.Errorf("unable to decode entry, err:%v \n", err)
 		}
 		var vp model.ValuePtr
 		vp.Len = uint32((entry.HeaderLen) + len(entry.Key) + len(entry.Value) + crc32.Size)
@@ -584,7 +584,7 @@ LOOP:
 		vp.Fid = vlogFile.FID
 		recordEntryOffset += vp.Len
 		if err = fn(entry, &vp); err != nil {
-			return 0, common.WarpErr(fmt.Sprintf("Iteration function %s", vlogFile.FileName()), err)
+			return 0, fmt.Errorf("iteration function %s: %w", vlogFile.FileName(), err)
 		}
 	}
 	return recordEntryOffset, nil
@@ -711,7 +711,7 @@ func (vlog *ValueLog) gcReWriteLog(logFile *VLogFile) error {
 	vlog.filesLock.RLock()
 	maxFid := vlog.maxFid.Load()
 	vlog.filesLock.RUnlock()
-	common.CondPanic((logFile.FID) >= maxFid, fmt.Errorf("fid to move: %d. Current max fid: %d", logFile.FID, maxFid))
+	common.CondPanicf((logFile.FID) >= maxFid, "fid to move: %d. Current max fid: %d \n", logFile.FID, maxFid)
 
 	tempArray := make([]*model.Entry, 0, 1000)
 	var size int64
@@ -733,7 +733,7 @@ func (vlog *ValueLog) gcReWriteLog(logFile *VLogFile) error {
 		}
 
 		if lsmEntry.Value == nil || len(lsmEntry.Value) == 0 {
-			return errors.Errorf("#gcReWriteLog(): Empty lsmEntry.value: %+v  from lsm;", lsmEntry)
+			return fmt.Errorf("#gcReWriteLog(): Empty lsmEntry.value: %+v  from lsm;", lsmEntry)
 		}
 
 		var vp model.ValuePtr
@@ -841,7 +841,7 @@ func (vlog *ValueLog) sendDiscardStats() error {
 	}
 	var statMap map[uint32]int64
 	if err = json.Unmarshal(val, &statMap); err != nil {
-		return errors.Wrapf(err, "failed to unmarshal discard stats")
+		return fmt.Errorf("failed to unmarshal discard stats,err:%w", err)
 	}
 	fmt.Printf("Value Log Discard stats: %v\n", statMap)
 	vlog.VLogFileDisCardStaInfo.FlushCh <- statMap

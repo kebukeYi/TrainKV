@@ -2,11 +2,12 @@ package lsm
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/kebukeYi/TrainKV/v2/common"
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/kebukeYi/TrainKV/v2/utils"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 var lsmTestPath = "/usr/golanddata/trainkv/lsm"
