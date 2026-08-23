@@ -92,7 +92,8 @@ func loadSSTData(b *testing.B) *TrainKV.TrainKV {
 
 // ---------------- 数据在 SST ----------------
 
-// BenchmarkReadGetHitSeqSST 数据全部在 SST, 顺序点读;
+// BenchmarkReadGetHitSeqSST 数据全部在 L0 层的 SST, 顺序点读;
+// 333          37943293 ns/op        17369433 B/op     228316 allocs/op
 func BenchmarkReadGetHitSeqSST(b *testing.B) {
 	b.ReportAllocs()
 	train := loadSSTData(b)
@@ -107,6 +108,7 @@ func BenchmarkReadGetHitSeqSST(b *testing.B) {
 }
 
 // BenchmarkReadGetHitRandomSST 数据全部在 SST, 随机点读 (bloom + 块缓存);
+// 3969508              2982 ns/op             751 B/op          6 allocs/op
 func BenchmarkReadGetHitRandomSST(b *testing.B) {
 	b.ReportAllocs()
 	train := loadSSTData(b)
@@ -122,6 +124,7 @@ func BenchmarkReadGetHitRandomSST(b *testing.B) {
 }
 
 // BenchmarkReadGetHitRandomSSTNoCache 同上但缓存只有 1 格, 近似无缓存: 每次点读都要做块读+解码;
+// 3989263              2984 ns/op             895 B/op          8 allocs/op
 func BenchmarkReadGetHitRandomSSTNoCache(b *testing.B) {
 	b.ReportAllocs()
 	train := openReadDB(b, 1)
@@ -140,6 +143,7 @@ func BenchmarkReadGetHitRandomSSTNoCache(b *testing.B) {
 }
 
 // BenchmarkReadGetMissSST 未命中 SST: 布隆过滤器直接判负, 跳过块读;
+// 14780430               749.2 ns/op           123 B/op          2 allocs/op
 func BenchmarkReadGetMissSST(b *testing.B) {
 	b.ReportAllocs()
 	train := loadSSTData(b)
@@ -156,6 +160,7 @@ func BenchmarkReadGetMissSST(b *testing.B) {
 // ---------------- 混合 (memtable + SST) ----------------
 
 // BenchmarkReadGetHitRandomMixed 一半数据在 L0, 一半在 memtable, 随机点读 (完整 Get 路径);
+// 4358523              2634 ns/op             407 B/op          4 allocs/op
 func BenchmarkReadGetHitRandomMixed(b *testing.B) {
 	b.ReportAllocs()
 	train := openReadDB(b, 0)
@@ -178,6 +183,7 @@ func BenchmarkReadGetHitRandomMixed(b *testing.B) {
 // ---------------- 数据在 vlog ----------------
 
 // BenchmarkReadGetBigValueRandom 1MB 大 value (存 vlog, LSM 只存 ValuePtr), 随机读;
+// 104901            108631 ns/op         1056920 B/op          5 allocs/op
 func BenchmarkReadGetBigValueRandom(b *testing.B) {
 	b.ReportAllocs()
 	train := openReadDB(b, 0)
@@ -210,6 +216,7 @@ func BenchmarkReadGetBigValueRandom(b *testing.B) {
 }
 
 // BenchmarkReadGetBigValueSST 大 value 的指针在 SST (数据刷盘后), 值在 vlog: 完整跨层路径;
+// 93573            111329 ns/op         1056989 B/op          8 allocs/op
 func BenchmarkReadGetBigValueSST(b *testing.B) {
 	b.ReportAllocs()
 	train := openReadDB(b, 0)
@@ -246,6 +253,7 @@ func BenchmarkReadGetBigValueSST(b *testing.B) {
 // ---------------- 扫描 ----------------
 
 // BenchmarkReadIterateSSTEager 全量扫描 SST 并取 value (已有 IterateSST 只计数不取值);
+// 333          37943293 ns/op        17369433 B/op     228316 allocs/op
 func BenchmarkReadIterateSSTEager(b *testing.B) {
 	b.ReportAllocs()
 	train := loadSSTData(b)
@@ -285,6 +293,7 @@ func dropPageCache(b *testing.B) {
 }
 
 // BenchmarkReadColdScanSST 冷读顺序全扫描: 数据在 L0, 清缓存后单遍扫描;
+// 391          29543881 ns/op         4569440 B/op     128316 allocs/op
 func BenchmarkReadColdScanSST(b *testing.B) {
 	b.ReportAllocs()
 	train := loadSSTData(b)
@@ -307,6 +316,7 @@ func BenchmarkReadColdScanSST(b *testing.B) {
 }
 
 // BenchmarkReadColdRandomSST 冷读随机点读: 清缓存后单遍随机访问全部 key;
+// 4009574              2968 ns/op             751 B/op          6 allocs/op
 func BenchmarkReadColdRandomSST(b *testing.B) {
 	b.ReportAllocs()
 	train := loadSSTData(b)
@@ -323,6 +333,7 @@ func BenchmarkReadColdRandomSST(b *testing.B) {
 }
 
 // BenchmarkReadColdBigValueRandom 冷读大 value: 清缓存后单遍随机读 vlog 中的 1MB 值;
+// 107120            108588 ns/op         1056920 B/op          5 allocs/op
 func BenchmarkReadColdBigValueRandom(b *testing.B) {
 	b.ReportAllocs()
 	train := openReadDB(b, 0)

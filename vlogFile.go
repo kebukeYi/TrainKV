@@ -1,7 +1,6 @@
 package TrainKV
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 
@@ -15,16 +14,18 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/common"
 	"github.com/kebukeYi/TrainKV/v2/file"
 	"github.com/kebukeYi/TrainKV/v2/lsm"
+	"github.com/kebukeYi/TrainKV/v2/mmap"
 	"github.com/kebukeYi/TrainKV/v2/model"
 	"github.com/kebukeYi/TrainKV/v2/utils"
 )
 
 type VLogFile struct {
-	f    *file.MmapFile
-	FID  uint32
-	size uint32
-	Lock sync.RWMutex
-	opt  *lsm.Options
+	f          *file.MmapFile
+	FID        uint32
+	size       uint32
+	lastSynced uint32 // 已同步的写入前缀; 每次只同步 [lastSynced, size) 新增区间;
+	Lock       sync.RWMutex
+	opt        *lsm.Options
 }
 
 func (vlog *VLogFile) Open(opt *utils.FileOptions) error {
@@ -34,6 +35,11 @@ func (vlog *VLogFile) Open(opt *utils.FileOptions) error {
 	vlog.f, err = file.OpenMmapFile(opt.FileName, os.O_CREATE|os.O_RDWR, opt.MaxSz)
 	if err != nil {
 		return fmt.Errorf("unable to open mmap file: %q,err:%w", opt.FileName, err)
+	}
+	// 读侧 hint: vlog 访问以顺序为主 (GC 全文件扫描、大 value 顺序读), 启用更激进预读与顺序页回收;
+	// 提示失败不致命, 退回内核默认行为;
+	if err = mmap.MadviseSequential(vlog.f.Buf); err != nil {
+		common.Err(err)
 	}
 	info, err := vlog.f.Fd.Stat()
 	if err != nil {
@@ -65,6 +71,8 @@ func (vlog *VLogFile) DoneWriting(offset uint32) error {
 			return fmt.Errorf("unable to sync value log: %q,err:%w", vlog.FileName(), err)
 		}
 	}
+	// 全区间已同步, 之后不再对该文件做增量同步;
+	vlog.lastSynced = offset
 
 	// 确保在"取消映射→重新映射"这个关键操作期间，没有其他线程能访问这个内存区域;
 	vlog.Lock.Lock()
@@ -78,10 +86,6 @@ func (vlog *VLogFile) DoneWriting(offset uint32) error {
 		return fmt.Errorf("failed to initialize file %s,err:%w", vlog.FileName(), err)
 	}
 	return nil
-}
-
-func (vlog *VLogFile) Write(offset uint32, buf []byte) (err error) {
-	return vlog.f.AppendBuffer(offset, buf)
 }
 
 func (vlog *VLogFile) Truncate(offset int64) error {
@@ -123,21 +127,31 @@ func (vlog *VLogFile) FD() *os.File {
 	return vlog.f.Fd
 }
 
-// Sync You must hold lf.lock to sync()
+// Sync 只同步映射区 [lastSynced, size) 内的新增脏页;
+// 文件预分配到大尺寸, 整区 msync 需遍历大量干净页表项, 增量同步可显著降低提交延迟;
 func (vlog *VLogFile) Sync() error {
-	return vlog.f.SyncRange(atomic.LoadUint32(&vlog.size))
+	size := atomic.LoadUint32(&vlog.size)
+	if size <= vlog.lastSynced {
+		return nil
+	}
+	if err := vlog.f.SyncDirtyRange(vlog.lastSynced, size); err != nil {
+		return err
+	}
+	vlog.lastSynced = size
+	return nil
 }
 
 func (vlog *VLogFile) Close() error {
 	return vlog.f.Close()
 }
 
-// EncodeEntry will encode entry to the out
+// EncodeEntryAt 将 entry 直接编码进 mmap 的指定偏移 (含 crc32), 返回编码总长;
+// 相比先写 bytes.Buffer 再拷入 mmap, 大 value 少一次整段拷贝;
 // layout of entry in vlogFile;
 // +----------------------------------+-----+-------+-------+
 // | header(meta,klen,vlen,ExpiresAt) | key | value | crc32 |
 // +----------------------------------+-----+-------+-------+
-func (vlog *VLogFile) EncodeEntry(entry *model.Entry, out *bytes.Buffer) (int, error) {
+func (vlog *VLogFile) EncodeEntryAt(entry *model.Entry, offset uint32) (int, error) {
 	header := model.EntryHeader{
 		KLen:      uint32(len(entry.Key)),
 		VLen:      uint32(len(entry.Value)),
@@ -147,17 +161,20 @@ func (vlog *VLogFile) EncodeEntry(entry *model.Entry, out *bytes.Buffer) (int, e
 
 	var headerBuf [common.MaxHeaderSize]byte
 	encodeLen := header.Encode(headerBuf[:])
-	start := out.Len()
-	out.Write(headerBuf[:encodeLen])
-	out.Write(entry.Key)
-	out.Write(entry.Value)
-
-	// 一次性对已编码字节算 crc; 若走 hash.Hash 接口逐段 Write, headerBuf 等会经接口逃逸到堆;
-	var crcBuf [crc32.Size]byte
-	binary.BigEndian.PutUint32(crcBuf[:], crc32.Checksum(out.Bytes()[start:], common.CastigationCryTable))
-	out.Write(crcBuf[:])
-
-	return encodeLen + len(entry.Key) + len(entry.Value) + len(crcBuf), nil
+	total := encodeLen + len(entry.Key) + len(entry.Value) + crc32.Size
+	if int(offset)+total > len(vlog.f.Buf) {
+		// mmap 预分配容量不足时扩容 (正常轮转路径下不会触发);
+		if err := vlog.f.Truncate(int64(offset) + int64(total)); err != nil {
+			return 0, err
+		}
+	}
+	dst := vlog.f.Buf[offset:]
+	n := copy(dst, headerBuf[:encodeLen])
+	n += copy(dst[n:], entry.Key)
+	n += copy(dst[n:], entry.Value)
+	// 对已写区段整体算 crc (数据刚写入, 读回在缓存中);
+	binary.BigEndian.PutUint32(dst[n:], crc32.Checksum(dst[:n], common.CastigationCryTable))
+	return total, nil
 }
 
 func (vlog *VLogFile) DecodeEntry(buf []byte, offset uint32) (*model.Entry, error) {

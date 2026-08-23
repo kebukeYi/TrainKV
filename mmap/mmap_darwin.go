@@ -45,6 +45,15 @@ func mmapadvise(b []byte, readahead bool) error {
 	return nil
 }
 
+func mmapadviseSequential(b []byte) error {
+	_, _, e1 := syscall.Syscall(syscall.SYS_MADVISE, uintptr(unsafe.Pointer(&b[0])),
+		uintptr(len(b)), uintptr(unix.MADV_SEQUENTIAL))
+	if e1 != 0 {
+		return e1
+	}
+	return nil
+}
+
 func msync(b []byte) error {
 	return unix.Msync(b, unix.MS_SYNC)
 }

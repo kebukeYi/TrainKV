@@ -177,13 +177,16 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 	var reqLen int64
 	var lastBatchReqLen int64 // 上一批请求数, 用于识别并发提交场景 (串行提交恒为 1);
 	reqs := make([]*model.Request, 0, 10)
-	blockChan := make(chan struct{}, 1) //限制:每次只允许一个协程去写数据;
+	blockChan := make(chan struct{}, 1) // 写令牌: 保证任意时刻只有一个协程执行 WriteRequest;
 
-	writeRequest := func(reqs []*model.Request) {
+	// 排队写盘: 先获取令牌 (拿不到则阻塞排队), 写完后释放;
+	// 令牌被占用时派发本闭包, 攒批协程可继续收集后续请求, 不被写盘阻塞;
+	writeRequest := func(batch []*model.Request) {
+		blockChan <- struct{}{} // 等待令牌 (通道 FIFO, 批次按序执行);
+		defer func() { <-blockChan }()
 		// WriteRequest 内部已通过 done(err) 把错误投递给批次中每个请求的提交方;
 		// 这里不能 panic, 否则一次轮转等失败会直接杀死整个进程;
-		common.Err(db.WriteRequest(reqs))
-		<-blockChan
+		common.Err(db.WriteRequest(batch))
 	}
 
 	for {
@@ -196,7 +199,6 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 				case r = <-db.writeCh:
 					reqs = append(reqs, r)
 				default: // db.writeCh 中没有更多数据, 执行 default 分支;
-					blockChan <- struct{}{}
 					writeRequest(reqs)
 					return
 				}
@@ -222,8 +224,7 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 
 			// SyncWrites 下并发提交的汇合窗口: 短暂等待同一同步周期内先后到达的请求加入本批,
 			// 让一次刷盘覆盖更多提交; 串行提交(本批与上一批均仅 1 个请求)不等待, 无额外延迟;
-			if db.Lsm.Option.SyncWrites && reqLen < common.WriteChBatchThreshold &&
-				(reqLen > 1 || lastBatchReqLen > 1) {
+			if db.Lsm.Option.SyncWrites && reqLen < common.WriteChBatchThreshold && (reqLen > 1 || lastBatchReqLen > 1) {
 				timer := time.NewTimer(common.SyncGroupCommitWait)
 				waiting := true
 				for waiting && reqLen < common.WriteChBatchThreshold {
@@ -239,15 +240,15 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 			}
 			lastBatchReqLen = reqLen
 
-			// 令牌空闲时直接在本协程写盘: 串行提交场景下每批省去一个写协程的创建与调度;
-			// 令牌被占用时(上一批仍在写), 才派发协程排队写, 本协程继续攒批;
+			// 令牌空闲: 本协程直接写盘, 省去写协程的创建与调度 (串行提交场景);
+			// 令牌占用: 派发协程排队写盘, 本协程继续攒批;
 			select {
 			case blockChan <- struct{}{}:
 				err := db.WriteRequest(reqs)
+				<-blockChan
 				if err != nil {
 					return
 				}
-				<-blockChan
 				reqs = reqs[:0] // 复用批次切片底层数组;
 			default:
 				go writeRequest(reqs)
@@ -344,7 +345,6 @@ func (db *TrainKV) initVlog() {
 		filesLock:          sync.RWMutex{},
 		FilesToDel:         make([]uint32, 0),
 		Opt:                db.Opt,
-		buf:                &bytes.Buffer{},
 		runGCOver:          &sync.WaitGroup{},
 		disCardStaInfoOver: &sync.WaitGroup{},
 		VLogFileDisCardStaInfo: &VLogFileDisCardStaInfo{

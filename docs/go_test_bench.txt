@@ -1,0 +1,41 @@
+
+go test . -bench=BenchmarkWriteTxnSet -benchtime=10s
+goos: linux
+goarch: amd64
+pkg: github.com/kebukeYi/TrainKV/v2/benchmk
+cpu: Intel(R) Core(TM) i5-7300HQ CPU @ 2.50GHz
+
+wal&vlog_sync:
+BenchmarkWriteTxnSet128B-4                  2793           4030367 ns/op             107 B/op          4 allocs/op
+BenchmarkWriteTxnSet128BParallel-4          7284           1688478 ns/op            9567 B/op          7 allocs/op
+BenchmarkWriteTxnSet4K-4                    1322           8366210 ns/op             113 B/op          4 allocs/op
+BenchmarkWriteTxnSet4KParallel-4            3656           4550411 ns/op             171 B/op          4 allocs/op
+BenchmarkWriteTxnSet2MB-4                   1167           9856113 ns/op           12820 B/op          4 allocs/op
+BenchmarkWriteTxnSet2MBParallel-4           1281           9833164 ns/op           11683 B/op          4 allocs/op
+
+wal&vlog_no_sync:
+BenchmarkWriteTxnSet128B-4               3693842              3225 ns/op             630 B/op          4 allocs/op
+BenchmarkWriteTxnSet128BParallel-4       3300876              3789 ns/op             803 B/op          7 allocs/op
+BenchmarkWriteTxnSet4K-4                 1000000             39911 ns/op           19318 B/op         11 allocs/op
+BenchmarkWriteTxnSet4KParallel-4         1000000             49941 ns/op           19316 B/op         11 allocs/op
+BenchmarkWriteTxnSet2MB-4                   4854           4326729 ns/op            3145 B/op          4 allocs/op
+BenchmarkWriteTxnSet2MBParallel-4           8019           3691989 ns/op            1946 B/op          4 allocs/op
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

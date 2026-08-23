@@ -2,7 +2,6 @@ package TrainKV
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -35,7 +34,6 @@ type ValueLog struct {
 	writableFileOffset     uint32
 	entriesWrittenNum      int32
 	Opt                    *lsm.Options
-	buf                    *bytes.Buffer
 	runGCOver              *sync.WaitGroup
 	disCardStaInfoOver     *sync.WaitGroup
 	discardStatsDone       sync.WaitGroup
@@ -244,30 +242,25 @@ func (vlog *ValueLog) Write(reqs []*model.Request) (wrote bool, err error) {
 	vlog.filesLock.RLock()
 	curVlogFile := vlog.filesMap[vlog.maxFid.Load()]
 	vlog.filesLock.RUnlock()
-	vlog.buf.Reset()
 
-	flushToFile := func() error {
-		if vlog.buf.Len() == 0 {
-			return nil
+	// 条目直接编码进 mmap (EncodeEntryAt), 无需 bytes.Buffer 中转;
+	// pendingLen 是已写入 mmap 但尚未推进 writableFileOffset 的字节数;
+	var pendingLen int
+
+	commitPending := func() {
+		if pendingLen == 0 {
+			return
 		}
 		wrote = true
-		data := vlog.buf.Bytes()
-		offset := vlog.getWriteOffset()
-		// vlogFile 会自动扩容;
-		if err := curVlogFile.Write(offset, data); err != nil {
-			return fmt.Errorf("unable to write to value log file: %q,err:%w", curVlogFile.FileName(), err)
-		}
-		vlog.buf.Reset()
-		atomic.AddUint32(&vlog.writableFileOffset, uint32(len(data)))
+		atomic.AddUint32(&vlog.writableFileOffset, uint32(pendingLen))
 		curVlogFile.SetSize(vlog.writableFileOffset)
-		return nil
+		pendingLen = 0
 	}
 
 	toWrite := func() error {
-		if err := flushToFile(); err != nil {
-			return err
-		}
-		// 因为 vlogFile 会自动扩容, 因此在 flushToFile() 写完后, 我们还需要再进一步判断是否需要创建新的文件;
+		// 先提交已编码数据 (推进偏移), 与旧逻辑 flushToFile 一致;
+		commitPending()
+		// 因为 vlogFile 会自动扩容, 达到阈值后需要创建新的文件;
 		if vlog.getWriteOffset() >= uint32(vlog.Opt.ValueLogFileSize) || vlog.entriesWrittenNum > vlog.Opt.ValueLogMaxEntries {
 			// 截断当前达到阈值的文件;
 			if err := curVlogFile.DoneWriting(vlog.getWriteOffset()); err != nil {
@@ -278,7 +271,7 @@ func (vlog *ValueLog) Write(reqs []*model.Request) (wrote bool, err error) {
 			var err error
 			curVlogFile, err = vlog.createVlogFile(newFid)
 			if err != nil {
-				// 轮转失败: 回滚 maxFid, 下次写入仍指向旧文件 (AppendBuffer 会自动扩容), 避免取到 filesMap 中不存在的文件;
+				// 轮转失败: 回滚 maxFid, 下次写入仍指向旧文件 (EncodeEntryAt 会自动扩容), 避免取到 filesMap 中不存在的文件;
 				vlog.maxFid.Add(^uint32(0))
 				return err
 			}
@@ -298,35 +291,28 @@ func (vlog *ValueLog) Write(reqs []*model.Request) (wrote bool, err error) {
 			}
 			var p model.ValuePtr
 			p.Fid = curVlogFile.FID
-			p.Offset = vlog.getWriteOffset() + uint32(vlog.buf.Len())
+			p.Offset = vlog.getWriteOffset() + uint32(pendingLen)
 			// 在wal中记录事务标记;
 			walMeta := entry.Meta
 			// 在vlogFile中, 不记录事务标记;
 			entry.Meta = entry.Meta &^ (common.BitTxn | common.BitFinTxn)
-			plen, err := curVlogFile.EncodeEntry(entry, vlog.buf)
+			// 1. entry 直接编码进 mmap (一次拷贝)
+			// 2. mmap sync -> disk
+			plen, err := curVlogFile.EncodeEntryAt(entry, p.Offset)
 			// 为了后续的 wal 记录, 需要将事务标记写入;
 			entry.Meta = walMeta
 			if err != nil {
 				return wrote, err
 			}
 			p.Len = uint32(plen)
+			pendingLen += plen
 			req.ValPtr = append(req.ValPtr, p)
 			writeNums++
-			// 如果 buf 长度够了, 那么就写入文件;
-			if int32(vlog.buf.Len()) > vlog.Db.Opt.ValueLogFileSize {
-				if err = toWrite(); err != nil {
-					return wrote, err
-				}
-			}
 		}
 
 		vlog.entriesWrittenNum += int32(writeNums)
-		writeNow := vlog.getWriteOffset()+uint32(vlog.buf.Len()) > uint32(vlog.Opt.ValueLogFileSize) ||
-			vlog.entriesWrittenNum > vlog.Opt.ValueLogMaxEntries
-		if writeNow {
-			if err := toWrite(); err != nil {
-				return wrote, err
-			}
+		if err := toWrite(); err != nil {
+			return wrote, err
 		}
 	}
 	return wrote, toWrite()
@@ -478,6 +464,9 @@ func (vlog *ValueLog) handleDiscardStats() {
 func (vlog *ValueLog) createVlogFile(fid uint32) (*VLogFile, error) {
 	fpath := vlog.fpath(fid)
 	vlogFile := &VLogFile{FID: fid, Lock: sync.RWMutex{}, opt: vlog.Opt}
+	// TODO(优化): 写侧预触碰 — 新文件创建后启动后台协程, 在写游标前方预写一个窗口的页,
+	// 把 EncodeEntryAt 首写稀疏页的逐页 minor fault 成本移到后台;
+	// 需与轮转 (DoneWriting 截断) 和 Close 协调游标边界与停止信号;
 	if err := vlogFile.Open(&utils.FileOptions{
 		FID:      uint64(fid),
 		FileName: fpath,

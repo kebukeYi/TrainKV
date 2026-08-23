@@ -30,7 +30,7 @@ func openPerfDB(b *testing.B) *TrainKV.TrainKV {
 	clearDir(perfDataDir)
 	defaultOpt := lsm.GetDefaultOpt(perfDataDir)
 	//defaultOpt.MemTableSize = 10 << 20
-	defaultOpt.SyncWrites = true
+	defaultOpt.SyncWrites = false
 	train, _, _ := TrainKV.Open(defaultOpt)
 	b.Cleanup(func() { _ = train.Close() })
 	return train
@@ -59,6 +59,10 @@ func loadData(b *testing.B, train *TrainKV.TrainKV) {
 // ---------------- 写流程 ----------------
 
 // BenchmarkWriteTxnSet 串行事务单条提交, 128B value, 纯写(无读阶段);
+// wal_no_sync ↓
+// 3693842              3225 ns/op             630 B/op          4 allocs/op
+// wal_sync ↓
+// 0002793           4030367 ns/op             107 B/op          4 allocs/op
 func BenchmarkWriteTxnSet128B(b *testing.B) {
 	b.ReportAllocs()
 	train := openPerfDB(b)
@@ -78,6 +82,10 @@ func BenchmarkWriteTxnSet128B(b *testing.B) {
 
 // 并发提交: 多个事务的写请求被 handleWriteCh 攒成一批, 共享一次 fsync (group commit);
 // 与串行 BenchmarkTrainKVTxnSet-128B 对比, 观察每 op 摊销的刷盘开销;
+// wal_no_sync ↓
+// 3300876              3789 ns/op             803 B/op          7 allocs/op
+// wal_sync ↓
+// 0007284           1688478 ns/op            9567 B/op          7 allocs/op
 func BenchmarkWriteTxnSet128BParallel(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -103,19 +111,9 @@ func BenchmarkWriteTxnSet128BParallel(b *testing.B) {
 
 // BenchmarkWriteTxnSet4K 串行事务单条提交, 4KB value(仍低于 1MB 阈值, 走 LSM 直写);
 // wal_no_sync ↓
-// mem all_obj
-// 540230            106961 ns/op           28069 B/op         24 allocs/op
-// 修复了 common.Conpainc(bool, error.new())
-// 534298             74711 ns/op           26075 B/op         12 allocs/op
-// 增加 model.NewEntry() 池化;
-// 593797             92589 ns/op           27596 B/op         12 allocs/op
-// 340298             70449 ns/op           23898 B/op         10 allocs/op
+// 1000000             39911 ns/op           19318 B/op         11 allocs/op
 // wal_sync ↓
-//
-//	1369           8988261 ns/op             210 B/op          5 allocs/op
-//	1375           9227016 ns/op             212 B/op          5 allocs/op
-//	1311           8863622 ns/op             118 B/op          4 allocs/op
-//	1116           9112040 ns/op             119 B/op          4 allocs/op
+// 0001322           8366210 ns/op             113 B/op          4 allocs/op
 func BenchmarkWriteTxnSet4K(b *testing.B) {
 	b.ReportAllocs()
 	train := openPerfDB(b)
@@ -134,10 +132,58 @@ func BenchmarkWriteTxnSet4K(b *testing.B) {
 
 // BenchmarkWriteTxnSet4KParallel 并发事务提交; 验证 SyncWrites 下攒批同步的效果:
 // 并发提交汇合到同一批次, 一次刷盘覆盖多个提交;
+// wal_no_sync ↓
+// 1000000             49941 ns/op           19316 B/op         11 allocs/op
+// wal_sync ↓
+// 0003656           4550411 ns/op             171 B/op          4 allocs/op
 func BenchmarkWriteTxnSet4KParallel(b *testing.B) {
 	b.ReportAllocs()
 	train := openPerfDB(b)
 	val := make([]byte, 4<<10)
+	var seq int64
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			i := atomic.AddInt64(&seq, 1)
+			txn := train.NewTransaction(true)
+			if err := txn.Set(GetKey(int(i)), val); err != nil {
+				b.Fatal(err)
+			}
+			if _, err := txn.Commit(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+// wal_no_sync ↓
+// 8118           4023453 ns/op             367 B/op          4 allocs/op
+// wal_sync ↓
+// 0444          25728717 ns/op            4859 B/op          4 allocs/op
+func BenchmarkWriteTxnSet2MB(b *testing.B) {
+	b.ReportAllocs()
+	train := openPerfDB(b)
+	val := make([]byte, 2<<20)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		txn := train.NewTransaction(true)
+		if err := txn.Set(GetKey(i), val); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := txn.Commit(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// wal_no_sync ↓
+// 6261           3729218 ns/op            2461 B/op          4 allocs/op
+// wal_sync ↓
+// 0922          11891591 ns/op           16176 B/op          4 allocs/op
+func BenchmarkWriteTxnSet2MBParallel(b *testing.B) {
+	b.ReportAllocs()
+	train := openPerfDB(b)
+	val := make([]byte, 2<<20)
 	var seq int64
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -261,10 +307,11 @@ func BenchmarkReadIterate(b *testing.B) {
 // ---------------- 混合 ----------------
 
 // BenchmarkMixedRead90Write10 9:1 读写混合: 90% 读已有 key, 10% 提交新 key;
+// 13563            888557 ns/op             132 B/op          2 allocs/op
 func BenchmarkMixedRead90Write10(b *testing.B) {
-	b.ReportAllocs()
 	train := openPerfDB(b)
 	loadData(b, train)
+	b.ReportAllocs()
 	val := make([]byte, 128)
 	rtxn := train.NewTransaction(false)
 	defer rtxn.Discard()
@@ -289,6 +336,7 @@ func BenchmarkMixedRead90Write10(b *testing.B) {
 }
 
 // BenchmarkReadIterateSST 迭代器全量顺序扫描 (数据已 flush 到 SST, 走 block 索引/缓存);
+// 410          28593237 ns/op         4569425 B/op     128316 allocs/op
 func BenchmarkReadIterateSST(b *testing.B) {
 	b.ReportAllocs()
 	train := openPerfDB(b)

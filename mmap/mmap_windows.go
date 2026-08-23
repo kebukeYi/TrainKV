@@ -79,6 +79,11 @@ func mmapadvise(b []byte, readahead bool) error {
 	return nil
 }
 
+func mmapadviseSequential(b []byte) error {
+	// Windows 不支持 madvise
+	return nil
+}
+
 func msync(b []byte) error {
 	return syscall.FlushViewOfFile(uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)))
 }

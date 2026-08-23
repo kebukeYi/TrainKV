@@ -66,6 +66,10 @@ func mmapadvise(data []byte, readHead bool) error {
 	return unix.Madvise(data, flags)
 }
 
+func mmapadviseSequential(data []byte) error {
+	return unix.Madvise(data, unix.MADV_SEQUENTIAL)
+}
+
 func msync(b []byte) error {
 	return unix.Msync(b, unix.MS_SYNC)
 }
