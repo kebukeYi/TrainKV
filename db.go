@@ -289,19 +289,18 @@ func (db *TrainKV) WriteRequest(reqs []*model.Request) error {
 			return fmt.Errorf("#WriteRequest.vlog.Sync(),err:%w", err)
 		}
 	}
-	//entries := 0
+
 	for _, req := range reqs {
 		if len(req.Entries) == 0 {
 			continue
 		}
-		//entries += len(req.Entries)
+
 		if err = db.writeToLSM(req); err != nil {
 			done(err)
 			return fmt.Errorf("#WriteRequest.writeToLSM(),err:%w", err)
 		}
 	}
-	//fmt.Printf("entries.size:%d \n", entries)
-	//if entries >= 50 && db.Lsm.Option.SyncWrites {
+
 	if db.Lsm.Option.SyncWrites {
 		// 每次批量写入后统一刷盘一次, 提交方会在 Wg.Done 之后才返回;
 		if err = db.Lsm.SyncWalFile(); err != nil {
