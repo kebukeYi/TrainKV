@@ -30,7 +30,7 @@ func openPerfDB(b *testing.B) *TrainKV.TrainKV {
 	clearDir(perfDataDir)
 	defaultOpt := lsm.GetDefaultOpt(perfDataDir)
 	//defaultOpt.MemTableSize = 10 << 20
-	defaultOpt.SyncWrites = false
+	defaultOpt.SyncWrites = true
 	train, _, _ := TrainKV.Open(defaultOpt)
 	b.Cleanup(func() { _ = train.Close() })
 	return train
