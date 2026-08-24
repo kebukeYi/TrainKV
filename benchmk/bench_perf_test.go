@@ -29,7 +29,6 @@ const (
 func openPerfDB(b *testing.B) *TrainKV.TrainKV {
 	clearDir(perfDataDir)
 	defaultOpt := lsm.GetDefaultOpt(perfDataDir)
-	//defaultOpt.MemTableSize = 10 << 20
 	defaultOpt.SyncWrites = true
 	train, _, _ := TrainKV.Open(defaultOpt)
 	b.Cleanup(func() { _ = train.Close() })
@@ -100,6 +99,57 @@ func BenchmarkWriteTxnSet128BParallel(b *testing.B) {
 			key := []byte(fmt.Sprintf("key=%d", i))
 			txn := train.NewTransaction(true)
 			if err := txn.Set(key, make([]byte, 128)); err != nil {
+				b.Fatal(err)
+			}
+			if _, err := txn.Commit(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+// BenchmarkWriteTxnSet 串行事务单条提交, 128B value, 纯写(无读阶段);
+// wal_no_sync ↓
+// 3693842              3225 ns/op             630 B/op          4 allocs/op
+// wal_sync ↓
+// 0002793           4030367 ns/op             107 B/op          4 allocs/op
+func BenchmarkWriteTxnSet512B(b *testing.B) {
+	b.ReportAllocs()
+	train := openPerfDB(b)
+
+	val := make([]byte, 512)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		txn := train.NewTransaction(true)
+		if err := txn.Set(GetKey(i), val); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := txn.Commit(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// 并发提交: 多个事务的写请求被 handleWriteCh 攒成一批, 共享一次 fsync (group commit);
+// 与串行 BenchmarkTrainKVTxnSet-128B 对比, 观察每 op 摊销的刷盘开销;
+// wal_no_sync ↓
+// 3300876              3789 ns/op             803 B/op          7 allocs/op
+// wal_sync ↓
+// 0007284           1688478 ns/op            9567 B/op          7 allocs/op
+func BenchmarkWriteTxnSet512BParallel(b *testing.B) {
+	b.ResetTimer()
+	b.ReportAllocs()
+	clearDir(benchMarkDir)
+	train := openPerfDB(b)
+	defer train.Close()
+
+	var counter atomic.Uint64
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			i := counter.Add(1)
+			key := []byte(fmt.Sprintf("key=%d", i))
+			txn := train.NewTransaction(true)
+			if err := txn.Set(key, make([]byte, 512)); err != nil {
 				b.Fatal(err)
 			}
 			if _, err := txn.Commit(); err != nil {
