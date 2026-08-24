@@ -115,8 +115,13 @@ func (db *TrainKV) get(keyMaxStartTs []byte) (*model.Entry, error) {
 		var vp model.ValuePtr
 		vp.Decode(entry.Value)
 		read, callBack, err := db.vlog.Read(&vp)
-		defer callBack()
+		// Read 出错时 (如 GC 刚删除该 vlog 文件) 可能返回 nil 回调, 不能无条件 defer;
+		// 非 nil 回调 = 文件读锁已持有, 无论成败都必须释放;
+		if callBack != nil {
+			defer callBack()
+		}
 		if err != nil {
+			// 需要用户重试;
 			return nil, err
 		}
 		entry.Value = model.SafeCopy(nil, read)

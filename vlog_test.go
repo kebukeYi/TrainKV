@@ -231,11 +231,11 @@ func TestVlogWriteRotationErrorPropagated(t *testing.T) {
 	}
 }
 
-// TestVlogGCRewriteInversion 回归测试 (对应 LSM.Get 的 BitTxn 门控):
-// vlogGC (gcReWriteLog) 会把仍被 LSM 引用的旧版本复活进最新 memtable (条目无 BitTxn 标记),
-// 破坏"存储层新旧顺序 = 版本顺序"不变量: 旧版本进了新存储(memtable), 新版本留在旧存储(imm/L0)。
-// LSM.Get 对普通事务条目(带 BitTxn)可安全提前返回, 但对 GC 重写条目必须走全层取最大,
-// 否则读到的是被 GC 复活的旧数据。
+// TestVlogGCRewriteInversion 回归测试 (方案二: GC 重写直落 L0):
+// vlogGC (gcReWriteLog) 重写的旧版本直接构建成 SST 进 L0, 不再进入 memtable ——
+// 即使"旧版本仍被 LSM 引用"且"新版本已在 imm/L0", 也不会产生存储层版本顺序反转;
+// 普通读 (startTs == ts2) 必须读到新版本, 旧快照 (startTs == ts1) 必须读到旧版本
+// (GC 重写正是为了维持旧引用的有效性)。
 func TestVlogGCRewriteInversion(t *testing.T) {
 	removeAll(vlogTestPath)
 	opt := lsm.GetDefaultOpt(vlogTestPath)
@@ -266,7 +266,7 @@ func TestVlogGCRewriteInversion(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// ② 旧快照读事务 (startTs == ts1), 稍后验证 GC 复活后的旧版本仍可读;
+	// ② 旧快照读事务 (startTs == ts1), 稍后验证 GC 重写后的旧版本仍可读;
 	oldTxn := db.NewTransaction(false)
 	defer oldTxn.Discard()
 
@@ -276,21 +276,87 @@ func TestVlogGCRewriteInversion(t *testing.T) {
 	_, err = txn.Commit()
 	require.NoError(t, err)
 
-	// ④ 再次轮转: K@ts2 进入 imm。轮转即产生存储反转, 无需等待 flush 到 L0;
+	// ④ 再次轮转: K@ts2 进入 imm, 等待其异步 flush 到 L0 (保证后续 L0 表数断言确定);
 	db.Lsm.Rotate()
+	deadline = time.Now().Add(5 * time.Second)
+	for len(db.Lsm.LevelManger.GetLevelHandler(0).GetTables()) < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("imm flush to L0 timeout")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
-	// ⑤ vlogGC 重写 vlog 文件 1 中的旧版本 K@ts1 → 落入最新 memtable (无 BitTxn);
+	// ⑤ vlogGC 重写 vlog 文件 1 中的旧版本 K@ts1 → 直落 L0 构建新表, 不碰 memtable;
+	l0TablesBefore := len(db.Lsm.LevelManger.GetLevelHandler(0).GetTables())
 	require.NoError(t, db.vlog.gcReWriteLog(db.vlog.filesMap[1]))
 
-	// ⑥ 新读事务 (startTs == ts2): 必须读到新版本, 而非被 GC 复活的旧版本;
+	// ⑤-1 结构性验证: GC 重写没有污染 memtable, 而是新增了一张 L0 表;
+	require.True(t, db.Lsm.GetSkipListFromMemTable().Empty(), "GC 重写不得写入 memtable")
+	require.Equal(t, l0TablesBefore+1, len(db.Lsm.LevelManger.GetLevelHandler(0).GetTables()),
+		"GC 重写应新增一张 L0 表")
+
+	// ⑥ 新读事务 (startTs == ts2): 必须读到新版本;
 	newTxn := db.NewTransaction(false)
 	defer newTxn.Discard()
 	item, err := newTxn.Get(rawKey)
 	require.NoError(t, err)
 	require.Equal(t, newVal, getItemValue(t, item), "必须返回新版本")
 
-	// ⑦ 旧快照读事务 (startTs == ts1): 仍应读到旧版本 (GC 重写正是为了维持旧引用的有效性);
+	// ⑦ 旧快照读事务 (startTs == ts1): 仍应读到旧版本 (值已迁移到新 vlog 文件, 引用依然有效);
 	oldItem, err := oldTxn.Get(rawKey)
 	require.NoError(t, err)
 	require.Equal(t, oldVal, getItemValue(t, oldItem), "旧快照应读到旧版本")
+}
+
+// TestVlogGCRewriteInversionReopen 验证 GC 直落 L0 的表在重启后依然可用:
+// 表已写入 manifest (fsync), ValuePtr 指向的新 vlog 文件在重启后正常加载;
+func TestVlogGCRewriteInversionReopen(t *testing.T) {
+	removeAll(vlogTestPath)
+	opt := lsm.GetDefaultOpt(vlogTestPath)
+	opt.ValueThreshold = 10
+	opt.ValueLogFileSize = 100
+	opt.NumCompactors = 0
+
+	rawKey := []byte("gcReopenKey")
+	oldVal := bytes.Repeat([]byte("v1"), 200)
+	newVal := bytes.Repeat([]byte("v2"), 200)
+
+	// 写入旧版本并 flush 到 L0, 再写入新版本;
+	setup := func(db *TrainKV) {
+		txn := db.NewTransaction(true)
+		require.NoError(t, txn.Set(rawKey, oldVal))
+		_, err := txn.Commit()
+		require.NoError(t, err)
+		db.Lsm.Rotate()
+		deadline := time.Now().Add(5 * time.Second)
+		for len(db.Lsm.LevelManger.GetLevelHandler(0).GetTables()) < 1 {
+			if time.Now().After(deadline) {
+				t.Fatal("flush to L0 timeout")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		txn = db.NewTransaction(true)
+		require.NoError(t, txn.Set(rawKey, newVal))
+		_, err = txn.Commit()
+		require.NoError(t, err)
+	}
+
+	// 第一次打开: 写两个版本 → GC 重写旧版本直落 L0;
+	db, _, callBack := Open(opt)
+	setup(db)
+	require.NoError(t, db.vlog.gcReWriteLog(db.vlog.filesMap[1]))
+	require.NoError(t, db.Close())
+	_ = callBack()
+
+	// 第二次打开: GC 表已持久化 (manifest), 值已迁移到新 vlog 文件;
+	db2, _, callBack2 := Open(opt)
+	defer func() {
+		require.NoError(t, db2.Close())
+		_ = callBack2()
+	}()
+	txn := db2.NewTransaction(false)
+	defer txn.Discard()
+	item, err := txn.Get(rawKey)
+	require.NoError(t, err)
+	require.Equal(t, newVal, getItemValue(t, item), "重启后应读到新版本")
 }

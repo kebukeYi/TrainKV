@@ -616,11 +616,9 @@ func (lm *LevelsManger) runCompactDef(compactorId int, dstLevelId int, cd compac
 	}
 
 	from := append(tablesToString(cd.thisTables), tablesToString(cd.nextTables)...)
-
 	to := tablesToString(buildTables)
-
 	// todo 性能测试时关掉此选项
-	if dur := time.Since(timeStart); dur <= 5000*time.Second {
+	if dur := time.Since(timeStart); dur <= 2*time.Second {
 		fmt.Printf("[GoRouteid:%d] Compact Input: lx:%d[%d tables] + ly:%d[%d tables]  with %d splits. -> Out: ly:%d[new %d tables]. tableName: [%s] -> [%s], took %v\n",
 			compactorId, thisLevel.levelID, len(cd.thisTables),
 			nextLevel.levelID, len(cd.nextTables), len(cd.splits),

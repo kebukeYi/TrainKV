@@ -8,13 +8,25 @@ import (
 )
 
 // CompareKeyWithTs MergingIterator.Less()使用;
+// 先比 raw key (len-8) 再比 ts: raw key 不同则长度也可能不同 (前缀关系), 必须按 raw key 区比较;
+// 长度相同时 (同 raw key 或同长 raw key) 直接全量比较即可 —— 首个不同字节要么落在 raw 区, 要么落在 ts 区, 语义一致;
 func CompareKeyWithTs(key1, key2 []byte) int {
-	if cmp := bytes.Compare(key1[:len(key1)-8], key2[:len(key2)-8]); cmp != 0 {
+	n1, n2 := len(key1)-8, len(key2)-8
+	if n1 == n2 {
+		return bytes.Compare(key1, key2)
+	}
+	// raw key 长度不同: 比较公共前缀, 前缀短者小 (与 ts 无关);
+	n := n1
+	if n2 < n {
+		n = n2
+	}
+	if cmp := bytes.Compare(key1[:n], key2[:n]); cmp != 0 {
 		return cmp
 	}
-	key1Version := key1[len(key1)-8:]
-	key2Version := key2[len(key2)-8:]
-	return bytes.Compare(key1Version, key2Version)
+	if n1 < n2 {
+		return -1
+	}
+	return 1
 }
 
 func KeyWithTs(key []byte, ts uint64) []byte {
