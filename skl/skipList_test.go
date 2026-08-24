@@ -91,7 +91,9 @@ func TestSkipListUpdate(t *testing.T) {
 	assert.Equal(t, entry2.Value, vs.Value)
 
 	//get a not exist entry.
-	assert.Nil(t, list.Get([]byte(RandString(10))).Value)
+	// 注意: 不能用随机大写字母串做 miss 查询 —— CompareKeyWithTs 对无 ts 的短 key 只比较前 len-8 字节,
+	// 前缀 2 字节与已有 key 碰撞(~3%)就会误命中, 导致断言随机失败;
+	assert.Nil(t, list.Get([]byte("~~notexist~~")).Value)
 
 	//Update a entry
 	entry2_new := model.NewEntry(entry1.Key, []byte("Val1+1"))

@@ -100,11 +100,19 @@ func (lsm *LSM) Get(keyTs []byte) (model.Entry, error) {
 		}
 	}()
 
+	// 内存中的跳表去查询 ;
 	entry, _ := mt.Get(keyTs)
 	if entry.Version != 0 || entry.Value != nil {
 		// 1. 跳表中对返回的near节点进行对比时, key 是去掉Ts时间戳的, 相同直接返回,将不再继续向level层寻找;
 		// 否则向level--层寻找;
 		if entry.Version == startTs {
+			return entry, nil
+		}
+		// 2. 仅普通事务条目(带 BitTxn)可安全提前返回: 其 commitTs 单调递增且只写入最新 memtable,
+		//    保证是本 key 的全局最新可见版本;
+		//    vlogGC 重写条目(无 BitTxn, 见 vlog.go#gcReWriteLog)会把仍被 LSM 引用的旧版本复活进
+		//    最新 memtable, 破坏"存储层新旧顺序 = 版本顺序"不变量, 必须走全层取最大兜底;
+		if entry.Version <= startTs && entry.Meta&common.BitTxn != 0 {
 			return entry, nil
 		}
 		if entry.Version > maxEntryTs.Version {
@@ -119,10 +127,15 @@ func (lsm *LSM) Get(keyTs []byte) (model.Entry, error) {
 		if entry.Version == startTs {
 			return entry, nil
 		}
+		// 同 mt: 仅普通事务条目可提前返回 (理由同上);
+		if entry.Version <= startTs && entry.Meta&common.BitTxn != 0 {
+			return entry, nil
+		}
 		if entry.Version > maxEntryTs.Version {
 			maxEntryTs = entry
 		}
-	} // skipList over
+	} // imms[] over
+
 	// 2. level 0-7 层 进行寻找;
 	return lsm.LevelManger.Get(keyTs, &maxEntryTs)
 }

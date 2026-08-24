@@ -230,3 +230,67 @@ func TestVlogWriteRotationErrorPropagated(t *testing.T) {
 		t.Fatalf("BUG 复现: 提交成功但 vlog 数据丢失")
 	}
 }
+
+// TestVlogGCRewriteInversion 回归测试 (对应 LSM.Get 的 BitTxn 门控):
+// vlogGC (gcReWriteLog) 会把仍被 LSM 引用的旧版本复活进最新 memtable (条目无 BitTxn 标记),
+// 破坏"存储层新旧顺序 = 版本顺序"不变量: 旧版本进了新存储(memtable), 新版本留在旧存储(imm/L0)。
+// LSM.Get 对普通事务条目(带 BitTxn)可安全提前返回, 但对 GC 重写条目必须走全层取最大,
+// 否则读到的是被 GC 复活的旧数据。
+func TestVlogGCRewriteInversion(t *testing.T) {
+	removeAll(vlogTestPath)
+	opt := lsm.GetDefaultOpt(vlogTestPath)
+	opt.ValueThreshold = 10    // 小阈值, 让 value 落入 vlog;
+	opt.ValueLogFileSize = 100 // 极小, 强制第一个版本写入时轮转: 旧版本在 F1, 新版本在 F2 (GC 只处理非当前文件);
+	opt.NumCompactors = 0      // 关闭 compaction, 防止旧版本被提前清除, 保证反转场景可复现;
+	db, _, callBack := Open(opt)
+	defer func() {
+		require.NoError(t, db.Close())
+		_ = callBack()
+	}()
+
+	rawKey := []byte("gcInversionKey")
+	oldVal := bytes.Repeat([]byte("v1"), 200) // ≥ ValueThreshold, 进 vlog;
+	newVal := bytes.Repeat([]byte("v2"), 200)
+
+	// ① 写入旧版本 K@ts1, 强制轮转并等待 flush 到 L0 (旧版本被 LSM 引用, GC 才会重写它);
+	txn := db.NewTransaction(true)
+	require.NoError(t, txn.Set(rawKey, oldVal))
+	_, err := txn.Commit()
+	require.NoError(t, err)
+	db.Lsm.Rotate()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(db.Lsm.LevelManger.GetLevelHandler(0).GetTables()) < 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("flush to L0 timeout")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// ② 旧快照读事务 (startTs == ts1), 稍后验证 GC 复活后的旧版本仍可读;
+	oldTxn := db.NewTransaction(false)
+	defer oldTxn.Discard()
+
+	// ③ 写入新版本 K@ts2 (进 memtable);
+	txn = db.NewTransaction(true)
+	require.NoError(t, txn.Set(rawKey, newVal))
+	_, err = txn.Commit()
+	require.NoError(t, err)
+
+	// ④ 再次轮转: K@ts2 进入 imm。轮转即产生存储反转, 无需等待 flush 到 L0;
+	db.Lsm.Rotate()
+
+	// ⑤ vlogGC 重写 vlog 文件 1 中的旧版本 K@ts1 → 落入最新 memtable (无 BitTxn);
+	require.NoError(t, db.vlog.gcReWriteLog(db.vlog.filesMap[1]))
+
+	// ⑥ 新读事务 (startTs == ts2): 必须读到新版本, 而非被 GC 复活的旧版本;
+	newTxn := db.NewTransaction(false)
+	defer newTxn.Discard()
+	item, err := newTxn.Get(rawKey)
+	require.NoError(t, err)
+	require.Equal(t, newVal, getItemValue(t, item), "必须返回新版本")
+
+	// ⑦ 旧快照读事务 (startTs == ts1): 仍应读到旧版本 (GC 重写正是为了维持旧引用的有效性);
+	oldItem, err := oldTxn.Get(rawKey)
+	require.NoError(t, err)
+	require.Equal(t, oldVal, getItemValue(t, oldItem), "旧快照应读到旧版本")
+}
