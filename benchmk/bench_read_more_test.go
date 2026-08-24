@@ -108,11 +108,12 @@ func BenchmarkReadGetHitSeqSST(b *testing.B) {
 }
 
 // BenchmarkReadGetHitRandomSST 数据全部在 SST, 随机点读 (bloom + 块缓存);
-// 3969508              2982 ns/op             751 B/op          6 allocs/op
+// 359989	      2999 ns/op	     758 B/op	       7 allocs/op
 func BenchmarkReadGetHitRandomSST(b *testing.B) {
-	b.ReportAllocs()
 	train := loadSSTData(b)
 	order := rand.New(rand.NewSource(42)).Perm(perfKeyNum)
+
+	b.ReportAllocs()
 	txn := train.NewTransaction(false)
 	defer txn.Discard()
 	b.ResetTimer()

@@ -211,7 +211,6 @@ func getItemValue(t *testing.T, item *model.Entry) (val []byte) {
 	return v
 }
 
-// vlog_test.go 或新增
 func TestVlogWriteRotationErrorPropagated(t *testing.T) {
 	dir := t.TempDir()
 	opt := lsm.GetDefaultOpt(dir)

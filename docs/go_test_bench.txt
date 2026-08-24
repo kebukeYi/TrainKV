@@ -23,6 +23,7 @@ BenchmarkWriteTxnSet128B-4               3693842              3225 ns/op        
 BenchmarkWriteTxnSet128BParallel-4       3300876              3789 ns/op             803 B/op          7 allocs/op
 BenchmarkWriteTxnSet4K-4                 1000000             39911 ns/op           19318 B/op         11 allocs/op
 BenchmarkWriteTxnSet4KParallel-4         1000000             49941 ns/op           19316 B/op         11 allocs/op
+
 BenchmarkWriteTxnSet512B-4               2547375              4176 ns/op            1565 B/op          5 allocs/op
 BenchmarkWriteTxnSet512BParallel-4       1995136              7557 ns/op            2370 B/op          8 allocs/op
 

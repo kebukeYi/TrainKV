@@ -253,6 +253,7 @@ func BenchmarkWriteTxnSet2MBParallel(b *testing.B) {
 // ---------------- 读流程 ----------------
 
 // BenchmarkReadGetHitSeq 顺序命中;
+// BenchmarkReadGetHitSeq-4   	  963973	      1224 ns/op	     120 B/op	       2 allocs/op
 func BenchmarkReadGetHitSeq(b *testing.B) {
 	train := openPerfDB(b)
 	loadData(b, train)
@@ -268,6 +269,7 @@ func BenchmarkReadGetHitSeq(b *testing.B) {
 }
 
 // BenchmarkReadGetHitRandom 随机命中(预生成随机序, 排除 rand 调用对测时的干扰);
+// BenchmarkReadGetHitRandom-4   	  537807	      2440 ns/op	     120 B/op	       2 allocs/op
 func BenchmarkReadGetHitRandom(b *testing.B) {
 	train := openPerfDB(b)
 	loadData(b, train)
@@ -284,6 +286,7 @@ func BenchmarkReadGetHitRandom(b *testing.B) {
 }
 
 // BenchmarkReadGetMiss 未命中(数据集之外的 key);
+// BenchmarkReadGetMiss-4   	 1000000	      1136 ns/op	     120 B/op	       2 allocs/op
 func BenchmarkReadGetMiss(b *testing.B) {
 	b.ReportAllocs()
 	train := openPerfDB(b)
@@ -300,6 +303,7 @@ func BenchmarkReadGetMiss(b *testing.B) {
 }
 
 // BenchmarkReadGetBigValue 大 value 读: 1MB value 存于 vlog, LSM 存 ValuePtr, 读时经 mmap 拷贝;
+// BenchmarkReadGetBigValue-4   	       1	1170131404 ns/op	 1056952 B/op	       6 allocs/op
 func BenchmarkReadGetBigValue(b *testing.B) {
 	b.ReportAllocs()
 	clearDir(perfDataDir)
@@ -333,6 +337,7 @@ func BenchmarkReadGetBigValue(b *testing.B) {
 }
 
 // BenchmarkReadIterate 迭代器全量顺序扫描(每次 op = 扫描完整数据集);
+// BenchmarkReadIterate-4   	      48	  23968464 ns/op	       0 B/op	       0 allocs/op
 func BenchmarkReadIterate(b *testing.B) {
 	b.ReportAllocs()
 	train := openPerfDB(b)
@@ -354,7 +359,7 @@ func BenchmarkReadIterate(b *testing.B) {
 	}
 }
 
-// ---------------- 混合 ----------------
+// ---------------- 读写混合 ----------------
 
 // BenchmarkMixedRead90Write10 9:1 读写混合: 90% 读已有 key, 10% 提交新 key;
 // 13563            888557 ns/op             132 B/op          2 allocs/op
@@ -417,6 +422,7 @@ func BenchmarkReadIterateSST(b *testing.B) {
 }
 
 // BenchmarkReadIterateBigValue 大 value 惰性扫描: 只扫不取值 (Item 携带 ValuePtr, 不拷贝 1MB);
+// BenchmarkReadIterateBigValue-4   	       1	1550893573 ns/op	      48 B/op	       2 allocs/op
 func BenchmarkReadIterateBigValue(b *testing.B) {
 	b.ReportAllocs()
 	clearDir(perfDataDir)
@@ -463,6 +469,7 @@ func BenchmarkReadIterateBigValue(b *testing.B) {
 }
 
 // BenchmarkReadIterateBigValueEager 大 value 扫描并取值 (调用 Item.Value(), 模拟按需消费);
+// BenchmarkReadIterateBigValueEager-4   	       1	1419229138 ns/op	528457056 B/op	    1510 allocs/op
 func BenchmarkReadIterateBigValueEager(b *testing.B) {
 	b.ReportAllocs()
 	clearDir(perfDataDir)
