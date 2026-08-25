@@ -106,10 +106,12 @@ func (lm *LevelsManger) RunOnce(compactorId int) bool {
 
 	for _, prio := range prios {
 		if prio.levelId == 0 && compactorId == 0 {
+
 		} else if prio.adjusted < 1.0 {
 			break
 		}
-		if lm.run(compactorId, prio) {
+		out := lm.run(compactorId, prio)
+		if out {
 			return true
 		}
 	}
@@ -142,6 +144,8 @@ func (lm *LevelsManger) run(compactorId int, prio compactionPriority) bool {
 	case nil:
 		return true
 	case common.ErrFillTables:
+		fmt.Printf("doCompact: %s \n", err.Error())
+		return false
 	default:
 		log.Printf("[taskID:%d] While running doCompact: %v\\n.", compactorId, err)
 	}
@@ -319,10 +323,10 @@ func (lm *LevelsManger) doCompact(compactorId int, prio compactionPriority) erro
 // 4.1. l0 -> ly
 // 4.2. l0 -> l0
 func (lm *LevelsManger) findTablesL0(cd *compactDef) bool {
-	if ok := lm.findTablesL0ToDstLevel(cd); ok {
-		return true
+	if cd.dst.dstLevelId == 0 {
+		return lm.findTablesL0ToL0(cd)
 	}
-	return lm.findTablesL0ToL0(cd)
+	return lm.findTablesL0ToDstLevel(cd)
 }
 
 func (lm *LevelsManger) findTablesL0ToDstLevel(cd *compactDef) bool {
@@ -349,7 +353,7 @@ func (lm *LevelsManger) findTablesL0ToDstLevel(cd *compactDef) bool {
 	}
 	cd.thisRange = getKeyRange(xInTables...)
 	cd.thisTables = xInTables
-
+	// 在下层 找到所有和上层key区间相似的table;
 	left, right := cd.nextLevel.findOverLappingTables(levelHandlerRLocked{}, cd.thisRange)
 	cd.nextTables = make([]*Table, right-left)
 	// 获得 tables[] 的引用;

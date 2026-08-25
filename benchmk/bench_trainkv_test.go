@@ -10,7 +10,7 @@ import (
 
 var trainkv *TrainKV.TrainKV
 
-func init1() {
+func init() {
 	fmt.Println("init TrainKV")
 	dir := "/tmp/goland_pro_data/bench_1/trainkv_data"
 	clearDir(dir)
@@ -19,8 +19,9 @@ func init1() {
 	trainkv, _, _ = TrainKV.Open(opt)
 }
 
-// Benchmark_TrainKV_PutValue-4     1000000             10986 ns/op            2311 B/op          6 allocs/op
-// Benchmark_TrainKV_GetValue-4     2853574              5319 ns/op            1149 B/op          8 allocs/op
+// Benchmark_TrainKV_PutValue-4     1002680             11070 ns/op            1804 B/op          6 allocs/op
+// Benchmark_TrainKV_GetValue-4     4736550              2797 ns/op             316 B/op          4 allocs/op
+
 func Benchmark_TrainKV_PutValue(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
