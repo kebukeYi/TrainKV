@@ -101,6 +101,9 @@ func (m *MmapFile) SyncDirtyRange(off, n uint32) error {
 	if int64(n) > int64(len(m.Buf)) {
 		n = uint32(len(m.Buf))
 	}
+	// 将偏移量 off 向下对齐到操作系统内存页大小的整数倍, 即清除 a 中所有在 b 的二进制位为 1 的对应位
+	// 将低 12 位清零，等同于将数字向下舍入到最近的 4096 的倍数;
+	// off = 5000（0x1388） → 计算结果为 4096（0x1000）。即把 5000 向下对齐到 4KB 的起始位置;
 	// msync 要求起始地址页对齐: 向下取整到页边界, 多同步的一页属于已同步前缀, 无副作用;
 	start := off &^ (uint32(os.Getpagesize()) - 1)
 	return mmap.Msync(m.Buf[start:n])
@@ -120,6 +123,8 @@ func (m *MmapFile) AppendBuffer(offset uint32, buf []byte) error {
 	needSize := len(buf)
 	end := int(offset) + needSize
 	if end > size {
+		// 指数扩容: 一次扩到 end+growBy, 避免每次追加都触发 Truncate(全量sync+remmap);
+		// 扩出的空间由 mmap 稀疏页兜底, 不写入的数据仍是零页, 不产生实际磁盘占用;
 		growBy := size
 		if growBy > oneGB {
 			growBy = oneGB
@@ -127,7 +132,7 @@ func (m *MmapFile) AppendBuffer(offset uint32, buf []byte) error {
 		if growBy < needSize {
 			growBy = needSize
 		}
-		if err := m.Truncate(int64(end)); err != nil {
+		if err := m.Truncate(int64(end + growBy)); err != nil {
 			return err
 		}
 	}

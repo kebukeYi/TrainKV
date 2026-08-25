@@ -247,6 +247,7 @@ func (t *Transaction) IsVisible(e *model.Entry) bool {
 	tsVersion := model.ParseTsVersion(e.Key)
 	return t.startTs >= tsVersion
 }
+
 func (t *Transaction) modify(e *model.Entry) error {
 	switch {
 	case !t.update:
@@ -299,6 +300,7 @@ func (t *Transaction) checkSize(e *model.Entry) error {
 	t.size = size
 	return nil
 }
+
 func (t *Transaction) Set(key, value []byte) error {
 	entry := model.NewEntry(key, value)
 	return t.modify(entry)
@@ -390,6 +392,14 @@ func (t *Transaction) commitAndSendToDB() (func() (uint64, error), error) {
 		t.keyBufs = append(t.keyBufs, bufPtr)
 		entry.Meta |= common.BitTxn
 		entries = append(entries, entry)
+	}
+	// 按 key 排序: WAL 中同事务条目有序, 恢复重放时 skiplist 插入局部性更好;
+	// 同事务内 commitTs 相同, 等价于按 raw key 排序; finTxn 条目在下方追加, 保持最后;
+	// 单条目(最常见的小事务)跳过排序, 避免 sort.Slice 的反射装箱分配;
+	if len(entries) > 1 {
+		sort.Slice(entries, func(i, j int) bool {
+			return bytes.Compare(entries[i].Key, entries[j].Key) < 0
+		})
 	}
 
 	// finTxn 结束标记 entry 及其 ts 序列化缓冲均为池化事务的 私有领域, 提交完成后, 不清理即可复用;

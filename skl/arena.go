@@ -17,8 +17,8 @@ const (
 // Arena 固定容量分配器: 容量在 NewArena 时一次性确定, 禁止扩容;
 // 数据只追加不复用, 已返回的切片在 arena 存活期内永久有效 (不会因扩容迁移而悬垂);
 type Arena struct {
-	data  []byte
-	sizes uint32
+	data  []byte // 一次开辟空间,就不再释放和多分配;
+	sizes uint32 // 实际利用空间;
 }
 
 func NewArena(n int64) *Arena {

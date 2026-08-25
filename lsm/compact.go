@@ -20,7 +20,7 @@ import (
 )
 
 type compactionPriority struct {
-	levelId  int     // 本层合并优先级
+	levelId  int     // 本层
 	score    float64 // 合并分数
 	adjusted float64 // 调整过得分数
 	dst      targets // 源头 -> 目标层
@@ -93,7 +93,7 @@ func (lm *LevelsManger) runCompacter(compactorId int, closer *utils.Closer) {
 }
 
 // RunOnce 执行一轮压缩调度 (compactor 协程周期性调用的同一入口);
-// 导出以便外部手动触发压缩 (测试/运维);
+// 导出后, 以便外部手动触发压缩 (测试/运维);
 func (lm *LevelsManger) RunOnce(compactorId int) bool {
 	// 计算各个level的待合并分数, 按照大小排列;
 	prios := lm.pickCompactLevels()
@@ -119,7 +119,7 @@ func (lm *LevelsManger) RunOnce(compactorId int) bool {
 func moveL0toFront(prios []compactionPriority) []compactionPriority {
 	idx := -1
 	for i, prio := range prios {
-		if prio.levelId == 1 {
+		if prio.levelId == 0 {
 			idx = i
 			break
 		}
@@ -313,7 +313,6 @@ func (lm *LevelsManger) doCompact(compactorId int, prio compactionPriority) erro
 		return err
 	}
 	//log.Printf("[CompactorID: %d] Compaction for level: %d to %d DONE \n", compactorId, cd.thisLevel.levelID, cd.nextLevel.levelID)
-
 	return nil
 }
 
@@ -413,6 +412,7 @@ func (lm *LevelsManger) findTablesL0ToL0(cd *compactDef) bool {
 		lm.compactIngStatus.tables[t.fid] = struct{}{}
 	}
 	// LO->L0: 把一堆重叠的小文件合并成一个大文件, 减少文件数量;
+	// 顺序呢? L0层的文件 按照 MaxVersion 来排序;不用 fid;
 	cd.dst.fileSize[0] = math.MaxUint32 // 4GB
 	return true
 }
@@ -483,7 +483,7 @@ func (lm *LevelsManger) sortByMaxVersion(table []*Table, cd *compactDef) {
 		return
 	}
 	sort.Slice(table, func(i, j int) bool {
-		return table[i].MaxVersion() < table[j].MaxVersion()
+		return table[i].maxVersion < table[j].maxVersion
 	})
 }
 
@@ -497,6 +497,7 @@ func (lm *LevelsManger) findMaxLevelTables(tables []*Table, cd *compactDef) bool
 
 	cd.nextTables = []*Table{}
 	collectNextTables := func(t *Table, needSz int64) {
+		// 寻找 sortedTables[]中索引最小的位置, 存放 t;
 		nextIdx := sort.Search(len(sortedTables), func(i int) bool {
 			return model.CompareKeyWithTs(sortedTables[i].sst.minKey, t.sst.minKey) >= 0
 		})
@@ -587,8 +588,9 @@ func (lm *LevelsManger) runCompactDef(compactorId int, dstLevelId int, cd compac
 	if len(cd.splits) == 0 {
 		cd.splits = append(cd.splits, keyRange{})
 	}
-
-	buildTables, decrTables, err := lm.compactBuildTables(dstLevelId, cd)
+	// 提前快照discards, 以防压缩任务运行几秒期间水位推进，同一 key 的前后版本可能被按不同水位判定;
+	discards := lm.getDiscardTs()
+	buildTables, decrTables, err := lm.compactBuildTables(dstLevelId, cd, discards)
 	if err != nil {
 		return err
 	}
@@ -618,7 +620,7 @@ func (lm *LevelsManger) runCompactDef(compactorId int, dstLevelId int, cd compac
 	from := append(tablesToString(cd.thisTables), tablesToString(cd.nextTables)...)
 	to := tablesToString(buildTables)
 	// todo 性能测试时关掉此选项
-	if dur := time.Since(timeStart); dur <= 2*time.Second {
+	if dur := time.Since(timeStart); dur <= 1*time.Second {
 		fmt.Printf("[GoRouteid:%d] Compact Input: lx:%d[%d tables] + ly:%d[%d tables]  with %d splits. -> Out: ly:%d[new %d tables]. tableName: [%s] -> [%s], took %v\n",
 			compactorId, thisLevel.levelID, len(cd.thisTables),
 			nextLevel.levelID, len(cd.nextTables), len(cd.splits),
@@ -629,7 +631,7 @@ func (lm *LevelsManger) runCompactDef(compactorId int, dstLevelId int, cd compac
 	return nil
 }
 
-func (lm *LevelsManger) compactBuildTables(dstLevelId int, cd compactDef) ([]*Table, func() error, error) {
+func (lm *LevelsManger) compactBuildTables(dstLevelId int, cd compactDef, discards uint64) ([]*Table, func() error, error) {
 	thisTables := cd.thisTables
 	nextTables := cd.nextTables
 	options := &interfaces.Options{IsAsc: true, IsSetCache: false}
@@ -663,7 +665,7 @@ func (lm *LevelsManger) compactBuildTables(dstLevelId int, cd compactDef) ([]*Ta
 			iterators := newIterator() // 全量表参与迭代, 包括 X层, Y层;
 			iterator := NewMergingIterator(iterators, options)
 			defer iterator.Close() // 逐个解开 table 引用
-			lm.subCompact(iterator, kr, cd, inflightBuilders, res)
+			lm.subCompact(iterator, kr, cd, inflightBuilders, res, discards)
 		}(kr)
 	}
 
@@ -689,16 +691,18 @@ func (lm *LevelsManger) compactBuildTables(dstLevelId int, cd compactDef) ([]*Ta
 		_ = decrRefs(newTables)
 		return nil, nil, fmt.Errorf("compactBuildTables while running compactions for: %+v, %v", cd, err)
 	}
+
 	sort.Slice(newTables, func(i, j int) bool {
 		return model.CompareKeyWithTs(newTables[i].sst.MaxKey(), newTables[j].sst.MaxKey()) < 0
 	})
+
 	return newTables, func() error {
 		return decrRefs(newTables)
 	}, nil
 }
 
 func (lm *LevelsManger) subCompact(iterator interfaces.Iterator, kr keyRange, cd compactDef,
-	inflightBuilders *utils.Throttle, res chan<- *Table) {
+	inflightBuilders *utils.Throttle, res chan<- *Table, discards uint64) {
 	discardStats := make(map[uint32]int64)
 	defer func() {
 		// 重新开一个go协程,让其去阻塞,不要耽搁函数返回;
@@ -749,6 +753,7 @@ func (lm *LevelsManger) subCompact(iterator interfaces.Iterator, kr keyRange, cd
 		var tableRange keyRange
 		var numKeys, numSkips uint64
 		var rangeCheck int
+		var sstMaxVersion uint64
 		for ; iterator.Valid(); iterator.Next() {
 			entry := iterator.Item().Item
 			if skipKey != nil || len(skipKey) > 0 {
@@ -788,7 +793,7 @@ func (lm *LevelsManger) subCompact(iterator interfaces.Iterator, kr keyRange, cd
 			// 所有 startTs ≤ doneIndex 的读者都已结束,因此 compaction 可以安全删除这些版本以下的旧数据;
 			// 这就是 MVCC 版本回收的安全性依据;
 			// 小于等于这个版本的数据, 都是安全的, 不会被事务读到, 所以才可以走清理;
-			if version <= lm.getDiscardTs() {
+			if version <= discards {
 				// 跟踪此键遇到的低版本数量, 只考虑 startMark 以下的版本;
 				// 否则, 我们可能会丢弃正在运行的已读事务的已读数据;
 				keyNumVersions++
@@ -817,6 +822,9 @@ func (lm *LevelsManger) subCompact(iterator interfaces.Iterator, kr keyRange, cd
 				}
 			} // version <= startMarkTs
 
+			if version >= sstMaxVersion {
+				sstMaxVersion = version
+			}
 			// version > startMarkTs; 不跳过 任何版本有效的 key;
 			numKeys++
 			switch {
@@ -827,6 +835,7 @@ func (lm *LevelsManger) subCompact(iterator interfaces.Iterator, kr keyRange, cd
 			}
 		} // for over
 		// fmt.Printf("[gid:%d] LOG Compact. Added %d keys. Skipped %d keys. Iteration took: %v \n;", cd.compactorId, numKeys, numSkips, time.Since(timeStart).Round(time.Millisecond))
+		builder.maxVersion = sstMaxVersion
 	} // addKeys Over
 
 	if len(kr.left) > 0 {
@@ -884,6 +893,7 @@ func (lm *LevelsManger) updateDiscardStats(discardStats map[uint32]int64) {
 		return // 未配置统计通道 (如独立 LSM 场景), 直接丢弃;
 	}
 	select {
+	// 要么阻塞, 要么发送后就立刻返回;
 	case *lm.lsm.Option.DiscardStatsCh <- discardStats:
 	}
 }

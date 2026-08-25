@@ -93,7 +93,7 @@ func loadSSTData(b *testing.B) *TrainKV.TrainKV {
 // ---------------- 数据在 SST ----------------
 
 // BenchmarkReadGetHitSeqSST 数据全部在 L0 层的 SST, 顺序点读;
-// 333          37943293 ns/op        17369433 B/op     228316 allocs/op
+// BenchmarkReadGetHitSeqSST-4   	  821556	      1456 ns/op	     708 B/op	       6 allocs/op
 func BenchmarkReadGetHitSeqSST(b *testing.B) {
 	b.ReportAllocs()
 	train := loadSSTData(b)
@@ -108,7 +108,7 @@ func BenchmarkReadGetHitSeqSST(b *testing.B) {
 }
 
 // BenchmarkReadGetHitRandomSST 数据全部在 SST, 随机点读 (bloom + 块缓存);
-// 359989	      2999 ns/op	     758 B/op	       7 allocs/op
+// BenchmarkReadGetHitRandomSST-4   	  417600	      2707 ns/op	     756 B/op	       7 allocs/op
 func BenchmarkReadGetHitRandomSST(b *testing.B) {
 	train := loadSSTData(b)
 	order := rand.New(rand.NewSource(42)).Perm(perfKeyNum)
@@ -125,7 +125,7 @@ func BenchmarkReadGetHitRandomSST(b *testing.B) {
 }
 
 // BenchmarkReadGetHitRandomSSTNoCache 同上但缓存只有 1 格, 近似无缓存: 每次点读都要做块读+解码;
-// 3989263              2984 ns/op             895 B/op          8 allocs/op
+// BenchmarkReadGetHitRandomSSTNoCache-4   	  392726	      2759 ns/op	     894 B/op	       8 allocs/op
 func BenchmarkReadGetHitRandomSSTNoCache(b *testing.B) {
 	b.ReportAllocs()
 	train := openReadDB(b, 1)
@@ -144,7 +144,7 @@ func BenchmarkReadGetHitRandomSSTNoCache(b *testing.B) {
 }
 
 // BenchmarkReadGetMissSST 未命中 SST: 布隆过滤器直接判负, 跳过块读;
-// 14780430               749.2 ns/op           123 B/op          2 allocs/op
+// BenchmarkReadGetMissSST-4   	 1583546	       746.2 ns/op	     122 B/op	       2 allocs/op
 func BenchmarkReadGetMissSST(b *testing.B) {
 	b.ReportAllocs()
 	train := loadSSTData(b)
@@ -161,7 +161,7 @@ func BenchmarkReadGetMissSST(b *testing.B) {
 // ---------------- 混合 (memtable + SST) ----------------
 
 // BenchmarkReadGetHitRandomMixed 一半数据在 L0, 一半在 memtable, 随机点读 (完整 Get 路径);
-// 4358523              2634 ns/op             407 B/op          4 allocs/op
+// BenchmarkReadGetHitRandomMixed-4   	  475962	      2306 ns/op	     410 B/op	       4 allocs/op
 func BenchmarkReadGetHitRandomMixed(b *testing.B) {
 	b.ReportAllocs()
 	train := openReadDB(b, 0)

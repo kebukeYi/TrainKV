@@ -20,7 +20,7 @@ type MemoryTable struct {
 	lsm        *LSM
 	skipList   *skl.SkipList
 	wal        *WAL
-	maxVersion uint64
+	maxVersion uint64 // 要时刻维护  maxVersion
 	name       string
 }
 

@@ -269,6 +269,8 @@ func (ssb *SstBuilder) buildBlockIndex(bloom []byte) ([]byte, uint32) {
 		tableIndex.BloomFilter = bloom
 	}
 	tableIndex.KeyCount = ssb.keyCount
+	// 1. flush 时, 添加 maxVersion
+	// 2. compact 时, 记录 maxVersion
 	tableIndex.MaxVersion = ssb.maxVersion
 	tableIndex.Offsets = ssb.writeBlockList()
 	// stale 数据量必须持久化进索引, 否则 Lmax→Lmax 合并无从判断 (此前恒为 0);
@@ -303,6 +305,7 @@ func (ssb *SstBuilder) finishBlock() {
 	if ssb.curBlock == nil || len(ssb.curBlock.entryOffsets) == 0 {
 		return
 	}
+
 	// 将当前 block 的元信息 打包进去;
 	ssb.append(model.U32SliceToBytes(ssb.curBlock.entryOffsets))
 	ssb.append(model.U32ToBytes(uint32(len(ssb.curBlock.entryOffsets))))
@@ -448,8 +451,9 @@ func (itr *blockIterator) setIndex(idx int) {
 		return
 	}
 	valueOffset := headerSize + header.dif
-	eny := model.Entry{}
+	eny := model.Entry{} // 空 entry
 	if itr.arena != nil {
+		// 另外的空间;
 		eny.Key = itr.arena.Alloc(len(itr.key))
 		copy(eny.Key, itr.key)
 	} else {

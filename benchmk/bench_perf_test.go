@@ -29,7 +29,7 @@ const (
 func openPerfDB(b *testing.B) *TrainKV.TrainKV {
 	clearDir(perfDataDir)
 	defaultOpt := lsm.GetDefaultOpt(perfDataDir)
-	defaultOpt.SyncWrites = true
+	defaultOpt.SyncWrites = false
 	train, _, _ := TrainKV.Open(defaultOpt)
 	b.Cleanup(func() { _ = train.Close() })
 	return train
@@ -59,9 +59,9 @@ func loadData(b *testing.B, train *TrainKV.TrainKV) {
 
 // BenchmarkWriteTxnSet 串行事务单条提交, 128B value, 纯写(无读阶段);
 // wal_no_sync ↓
-// 3693842              3225 ns/op             630 B/op          4 allocs/op
+// 342991	         3361 ns/op	              104 B/op	       4 allocs/op
 // wal_sync ↓
-// 0002793           4030367 ns/op             107 B/op          4 allocs/op
+// 0002793           4030367 ns/op            107 B/op          4 allocs/op
 func BenchmarkWriteTxnSet128B(b *testing.B) {
 	b.ReportAllocs()
 	train := openPerfDB(b)
@@ -83,6 +83,7 @@ func BenchmarkWriteTxnSet128B(b *testing.B) {
 // 与串行 BenchmarkTrainKVTxnSet-128B 对比, 观察每 op 摊销的刷盘开销;
 // wal_no_sync ↓
 // 3300876              3789 ns/op             803 B/op          7 allocs/op
+// 00243478	            4287 ns/op	     	   522 B/op	         6 allocs/op
 // wal_sync ↓
 // 0007284           1688478 ns/op            9567 B/op          7 allocs/op
 func BenchmarkWriteTxnSet128BParallel(b *testing.B) {
@@ -254,6 +255,7 @@ func BenchmarkWriteTxnSet2MBParallel(b *testing.B) {
 
 // BenchmarkReadGetHitSeq 顺序命中;
 // BenchmarkReadGetHitSeq-4   	  963973	      1224 ns/op	     120 B/op	       2 allocs/op
+// BenchmarkReadGetHitSeq-4   	 1669935	       705.2 ns/op	     120 B/op	       2 allocs/op
 func BenchmarkReadGetHitSeq(b *testing.B) {
 	train := openPerfDB(b)
 	loadData(b, train)
@@ -270,6 +272,7 @@ func BenchmarkReadGetHitSeq(b *testing.B) {
 
 // BenchmarkReadGetHitRandom 随机命中(预生成随机序, 排除 rand 调用对测时的干扰);
 // BenchmarkReadGetHitRandom-4   	  537807	      2440 ns/op	     120 B/op	       2 allocs/op
+// BenchmarkReadGetHitRandom-4   	  685623	      1579 ns/op	     120 B/op	       2 allocs/op
 func BenchmarkReadGetHitRandom(b *testing.B) {
 	train := openPerfDB(b)
 	loadData(b, train)

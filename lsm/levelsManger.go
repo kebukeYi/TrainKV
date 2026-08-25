@@ -15,18 +15,21 @@ type LevelsManger struct {
 	maxFID           atomic.Uint64   // sst 已经分配出去的最大fid,只要创建了 MemoryTable 就算已分配;
 	levelHandlers    []*LevelHandler // 每层的处理器
 	opt              *Options
-	lsm              *LSM           // 上层引用
-	txnDoneIndex     atomic.Uint64  // 所有已读事务的结束索引;
-	cache            *LevelsCache   // 缓存 block 和 sst.index() 数据
-	manifestFile     *ManifestFile  // 增删 sst 元信息
-	stopCh           chan struct{}  // 通知 getTxnDoneIndexFromCh 退出;
-	stopWG           sync.WaitGroup // 等待 getTxnDoneIndexFromCh 真正退出;
-	discardStatsWG   sync.WaitGroup // 等待 compaction 的 discardStats 发送协程退出;
-	compactIngStatus *compactIngStatus
+	lsm              *LSM              // 上层引用
+	txnDoneIndex     atomic.Uint64     // 所有已读事务的结束索引,方便 compact;
+	cache            *LevelsCache      // 缓存 block 和 sst.index() 数据
+	manifestFile     *ManifestFile     // 增删 sst 元信息;
+	compactIngStatus *compactIngStatus // 所有层的压缩状态信息;
+
+	stopCh         chan struct{}  // 通知 getTxnDoneIndexFromCh 退出;
+	stopWG         sync.WaitGroup // 等待 getTxnDoneIndexFromCh 真正退出;
+	discardStatsWG sync.WaitGroup // 等待 compaction 的 discardStats 发送协程退出;
 }
 
 // 临时诊断用: 暴露层处理器和表列表;
-func (lm *LevelsManger) GetLevelHandler(i int) *LevelHandler { return lm.levelHandlers[i] }
+func (lm *LevelsManger) GetLevelHandler(i int) *LevelHandler {
+	return lm.levelHandlers[i]
+}
 
 func (lm *LevelHandler) GetTables() []*Table {
 	// 需加锁: flush/compaction 协程会并发修改 tables;
@@ -50,6 +53,7 @@ func (lsm *LSM) InitLevelManger(opt *Options) *LevelsManger {
 	if err := lm.loadManifestFile(); err != nil {
 		common.Panic(err)
 	}
+	// 日后 close(lm.stopCh), 当前携程能正常退出;
 	lm.stopWG.Add(1)
 	go func() {
 		defer lm.stopWG.Done()
@@ -118,6 +122,8 @@ func (lm *LevelsManger) build() error {
 	}
 
 	for i := 0; i < lm.opt.MaxLevelNum; i++ {
+		// L0层按照 maxversion 降序排列;
+		// 非L0层 按照 minkey 升序排列;
 		lm.levelHandlers[i].Sort()
 	}
 
@@ -139,17 +145,19 @@ func (lm *LevelsManger) iterators(opt *interfaces.Options) []interfaces.Iterator
 	return iters
 }
 
-func (lm *LevelsManger) Get(keyTs []byte, skipListEntryMaxTs *model.Entry) (model.Entry, error) {
+func (lm *LevelsManger) Get(keyTs []byte) (model.Entry, error) {
 	startTs := model.ParseTsVersion(keyTs)
-	// 对 level-0层的所有table进行搜寻,返回其中最高版本的数据;
+	// 对 level-0层的table进行搜寻, 有就立即返回;
 	l0_entry, _ := lm.levelHandlers[0].Get(keyTs)
 	if l0_entry.Value != nil || l0_entry.Version != 0 {
 		if l0_entry.Version == startTs {
 			return l0_entry, nil
 		}
-		if l0_entry.Version > skipListEntryMaxTs.Version {
-			// 直接写回调用方栈上的 entry, 避免 &l0_entry 逃逸分配;
-			*skipListEntryMaxTs = l0_entry
+		// vlog 回写的数据, 不会带BitTxn标记位,
+		// 因此只要是查到版本小于自己,并且不带BitTxn标记位的, 都可以跳过, 继续向下查询;
+		// 同 mt 查询路程一样;
+		if l0_entry.Version <= startTs && (l0_entry.Meta&common.BitTxn != 0) {
+			return l0_entry, nil
 		}
 	}
 
@@ -159,16 +167,14 @@ func (lm *LevelsManger) Get(keyTs []byte, skipListEntryMaxTs *model.Entry) (mode
 			if lx_entry.Version == startTs {
 				return lx_entry, nil
 			}
-			if lx_entry.Version > skipListEntryMaxTs.Version {
-				*skipListEntryMaxTs = lx_entry
+			if lx_entry.Version <= startTs && (lx_entry.Meta&common.BitTxn != 0) {
+				return lx_entry, nil
 			}
 		}
 	}
-	if skipListEntryMaxTs.Version == 0 || skipListEntryMaxTs.Value == nil {
-		return model.Entry{Version: 0}, common.ErrKeyNotFound
-	}
+
 	// 否则到最后, 返回 存储的最高版本的数据;
-	return *skipListEntryMaxTs, nil
+	return model.Entry{Version: 0}, common.ErrKeyNotFound
 }
 
 func (lm *LevelsManger) checkOverlap(tables []*Table, lev int) bool {
@@ -193,10 +199,11 @@ func (lm *LevelsManger) flush(imm *MemoryTable) (err error) {
 	sstName := utils.FileNameSSTable(lm.opt.WorkDir, fid)
 
 	builder := NewSSTBuilder(lm.opt)
-	skipListIterator := imm.skipList.NewSkipListIterator(strconv.FormatUint(fid, 10)+MemTableName)
+	skipListIterator := imm.skipList.NewSkipListIterator(strconv.FormatUint(fid, 10) + MemTableName)
 	defer skipListIterator.Close() // 涉及到 immemoryTable 的清除和相关 wal 的清理;
 	for skipListIterator.Rewind(); skipListIterator.Valid(); skipListIterator.Next() {
 		entry := skipListIterator.Item().Item
+		// ssb.maxVersion 已被维护;
 		builder.Add(&entry, false)
 	}
 
@@ -219,6 +226,7 @@ func (lm *LevelsManger) flush(imm *MemoryTable) (err error) {
 }
 
 func (lm *LevelsManger) close() error {
+	// 通知 getTxnDoneIndexFromCh() 函数退出;
 	close(lm.stopCh)
 	lm.stopWG.Wait()         // 等 getTxnDoneIndexFromCh 退出后再返回, 防止其仍读 opt.TxnDoneIndexCh;
 	lm.discardStatsWG.Wait() // 等 discardStats 发送协程退出, 防止其仍读 Option.DiscardStatsCh;

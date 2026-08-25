@@ -274,47 +274,63 @@ func (db *TrainKV) WriteRequest(reqs []*model.Request) error {
 		return nil
 	}
 
-	done := func(err error) {
-		for _, req := range reqs {
-			req.Err = err
-			req.Wg.Done()
+	// 按 [from, to) 区间标记结果: 中途失败的请求只影响失败点及之后的请求,
+	// 失败点之前已完整写入(内存)的请求标记成功, 避免调用方对已提交数据重试产生重复版本;
+	doneRange := func(err error, from, to int) {
+		for i := from; i < to; i++ {
+			reqs[i].Err = err
+			reqs[i].Wg.Done()
 		}
 	}
 
 	wrote, err := db.vlog.Write(reqs)
 	if err != nil {
-		done(err)
+		doneRange(err, 0, len(reqs))
 		return err
 	}
 
 	// 先同步 vlog, 保证 WAL 中 ValuePtr 指向的 value 已持久化; 再写 WAL 并同步;
 	if db.Lsm.Option.SyncWrites && wrote {
 		if err = db.vlog.Sync(); err != nil {
-			done(err)
+			doneRange(err, 0, len(reqs))
 			return fmt.Errorf("#WriteRequest.vlog.Sync(),err:%w", err)
 		}
 	}
 
-	for _, req := range reqs {
+	firstFailed := -1
+	for i, req := range reqs {
 		if len(req.Entries) == 0 {
 			continue
 		}
-
 		if err = db.writeToLSM(req); err != nil {
-			done(err)
-			return fmt.Errorf("#WriteRequest.writeToLSM(),err:%w", err)
+			firstFailed = i
+			break
 		}
+	}
+
+	if firstFailed >= 0 {
+		// SyncWrites 下补一次 WAL 同步, 兑现失败点之前请求的持久化承诺;
+		// 失败请求可能已写入的部分 WAL 记录也会落盘, 但恢复时无 finTxn 配套的
+		// BitTxn 条目会被整段丢弃 (recovery2SkipList), 事务一致性不受影响;
+		if db.Lsm.Option.SyncWrites {
+			if syncErr := db.Lsm.SyncWalFile(); syncErr != nil {
+				err = fmt.Errorf("%w (wal sync failed: %v)", err, syncErr)
+			}
+		}
+		doneRange(nil, 0, firstFailed)
+		doneRange(err, firstFailed, len(reqs)) // 传递错误;
+		return fmt.Errorf("#WriteRequest.writeToLSM(),err:%w", err)
 	}
 
 	if db.Lsm.Option.SyncWrites {
 		// 每次批量写入后统一刷盘一次, 提交方会在 Wg.Done 之后才返回;
 		if err = db.Lsm.SyncWalFile(); err != nil {
-			done(err)
+			doneRange(err, 0, len(reqs))
 			return fmt.Errorf("#WriteRequest.SyncWalFile(),err:%w", err)
 		}
 	}
 
-	done(nil)
+	doneRange(nil, 0, len(reqs))
 	return nil
 }
 

@@ -216,11 +216,14 @@ func (m *MergingIterator) Valid() bool {
 	return len(m.itHeap) > 0
 }
 
+// 前提: 子迭代器返回的 Item 在两次 Next() 之间必须保持有效;
+//   - blockIterator: setIndex 已把 key 拷入独立缓冲 (eny.Key = SafeCopy(...)),
+//     Value 是 mmap 视图 (表存续期间稳定)  → 天然满足;
+//   - SkipListIterator: Key/Value 是 arena 视图 → 扫描期间无并发写 (arena 不增长) 则满足;
 func (m *MergingIterator) Item() interfaces.Item {
 	if !m.Valid() {
 		return interfaces.Item{} // 或者返回错误
 	}
-	// 子迭代器 Item 均为稳定视图 (blockIterator: key 独立拷贝 + value mmap 视图; SkipListIterator: arena 视图),
 	// 直接返回, 省去每 key 2 次 SafeCopy;
 	return m.itHeap[0].Item()
 }

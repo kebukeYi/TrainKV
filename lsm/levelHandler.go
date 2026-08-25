@@ -22,6 +22,10 @@ func (leh *LevelHandler) addAndSize(t *Table) {
 	leh.mux.Lock()
 	defer leh.mux.Unlock()
 	leh.tables = append(leh.tables, t)
+	// L0：按最大序列号降序（最新写入的数据在前）
+	sort.Slice(leh.tables, func(i, j int) bool {
+		return leh.tables[i].sst.MaxVersion > leh.tables[j].sst.MaxVersion
+	})
 	leh.addSizeLocked(t)
 }
 
@@ -56,7 +60,8 @@ func (leh *LevelHandler) numTables() int {
 }
 
 func (leh *LevelHandler) Get(keyTs []byte) (model.Entry, error) {
-	// 如果是第0层查询,则需要全部table进行逆序查询;
+	// 如果是第0层查询,则需要全部table进行正序查询,版本号大sst的在前面;
+	// 初始化时, sst 是按照 maxversion 降序排列;
 	if leh.levelID == 0 {
 		return leh.searchL0SST(keyTs)
 	}
@@ -65,7 +70,7 @@ func (leh *LevelHandler) Get(keyTs []byte) (model.Entry, error) {
 
 func (leh *LevelHandler) searchL0SST(keyTs []byte) (model.Entry, error) {
 	// [old,1,2,3,4,5,6,7,8,new...]
-	leh.mux.RLock()
+	leh.mux.RLock() // 层锁
 	tables := make([]*Table, len(leh.tables))
 	copy(tables, leh.tables)
 	for _, t := range tables {
@@ -78,8 +83,8 @@ func (leh *LevelHandler) searchL0SST(keyTs []byte) (model.Entry, error) {
 			_ = t.DecrRef()
 		}
 	}()
-	var maxEntry model.Entry
-	for i := len(tables) - 1; i >= 0; i-- {
+	// var maxEntry model.Entry
+	for i := 0; i < len(tables); i++ {
 		table := tables[i]
 		// 多种结果集:
 		// 1. 没有找到;
@@ -87,13 +92,10 @@ func (leh *LevelHandler) searchL0SST(keyTs []byte) (model.Entry, error) {
 		// 3. 找到最近小于当前 keyTs 的;
 		entry, _ := table.Search(keyTs)
 		if entry.Value != nil || entry.Version != 0 {
-			if entry.Version > maxEntry.Version {
-				maxEntry = entry
-				continue
-			}
+			return entry, nil
 		}
 	}
-	return maxEntry, nil
+	return model.Entry{Version: 0}, nil
 }
 
 func (leh *LevelHandler) searchLnSST(keyTs []byte) (model.Entry, error) {
@@ -107,18 +109,15 @@ func (leh *LevelHandler) searchLnSST(keyTs []byte) (model.Entry, error) {
 	leh.mux.RUnlock()
 	defer func() { _ = tbl.DecrRef() }()
 
-	var maxEntry model.Entry
 	// 结果集:
 	// 1. 没有找到;
 	// 2. 等于找到;
 	// 3. 找到小于当前 keyTs 的;
 	entry, _ := tbl.Search(keyTs)
 	if entry.Value != nil || entry.Version != 0 {
-		if entry.Version > maxEntry.Version {
-			maxEntry = entry
-		}
+		return entry, nil
 	}
-	return maxEntry, nil
+	return model.Entry{Version: 0}, nil
 }
 
 // 默认从 首部 开始查询, 找到第一个最大值 大于等于 key的 sst, 除了l0层之外, 其他层的 Table 都是递增规律;
@@ -144,14 +143,20 @@ func (leh *LevelHandler) isLastLevel() bool {
 	return leh.levelID == leh.lm.lsm.Option.MaxLevelNum-1
 }
 
+// 1.每次启动时, 需要进行排序;
+// 2. flush后,  L0层 需要 根据 maxVersion 排序;
+// 3. compact 后, L0层 需要排序;
 func (leh *LevelHandler) Sort() {
 	leh.mux.Lock()
 	defer leh.mux.Unlock()
 	if leh.levelID == 0 {
+		// L0: 按最大序列号降序（最新写入的数据在前）
 		sort.Slice(leh.tables, func(i, j int) bool {
-			return leh.tables[i].fid < leh.tables[j].fid
+			return leh.tables[i].maxVersion > leh.tables[j].maxVersion
 		})
 	} else {
+		// 非L0层,就用 minKey)(排序)
+		// 闭包导致的 堆逃逸;
 		sort.Slice(leh.tables, func(i, j int) bool {
 			return model.CompareKeyWithTs(leh.tables[i].sst.MinKey(), leh.tables[j].sst.MinKey()) < 0
 		})
@@ -195,11 +200,19 @@ func (leh *LevelHandler) updateTable(toDel, toAdd []*Table) error {
 		t.IncrRef()
 		newTables = append(newTables, t)
 	}
-
 	leh.tables = newTables
-	sort.Slice(leh.tables, func(i, j int) bool {
-		return model.CompareKeyWithTs(leh.tables[i].sst.MinKey(), leh.tables[j].sst.MinKey()) < 0
-	})
+
+	if leh.levelID == 0 {
+		// L0: 按最大序列号降序（最新写入的数据在前）
+		sort.Slice(leh.tables, func(i, j int) bool {
+			return leh.tables[i].sst.MaxVersion > leh.tables[j].sst.MaxVersion
+		})
+	} else {
+		// 新添加后, 需要排序;
+		sort.Slice(leh.tables, func(i, j int) bool {
+			return model.CompareKeyWithTs(leh.tables[i].sst.MinKey(), leh.tables[j].sst.MinKey()) < 0
+		})
+	}
 
 	return decrRefs(toDel)
 }
@@ -219,10 +232,20 @@ func (leh *LevelHandler) deleteTable(toDel []*Table) error {
 			newTables = append(newTables, t)
 		}
 	}
+
 	leh.tables = newTables
-	sort.Slice(leh.tables, func(i, j int) bool {
-		return model.CompareKeyWithTs(leh.tables[i].sst.MinKey(), leh.tables[j].sst.MinKey()) < 0
-	})
+
+	if leh.levelID == 0 {
+		// L0：按最大序列号降序（最新写入的数据在前）
+		sort.Slice(leh.tables, func(i, j int) bool {
+			return leh.tables[i].sst.MaxVersion > leh.tables[j].sst.MaxVersion
+		})
+	} else {
+		// 新添加后, 需要排序;
+		sort.Slice(leh.tables, func(i, j int) bool {
+			return model.CompareKeyWithTs(leh.tables[i].sst.MinKey(), leh.tables[j].sst.MinKey()) < 0
+		})
+	}
 	return decrRefs(toDel)
 }
 

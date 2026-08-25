@@ -21,11 +21,12 @@ import (
 const SSTableName string = ".sst"
 
 type Table struct {
-	sst  *SSTable
-	lm   *LevelsManger
-	fid  uint64
-	ref  int32
-	Name string
+	sst        *SSTable
+	lm         *LevelsManger
+	fid        uint64
+	maxVersion uint64 // 读取 sst 中的 maxVersion,
+	ref        int32
+	Name       string
 }
 
 func OpenTable(lm *LevelsManger, tableName string, builder *SstBuilder) (*Table, error) {
@@ -50,10 +51,13 @@ func OpenTable(lm *LevelsManger, tableName string, builder *SstBuilder) (*Table,
 		})
 	}
 	t.IncrRef()
+	// 加载 sst 的元数据, 包括 maxVersion;
 	if err = t.sst.Init(); err != nil {
 		common.Err(err)
 		return nil, err
 	}
+	// 方便之后的L0层 sst 排序;
+	t.maxVersion = t.sst.MaxVersion
 	// 获取sst的最大key 需要使用迭代器, 逆向获得;
 	itr := t.NewTableIterator(&interfaces.Options{IsAsc: false, IsSetCache: false})
 	defer itr.Close()
@@ -78,12 +82,14 @@ func (t *Table) searchBlock(blockIdx int, offsets []*pb.BlockOffset, keyTs []byt
 	var bi blockIterator
 	bi.key = blockKeyPool.Get().([]byte)
 	bi.setBlock(b)
+	// blockIterator 的返回值: 有可能也是不存在值的;(例如寻找最小/最大 不存在的值);
 	bi.Seek(keyTs)
 	blockKeyPool.Put(bi.key)
 	if !bi.Valid() {
 		return model.Entry{Version: 0}, bi.err
 	}
 	item := bi.Item().Item
+	// 所以这里也得再次判断一下;
 	if model.SameKeyNoTs(keyTs, item.Key) {
 		// Key 已被 setIndex 拷贝; 仅需把 Value 从共享缓存块中拷出;
 		item.Value = model.SafeCopy(nil, item.Value)

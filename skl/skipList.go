@@ -133,7 +133,6 @@ func (skipList *SkipList) getHeight() int32 {
 	return atomic.LoadInt32(&skipList.height)
 }
 func (skipList *SkipList) GetMemSize() int64 {
-	// return skipList.arena.size()
 	return atomic.LoadInt64(&skipList.num)
 }
 

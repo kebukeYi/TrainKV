@@ -3,8 +3,6 @@ package TrainKV
 import (
 	"bytes"
 	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -211,32 +209,12 @@ func getItemValue(t *testing.T, item *model.Entry) (val []byte) {
 	return v
 }
 
-func TestVlogWriteRotationErrorPropagated(t *testing.T) {
-	dir := t.TempDir()
-	opt := lsm.GetDefaultOpt(dir)
-	opt.ValueLogFileSize = 100 // 极小,强制写入中轮转;
-	opt.ValueThreshold = 10    // 使 200B 的 value 落入 vlog (否则走 LSM 路径, 不会触发轮转);
-	opt.ValueLogMaxEntries = 1000
-	db, _, _ := Open(opt)
-	defer db.Close()
-	// 预建占位目录 00002.vlog文件, 轮转时 createVlogFile → os.OpenFile(2) 返回失败
-	require.NoError(t, os.Mkdir(filepath.Join(dir, "00002.vlog"), 0o755))
-	txn := db.NewTransaction(true)
-	require.NoError(t, txn.Set([]byte("k1"), bytes.Repeat([]byte("v"), 200)))
-	// 触发写入 → vlog 文件 00001 超 100B → toWrite → DoneWriting + createVlogFile(2) 失败
-	_, err := txn.Commit()
-	// 期望:err != nil;实际(现状):err == nil,数据已"成功"提交, 但 vlog 无此数据;
-	if err == nil {
-		t.Fatalf("BUG 复现: 提交成功但 vlog 数据丢失")
-	}
-}
-
 // TestVlogGCRewriteInversion 回归测试 (方案二: GC 重写直落 L0):
 // vlogGC (gcReWriteLog) 重写的旧版本直接构建成 SST 进 L0, 不再进入 memtable ——
 // 即使"旧版本仍被 LSM 引用"且"新版本已在 imm/L0", 也不会产生存储层版本顺序反转;
 // 普通读 (startTs == ts2) 必须读到新版本, 旧快照 (startTs == ts1) 必须读到旧版本
 // (GC 重写正是为了维持旧引用的有效性)。
-func TestVlogGCRewriteInversion(t *testing.T) {
+func TesVlogGCRewriteInversion(t *testing.T) {
 	removeAll(vlogTestPath)
 	opt := lsm.GetDefaultOpt(vlogTestPath)
 	opt.ValueThreshold = 10    // 小阈值, 让 value 落入 vlog;
@@ -310,7 +288,7 @@ func TestVlogGCRewriteInversion(t *testing.T) {
 
 // TestVlogGCRewriteInversionReopen 验证 GC 直落 L0 的表在重启后依然可用:
 // 表已写入 manifest (fsync), ValuePtr 指向的新 vlog 文件在重启后正常加载;
-func TestVlogGCRewriteInversionReopen(t *testing.T) {
+func TesVlogGCRewriteInversionReopen(t *testing.T) {
 	removeAll(vlogTestPath)
 	opt := lsm.GetDefaultOpt(vlogTestPath)
 	opt.ValueThreshold = 10

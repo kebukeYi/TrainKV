@@ -5,9 +5,7 @@ import (
 	"hash"
 	"hash/crc32"
 	"io"
-	"math/rand"
 	"sync"
-	"time"
 
 	"github.com/kebukeYi/TrainKV/v2/common"
 )
@@ -30,6 +28,7 @@ type Entry struct {
 
 var EntryPool = sync.Pool{New: func() any { return &Entry{} }}
 
+// 只有事务调用;
 func NewEntry(key, val []byte) *Entry {
 	e := EntryPool.Get().(*Entry)
 	e.Key, e.Value = key, val
@@ -45,43 +44,11 @@ func (e *Entry) Release() {
 	EntryPool.Put(e)
 }
 
-// 生成随机字符串作为key和value;
-func randStr(length int) string {
-	// 包括特殊字符,进行测试
-	str := "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	bytes := []byte(str)
-	result := []byte{}
-	rand.Seed(time.Now().UnixNano() + int64(rand.Intn(100)))
-	for i := 0; i < length; i++ {
-		result = append(result, bytes[rand.Intn(len(bytes))])
-	}
-	return string(result)
-}
-
-func (e *Entry) WithTTL(dur time.Duration) *Entry {
-	e.ExpiresAt = uint64(time.Now().Add(dur).Unix())
-	return e
-}
-
 func (e *Entry) EncodeSize() uint32 {
 	valLen := len(e.Value)
 	varIntLen := sizeVarInt(uint64(e.Meta))
 	ExpiresAtLen := sizeVarInt(e.ExpiresAt)
 	return uint32(valLen + varIntLen + ExpiresAtLen)
-}
-
-func (e *Entry) IsDeleteOrExpired() bool {
-	if (e.Meta & common.BitDelete) > 0 {
-		return true
-	}
-
-	if e.Value == nil {
-		return true
-	}
-	if e.ExpiresAt == 0 {
-		return false
-	}
-	return e.ExpiresAt <= uint64(time.Now().Unix())
 }
 
 func (e *Entry) EstimateSize(valThreshold int64) int {
@@ -209,4 +176,10 @@ func (r *HashReader) ReadByte() (byte, error) {
 
 func (r *HashReader) Sum32() uint32 {
 	return r.H.Sum32()
+}
+
+// Reset 复用同一 HashReader 解码下一条记录, 避免 vlog/WAL 顺序扫描时每条目新建 crc32 对象;
+func (r *HashReader) Reset() {
+	r.H.Reset()
+	r.ByteRead = 0
 }

@@ -1,7 +1,6 @@
 package lsm
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
@@ -26,7 +25,6 @@ type WAL struct {
 	file       *file.MmapFile
 	opt        *utils.FileOptions
 	lock       sync.Mutex
-	buf        *bytes.Buffer
 	crcTable   *crc32.Table // 写路径经 handleWriteCh 串行化, 无需每记录新建哈希对象;
 	writeAt    uint32
 	readAt     uint32
@@ -42,18 +40,13 @@ func OpenWalFile(opt *utils.FileOptions) *WAL {
 		file:     mmapFile,
 		writeAt:  0,
 		opt:      opt,
-		buf:      &bytes.Buffer{},
 		crcTable: common.CastigationCryTable,
 	}
 }
 
 func (w *WAL) Write(e *model.Entry) error {
-	w.buf.Reset()
-	size, err := w.WalEncode(w.buf, e)
-	if err != nil {
-		return err
-	}
-	err = w.file.AppendBuffer(w.writeAt, w.buf.Bytes())
+	// 直接编码进 mmap, 避免 bytes.Buffer 中转的二次拷贝 (与 vlogFile.EncodeEntryAt 同模式);
+	size, err := w.EncodeAt(e, atomic.LoadUint32(&w.writeAt))
 	if err != nil {
 		return err
 	}
@@ -91,8 +84,9 @@ func allZero(buf []byte) bool {
 	return true
 }
 
-// WalEncode | header(meta,klen,vlen,expir) | key | value | crc32 |
-func (w *WAL) WalEncode(buf *bytes.Buffer, e *model.Entry) (int, error) {
+// EncodeAt | header(meta,klen,vlen,expir) | key | value | crc32 |
+// 与 vlogFile.EncodeEntryAt 相同的布局; 直接编码进 mmap 指定偏移, 返回编码总长;
+func (w *WAL) EncodeAt(e *model.Entry, offset uint32) (int, error) {
 	header := model.EntryHeader{
 		KLen:      uint32(len(e.Key)),
 		VLen:      uint32(len(e.Value)),
@@ -100,17 +94,21 @@ func (w *WAL) WalEncode(buf *bytes.Buffer, e *model.Entry) (int, error) {
 		Meta:      e.Meta,
 	}
 	var headerEnc [WalHeaderSize]byte
-	sz := header.Encode(headerEnc[:])
-
-	buf.Write(headerEnc[:sz])
-	buf.Write(e.Key)
-	buf.Write(e.Value)
-
-	var crcBuf [crcSize]byte
-	// 整条记录一次算出 crc; 若走 hash.Hash 接口逐段 Write, headerEnc 会经接口逃逸到堆;
-	binary.BigEndian.PutUint32(crcBuf[:], crc32.Checksum(buf.Bytes(), w.crcTable))
-	buf.Write(crcBuf[:])
-	return sz + len(e.Key) + len(e.Value) + len(crcBuf), nil
+	encodeLen := header.Encode(headerEnc[:])
+	total := encodeLen + len(e.Key) + len(e.Value) + crcSize
+	if int(offset)+total > len(w.file.Buf) {
+		// 预分配(MemTableSize)不足时扩容; 轮转预判按 arena 上界估算, 正常不会触发;
+		if err := w.file.Truncate(int64(offset) + int64(total)); err != nil {
+			return 0, err
+		}
+	}
+	dst := w.file.Buf[offset:]
+	n := copy(dst, headerEnc[:encodeLen])
+	n += copy(dst[n:], e.Key)
+	n += copy(dst[n:], e.Value)
+	// 对已写区段整体算 crc (数据刚写入, 读回在缓存中);
+	binary.BigEndian.PutUint32(dst[n:], crc32.Checksum(dst[:n], w.crcTable))
+	return total, nil
 }
 
 func (w *WAL) WalDecode(reader io.Reader) (*model.Entry, error) {

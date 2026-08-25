@@ -52,9 +52,8 @@ func (lsm *LSM) Put(entry *model.Entry) (err error) {
 		lsm.Rotate()
 	}
 
-	// 1. 跳表中进行对比时, key 去除掉 Ts 时间戳号, 原生key相同则更新;
-	// 2. 添加进跳表中的 key 是携带有 Ts时间戳;
-	// 3. wal文件持久化的的 key 是携带有 Ts时间错;
+	// 1. 添加进跳表中的 key 是携带有 版本号;
+	// 2. wal文件持久化的的 key 是携带有 版本号;
 	err = lsm.memoryTable.Put(entry)
 	if err != nil {
 		return err
@@ -74,9 +73,6 @@ func (lsm *LSM) Get(keyTs []byte) (model.Entry, error) {
 	if len(keyTs) <= 8 {
 		return model.Entry{Version: 0}, common.ErrEmptyKey
 	}
-	var (
-		maxEntryTs model.Entry
-	)
 	startTs := model.ParseTsVersion(keyTs)
 
 	// Read of IncrRef; 无 immutable 时直接在栈上持有引用, 避免每次 Get 分配切片;
@@ -112,15 +108,13 @@ func (lsm *LSM) Get(keyTs []byte) (model.Entry, error) {
 		//    保证是本 key 的全局最新可见版本;
 		//    vlogGC 重写条目(无 BitTxn, 见 vlog.go#gcReWriteLog)会把仍被 LSM 引用的旧版本复活进
 		//    最新 memtable, 破坏"存储层新旧顺序 = 版本顺序"不变量, 必须走全层取最大兜底;
-		if entry.Version <= startTs && entry.Meta&common.BitTxn != 0 {
+		if entry.Version <= startTs && (entry.Meta&common.BitTxn != 0) {
 			return entry, nil
 		}
-		if entry.Version > maxEntryTs.Version {
-			maxEntryTs = entry
-		}
 	}
+
 	for _, memoryTable := range imms {
-		entry, _ := memoryTable.Get(keyTs)
+		entry, _ = memoryTable.Get(keyTs)
 		if entry.Version == 0 && entry.Value == nil {
 			continue
 		}
@@ -128,16 +122,14 @@ func (lsm *LSM) Get(keyTs []byte) (model.Entry, error) {
 			return entry, nil
 		}
 		// 同 mt: 仅普通事务条目可提前返回 (理由同上);
-		if entry.Version <= startTs && entry.Meta&common.BitTxn != 0 {
+		if entry.Version <= startTs && (entry.Meta&common.BitTxn != 0) {
 			return entry, nil
 		}
-		if entry.Version > maxEntryTs.Version {
-			maxEntryTs = entry
-		}
+
 	} // imms[] over
 
 	// 2. level 0-7 层 进行寻找;
-	return lsm.LevelManger.Get(keyTs, &maxEntryTs)
+	return lsm.LevelManger.Get(keyTs)
 }
 
 func (lsm *LSM) MaxVersion() uint64 {
@@ -163,14 +155,6 @@ func (lsm *LSM) MaxVersion() uint64 {
 	return maxVersion
 }
 
-func (lsm *LSM) MemSize() int64 {
-	return lsm.memoryTable.Size()
-}
-
-func (lsm *LSM) MemTableIsNil() bool {
-	return lsm.memoryTable == nil
-}
-
 func (lsm *LSM) GetSkipListFromMemTable() *skl.SkipList {
 	return lsm.memoryTable.skipList
 }
@@ -185,6 +169,12 @@ func (lsm *LSM) Rotate() {
 	lsm.immemoryTables = append(lsm.immemoryTables, lsm.memoryTable)
 	lsm.memoryTable = lsm.NewMemoryTable()
 	lsm.Unlock()
+	// lsm.Rotate() 内, push 通道之前:
+	//if lsm.Option.SyncWrites {
+	//	if err := im.wal.SyncFile(); err != nil { /* SyncWrites 语义下视为致命 */
+	//		panic(err)
+	//	}
+	//}
 	// 通道有可能阻塞;
 	lsm.flushMemTable <- im
 }

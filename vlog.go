@@ -209,30 +209,41 @@ func (vlog *ValueLog) getUnlockCallBack(vlogFile *VLogFile) func() {
 	return vlogFile.Lock.RUnlock
 }
 
+// validateWrites 模拟 vlog.Write 的实际写入过程, 提前拒绝必然写不下的批次;
+// 与实际写路径 (Write#toWrite) 保持一致: 只统计真正写入 vlog 的大 value 条目,
+// 以 ValueLogFileSize + ValueLogMaxEntries 为轮转条件, 避免旧逻辑按
+// ValueLogFileMaxSize(4GB) 模拟导致大批次时的误报/漏报;
 func (vlog *ValueLog) validateWrites(reqs []*model.Request) error {
 	writableFileOffset := uint64(atomic.LoadUint32(&vlog.writableFileOffset))
+	entriesWritten := uint64(vlog.entriesWrittenNum) // 当前文件已写入的条目数
 	for _, req := range reqs {
-		size := estimateRequestSize(req)
+		var size, count uint64
+		for _, entry := range req.Entries {
+			if vlog.Db.ShouldWriteValueToLSM(entry) {
+				continue // LSM 直写条目不占用 vlog 文件空间;
+			}
+			size += uint64(common.MaxHeaderSize + len(entry.Key) + len(entry.Value) + crc32.Size)
+			count++
+		}
+		// 文件 offset 以 uint32 存储, 单请求(不可跨文件)超过上限即拒绝;
+		if size > uint64(vlog.Opt.ValueLogFileMaxSize) {
+			return fmt.Errorf("request size offset %d is bigger than ValueLogFileMaxSize %d",
+				size, vlog.Opt.ValueLogFileMaxSize)
+		}
 		estimatedVlogOffset := writableFileOffset + size
 		if estimatedVlogOffset > uint64(vlog.Opt.ValueLogFileMaxSize) {
-			return fmt.Errorf("request size offset %d is bigger than ValueLogFileMaxSize %d",
-				estimatedVlogOffset, vlog.Opt.ValueLogFileMaxSize)
+			return fmt.Errorf("request size offset %d is bigger than ValueLogFileMaxSize %d", estimatedVlogOffset, vlog.Opt.ValueLogFileMaxSize)
 		}
-		if estimatedVlogOffset >= uint64(vlog.Opt.ValueLogFileMaxSize) {
+		// 请求写入完成后若达到轮转条件, 下一请求从新文件的 0 偏移开始;
+		if estimatedVlogOffset >= uint64(vlog.Opt.ValueLogFileSize) || entriesWritten+count > uint64(vlog.Opt.ValueLogMaxEntries) {
 			writableFileOffset = 0
+			entriesWritten = 0
 			continue
 		}
 		writableFileOffset = estimatedVlogOffset
+		entriesWritten += count
 	}
 	return nil
-}
-
-func estimateRequestSize(req *model.Request) uint64 {
-	size := uint64(0)
-	for _, entry := range req.Entries {
-		size += uint64(common.MaxHeaderSize + len(entry.Key) + len(entry.Value) + crc32.Size)
-	}
-	return size
 }
 
 func (vlog *ValueLog) Write(reqs []*model.Request) (wrote bool, err error) {
@@ -464,9 +475,6 @@ func (vlog *ValueLog) handleDiscardStats() {
 func (vlog *ValueLog) createVlogFile(fid uint32) (*VLogFile, error) {
 	fpath := vlog.fpath(fid)
 	vlogFile := &VLogFile{FID: fid, Lock: sync.RWMutex{}, opt: vlog.Opt}
-	// TODO(优化): 写侧预触碰 — 新文件创建后启动后台协程, 在写游标前方预写一个窗口的页,
-	// 把 EncodeEntryAt 首写稀疏页的逐页 minor fault 成本移到后台;
-	// 需与轮转 (DoneWriting 截断) 和 Close 协调游标边界与停止信号;
 	if err := vlogFile.Open(&utils.FileOptions{
 		FID:      uint64(fid),
 		FileName: fpath,
@@ -553,10 +561,12 @@ func (vlog *ValueLog) iterator(vlogFile *VLogFile, offset uint32, fn model.LogEn
 	}
 
 	reader := bufio.NewReader(vlogFile.FD())
+	hashReader := model.NewHashReader(reader)
+	var readBuf []byte // 解码缓冲跨条目复用, 消除大 value 扫描时每条目的 make 分配;
 	var recordEntryOffset = offset
 LOOP:
 	for {
-		entry, err := vlog.Entry(reader, recordEntryOffset)
+		entry, err := vlog.Entry(hashReader, recordEntryOffset, readBuf)
 		switch {
 		case err == io.EOF:
 			break LOOP
@@ -575,12 +585,16 @@ LOOP:
 		if err = fn(entry, &vp); err != nil {
 			return 0, fmt.Errorf("iteration function %s: %w", vlogFile.FileName(), err)
 		}
+		// 回调同步消费后 entry 不再被引用 (GC 回调只 SafeCopy/跳过), 归还解码缓冲;
+		readBuf = entry.Key[:cap(entry.Key)]
 	}
 	return recordEntryOffset, nil
 }
 
-func (vlog *ValueLog) Entry(read io.Reader, offset uint32) (*model.Entry, error) {
-	hashReader := model.NewHashReader(read)
+// Entry 解码一条 vlog 记录; hashReader 与 reuseBuf 由调用方提供并复用,
+// 供 vlog 顺序扫描 (GC/恢复) 消除每条目的对象与缓冲分配;
+func (vlog *ValueLog) Entry(hashReader *model.HashReader, offset uint32, reuseBuf []byte) (*model.Entry, error) {
+	hashReader.Reset()
 	var head model.EntryHeader
 	hlen, err := head.DecodeFrom(hashReader)
 	if err != nil {
@@ -597,21 +611,26 @@ func (vlog *ValueLog) Entry(read io.Reader, offset uint32) (*model.Entry, error)
 		return nil, common.ErrEmptyVlogFile
 	}
 
-	e := &model.Entry{}
-	e.Offset = offset
-	e.HeaderLen = hlen
-	buf := make([]byte, head.KLen+head.VLen)
-	if _, err = io.ReadFull(hashReader, buf[:]); err != nil {
+	need := int(head.KLen + head.VLen)
+	if cap(reuseBuf) < need {
+		reuseBuf = make([]byte, need)
+	}
+	buf := reuseBuf[:need]
+	if _, err = io.ReadFull(hashReader, buf); err != nil {
 		if err == io.EOF {
 			err = io.ErrUnexpectedEOF
 		}
 		return nil, err
 	}
+
+	e := &model.Entry{}
+	e.Offset = offset
+	e.HeaderLen = hlen
 	e.Key = buf[:head.KLen]
 	e.Value = buf[head.KLen:]
 
 	var crcBuf [crc32.Size]byte
-	if _, err := io.ReadFull(read, crcBuf[:]); err != nil {
+	if _, err := io.ReadFull(hashReader.R, crcBuf[:]); err != nil {
 		if err == io.EOF {
 			err = io.ErrUnexpectedEOF
 		}
@@ -832,7 +851,7 @@ func (vlog *ValueLog) sendDiscardStats() error {
 	if err = json.Unmarshal(val, &statMap); err != nil {
 		return fmt.Errorf("failed to unmarshal discard stats,err:%w", err)
 	}
-	fmt.Printf("Value Log Discard stats: %v\n", statMap)
+	// fmt.Printf("Value Log Discard stats: %v\n", statMap)
 	vlog.VLogFileDisCardStaInfo.FlushCh <- statMap
 	return nil
 }

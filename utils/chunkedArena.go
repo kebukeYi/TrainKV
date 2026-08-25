@@ -1,6 +1,6 @@
 package utils
 
-// ChunkedArena 分块分配器: 块一经分配不再移动/释放, 已返回的切片永久有效;
+// ChunkedArena 分块分配器: 块一经分配不再 移动/释放, 已返回的切片永久有效;
 // 用于迭代器 Item 的稳定副本, 把每 key 多次小分配摊销成少量块分配;
 type ChunkedArena struct {
 	chunks  [][]byte
