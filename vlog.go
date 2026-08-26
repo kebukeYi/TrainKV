@@ -61,6 +61,7 @@ func (vlog *ValueLog) Open(replayFn model.LogEntry) error {
 		return err
 	}
 	if len(vlog.filesMap) == 0 {
+		// vlog 文件id 和 sst 文件id 没有关系;
 		_, err := vlog.createVlogFile(1) // 无魔数,直接从vlog文件offset=0,开始写数据;
 		return common.WarpErr("Error while creating log file in valueLog.open", err)
 	}
@@ -190,7 +191,7 @@ func (vlog *ValueLog) getVlogFileLocked(vp *model.ValuePtr) (*VLogFile, error) {
 	defer vlog.filesLock.RUnlock()
 	vLogFile, ok := vlog.filesMap[vp.Fid]
 	if !ok {
-		return nil, fmt.Errorf("file with ID: %d not found", vp.Fid)
+		return nil, fmt.Errorf("#getVlogFileLocked: vlog file with ID: %d not found", vp.Fid)
 	}
 	if vp.Fid == vlog.maxFid.Load() {
 		if vp.Offset >= vlog.getWriteOffset() {

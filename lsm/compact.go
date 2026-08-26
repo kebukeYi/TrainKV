@@ -145,7 +145,6 @@ func (lm *LevelsManger) run(compactorId int, prio compactionPriority) bool {
 		return true
 	case common.ErrFillTables:
 		fmt.Printf("doCompact: %s \n", err.Error())
-		return false
 	default:
 		log.Printf("[taskID:%d] While running doCompact: %v\\n.", compactorId, err)
 	}

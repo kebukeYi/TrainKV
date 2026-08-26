@@ -183,6 +183,7 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 	var lastBatchReqLen int64 // 上一批请求数, 用于识别并发提交场景 (串行提交恒为 1);
 	reqs := make([]*model.Request, 0, 10)
 	blockChan := make(chan struct{}, 1) // 写令牌: 保证任意时刻只有一个协程执行 WriteRequest;
+	var syncTimer *time.Timer           // 汇合窗口定时器, 跨批次复用, 避免高频提交下的定时器分配;
 
 	// 排队写盘: 先获取令牌 (拿不到则阻塞排队), 写完后释放;
 	// 令牌被占用时派发本闭包, 攒批协程可继续收集后续请求, 不被写盘阻塞;
@@ -230,18 +231,28 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 			// SyncWrites 下并发提交的汇合窗口: 短暂等待同一同步周期内先后到达的请求加入本批,
 			// 让一次刷盘覆盖更多提交; 串行提交(本批与上一批均仅 1 个请求)不等待, 无额外延迟;
 			if db.Lsm.Option.SyncWrites && reqLen < common.WriteChBatchThreshold && (reqLen > 1 || lastBatchReqLen > 1) {
-				timer := time.NewTimer(common.SyncGroupCommitWait)
+				if syncTimer == nil {
+					syncTimer = time.NewTimer(common.SyncGroupCommitWait)
+				} else {
+					syncTimer.Reset(common.SyncGroupCommitWait)
+				}
 				waiting := true
 				for waiting && reqLen < common.WriteChBatchThreshold {
 					select {
 					case r = <-db.writeCh:
 						reqs = append(reqs, r)
 						reqLen = int64(len(reqs))
-					case <-timer.C:
+					case <-syncTimer.C:
 						waiting = false
 					}
 				}
-				timer.Stop() // 阈值触发的提前退出, 回收定时器;
+				// 阈值触发的提前退出: 停表并排空通道, 保证下次 Reset 前无残留触发;
+				if !syncTimer.Stop() {
+					select {
+					case <-syncTimer.C:
+					default:
+					}
+				}
 			}
 			lastBatchReqLen = reqLen
 
@@ -251,9 +262,9 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 			case blockChan <- struct{}{}:
 				err := db.WriteRequest(reqs)
 				<-blockChan
-				if err != nil {
-					return
-				}
+				// 与派发路径一致: 写失败仅记录, 不能退出攒批协程;
+				// 否则 writeCh 失去消费者, 所有后续提交将永久阻塞 (死锁);
+				common.Err(err)
 				reqs = reqs[:0] // 复用批次切片底层数组;
 			default:
 				go writeRequest(reqs)

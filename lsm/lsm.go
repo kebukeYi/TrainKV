@@ -134,7 +134,6 @@ func (lsm *LSM) Get(keyTs []byte) (model.Entry, error) {
 
 func (lsm *LSM) MaxVersion() uint64 {
 	lsm.RLock()
-	defer lsm.RUnlock()
 	var maxVersion uint64
 	maxVersion = lsm.memoryTable.maxVersion
 	for _, table := range lsm.immemoryTables {
@@ -142,14 +141,18 @@ func (lsm *LSM) MaxVersion() uint64 {
 			maxVersion = table.maxVersion
 		}
 	}
+	lsm.RUnlock()
 
+	// 每层 tables 被 compact/flush 协程并发增删, 遍历须持层锁;
 	for i := 0; i < common.MaxLevelNum; i++ {
-		tables := lsm.LevelManger.levelHandlers[i].tables
-		for _, table := range tables {
-			if table.MaxVersion() > maxVersion {
-				maxVersion = table.MaxVersion()
+		leh := lsm.LevelManger.levelHandlers[i]
+		leh.mux.RLock()
+		for _, table := range leh.tables {
+			if v := table.MaxVersion(); v > maxVersion {
+				maxVersion = v
 			}
 		}
+		leh.mux.RUnlock()
 	}
 
 	return maxVersion
@@ -169,12 +172,16 @@ func (lsm *LSM) Rotate() {
 	lsm.immemoryTables = append(lsm.immemoryTables, lsm.memoryTable)
 	lsm.memoryTable = lsm.NewMemoryTable()
 	lsm.Unlock()
-	// lsm.Rotate() 内, push 通道之前:
-	//if lsm.Option.SyncWrites {
-	//	if err := im.wal.SyncFile(); err != nil { /* SyncWrites 语义下视为致命 */
-	//		panic(err)
-	//	}
-	//}
+
+	// SyncWrites 下, 当前批次跨轮转的条目可能已写入旧表 WAL;
+	// 在交予 flush 协程之前先同步旧 WAL, 兑现"提交返回 = 已持久化"的承诺:
+	// flush 是异步的, SST 落盘发生在提交返回之后, 不能依赖它;
+	if lsm.Option.SyncWrites {
+		if err := im.wal.SyncFile(); err != nil {
+			// SyncWrites 语义下, 已确认的提交可能丢失, 视为致命错误;
+			panic(err)
+		}
+	}
 	// 通道有可能阻塞;
 	lsm.flushMemTable <- im
 }
