@@ -62,6 +62,27 @@ func (lsm *LSM) Put(entry *model.Entry) (err error) {
 	return err
 }
 
+// RotateIfNeed 请求级轮转预判: 同一请求 = 同一事务的全部数据条目 + finTxn 结束标记,
+// 必须整体落在同一个 memtable/WAL 内; 逐条 Put 的轮转检查可能把 finTxn 拆进新 WAL
+// (数据留在旧 WAL, 旧 WAL flush 后即删除), 重开重放时新 WAL 头部出现无主 FIN →
+// recovery ErrBadTxn, 库无法打开; 调用方须在写入一个请求的所有条目之前调用本方法;
+func (lsm *LSM) RotateIfNeed(entries []*model.Entry) {
+	if len(entries) == 0 {
+		return
+	}
+	var need int64
+	for _, entry := range entries {
+		need += skl.EstimateEntryMemSize(entry)
+	}
+	// 整请求超过单表容量(配置失衡)时, 一次轮转也无法保证同表, 退回逐条轮转的旧行为;
+	if need > lsm.Option.MemTableSize {
+		return
+	}
+	if lsm.memoryTable.MemBytes()+need > lsm.Option.MemTableSize {
+		lsm.Rotate()
+	}
+}
+
 func (lsm *LSM) SyncWalFile() error {
 	if err := lsm.memoryTable.SyncWalFile(); err != nil {
 		return err

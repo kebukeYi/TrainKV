@@ -123,7 +123,7 @@ func (vlog *ValueLog) fillVlogFileMap() error {
 			return common.WarpErr(fmt.Sprintf("Duplicate file found. Please delete one. name:[%s]", f.Name()), err)
 		}
 		found[fid] = true
-		vlogFile := &VLogFile{FID: uint32(fid), Lock: sync.RWMutex{}}
+		vlogFile := &VLogFile{FID: uint32(fid), Lock: sync.RWMutex{}, opt: vlog.Opt}
 		vlog.filesMap[uint32(fid)] = vlogFile
 		if vlog.maxFid.Load() < uint32(fid) {
 			vlog.maxFid.Store(uint32(fid))
@@ -236,7 +236,8 @@ func (vlog *ValueLog) validateWrites(reqs []*model.Request) error {
 			return fmt.Errorf("request size offset %d is bigger than ValueLogFileMaxSize %d", estimatedVlogOffset, vlog.Opt.ValueLogFileMaxSize)
 		}
 		// 请求写入完成后若达到轮转条件, 下一请求从新文件的 0 偏移开始;
-		if estimatedVlogOffset >= uint64(vlog.Opt.ValueLogFileSize) || entriesWritten+count > uint64(vlog.Opt.ValueLogMaxEntries) {
+		//if estimatedVlogOffset >= uint64(vlog.Opt.ValueLogFileSize) || entriesWritten+count > uint64(vlog.Opt.ValueLogMaxEntries) {
+		if estimatedVlogOffset >= uint64(vlog.Opt.ValueLogFileSize) {
 			writableFileOffset = 0
 			entriesWritten = 0
 			continue
@@ -273,7 +274,8 @@ func (vlog *ValueLog) Write(reqs []*model.Request) (wrote bool, err error) {
 		// 先提交已编码数据 (推进偏移), 与旧逻辑 flushToFile 一致;
 		commitPending()
 		// 因为 vlogFile 会自动扩容, 达到阈值后需要创建新的文件;
-		if vlog.getWriteOffset() >= uint32(vlog.Opt.ValueLogFileSize) || vlog.entriesWrittenNum > vlog.Opt.ValueLogMaxEntries {
+		//if vlog.getWriteOffset() >= uint32(vlog.Opt.ValueLogFileSize) || vlog.entriesWrittenNum > vlog.Opt.ValueLogMaxEntries {
+		if vlog.getWriteOffset() >= uint32(vlog.Opt.ValueLogFileSize) {
 			// 截断当前达到阈值的文件;
 			if err := curVlogFile.DoneWriting(vlog.getWriteOffset()); err != nil {
 				return err
@@ -321,7 +323,6 @@ func (vlog *ValueLog) Write(reqs []*model.Request) (wrote bool, err error) {
 			req.ValPtr = append(req.ValPtr, p)
 			writeNums++
 		}
-
 		vlog.entriesWrittenNum += int32(writeNums)
 		if err := toWrite(); err != nil {
 			return wrote, err

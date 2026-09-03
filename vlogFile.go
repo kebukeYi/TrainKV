@@ -163,8 +163,14 @@ func (vlog *VLogFile) EncodeEntryAt(entry *model.Entry, offset uint32) (int, err
 	encodeLen := header.Encode(headerBuf[:])
 	total := encodeLen + len(entry.Key) + len(entry.Value) + crc32.Size
 	if int(offset)+total > len(vlog.f.Buf) {
-		// mmap 预分配容量不足时扩容 (正常轮转路径下不会触发);
-		if err := vlog.f.Truncate(int64(offset) + int64(total)); err != nil {
+		// mmap 预分配容量不足时扩容: 一次扩到创建时的默认预分配尺寸(2*ValueLogFileSize),
+		// 而不是只扩到本条记录末尾; 否则关库截断后重开, 映射紧贴数据末尾, 每追加一条都
+		// 触发 Truncate(整文件 msync + ftruncate + mremap), 写入退化为全文件同步;
+		growTo := int64(offset) + int64(total)
+		if defaultSize := int64(vlog.opt.ValueLogFileSize) * 2; defaultSize > growTo {
+			growTo = defaultSize
+		}
+		if err := vlog.f.Truncate(growTo); err != nil {
 			return 0, err
 		}
 	}

@@ -56,7 +56,8 @@ type Options struct {
 
 const KvWriteChCapacity = 1000
 
-const maxValueThreshold = 1 << 20
+// const maxValueThreshold = 1 << 20
+const maxValueThreshold = 32
 
 func GetDefaultOpt(dirPath string) *Options {
 	return &Options{
@@ -72,7 +73,7 @@ func GetDefaultOpt(dirPath string) *Options {
 		CacheNums: 1024 * 10,
 		// vlogFile
 		ValueThreshold:      maxValueThreshold,
-		ValueLogMaxEntries:  1000,
+		ValueLogMaxEntries:  10000,
 		ValueLogFileSize:    1<<30 - 1,
 		ValueLogFileMaxSize: math.MaxUint32,
 		SyncWrites:          false,

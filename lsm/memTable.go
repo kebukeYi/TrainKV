@@ -229,6 +229,12 @@ func (m *MemoryTable) recovery2SkipList() (uint32, error) {
 			}
 			entries = append(entries, entry)
 		case entry.Meta&common.BitFinTxn > 0:
+			// 孤儿 FIN (无配对 BitTxn): 旧版本按条目轮转会把同一事务的 finTxn 拆进新 WAL
+			// (数据已随旧表 flush 成 SST), 空事务提交也会留下纯 fin 记录; 直接跳过,
+			// 保证存量库可重开; 有未完成事务时 fin 值不匹配仍视为损坏;
+			if lastCommitTs == 0 {
+				continue
+			}
 			parseUint, err := strconv.ParseUint(string(entry.Value), 10, 64)
 			if err != nil || parseUint != lastCommitTs {
 				return validEndOffset, common.ErrBadTxn

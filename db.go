@@ -349,6 +349,10 @@ func (db *TrainKV) writeToLSM(req *model.Request) error {
 	if len(req.ValPtr) != len(req.Entries) {
 		return fmt.Errorf("#writeToLSM: Ptrs and Entries don't match: %+v", req)
 	}
+	// 同一请求(同一事务的数据 + finTxn 标记)整体先做一次轮转预判, 避免逐条 Put 的
+	// 轮转把 finTxn 拆进新 WAL, 重开重放时出现孤儿 FIN 而 panic;
+	db.Lsm.RotateIfNeed(req.Entries)
+
 	for i, entry := range req.Entries {
 		if db.ShouldWriteValueToLSM(entry) {
 			// 以防万一;

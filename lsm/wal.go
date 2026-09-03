@@ -97,8 +97,13 @@ func (w *WAL) EncodeAt(e *model.Entry, offset uint32) (int, error) {
 	encodeLen := header.Encode(headerEnc[:])
 	total := encodeLen + len(e.Key) + len(e.Value) + crcSize
 	if int(offset)+total > len(w.file.Buf) {
-		// 预分配(MemTableSize)不足时扩容; 轮转预判按 arena 上界估算, 正常不会触发;
-		if err := w.file.Truncate(int64(offset) + int64(total)); err != nil {
+		// 预分配(MemTableSize)不足时扩容: 一次扩到创建时的默认预分配尺寸(MaxSz),
+		// 避免精确扩容导致每次追加都触发 Truncate(整文件 msync + ftruncate + mremap);
+		growTo := int64(offset) + int64(total)
+		if defaultSize := int64(w.opt.MaxSz); defaultSize > growTo {
+			growTo = defaultSize
+		}
+		if err := w.file.Truncate(growTo); err != nil {
 			return 0, err
 		}
 	}

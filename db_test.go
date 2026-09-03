@@ -2,6 +2,7 @@ package TrainKV
 
 import (
 	"fmt"
+	"os"
 	"sync"
 	"testing"
 
@@ -361,4 +362,73 @@ func TestDBConcurrentOperations(t *testing.T) {
 		)
 		txn.Discard()
 	}
+}
+
+// TestDBEmptyTxnCommitReopen 空事务(无任何写)直接 Commit 后重开:
+// 旧版本会为它写一条孤立的 finTxn 记录, WAL 重放时无配对 BitTxn → ErrBadTxn,
+// Open 直接 panic; 修复后空事务不落 WAL, 重开必须成功;
+func TestDBEmptyTxnCommitReopen(t *testing.T) {
+	dir, err := os.MkdirTemp("", "trainkv-test")
+	require.NoError(t, err)
+	defer removeAll(dir)
+
+	opt := lsm.GetDefaultOpt(dir)
+	db, err, callBack := Open(opt)
+	require.NoError(t, err)
+
+	txn := db.NewTransaction(true)
+	_, err = txn.Commit() // 不 Set/Delete 直接提交;
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	_ = callBack()
+
+	// 重开必须成功 (孤儿 FIN 回归);
+	reDB, err, _ := Open(opt)
+	require.NoError(t, err)
+	defer reDB.Close()
+
+	txn2 := reDB.NewTransaction(false)
+	defer txn2.Discard()
+	_, err = txn2.Get([]byte("no-such-key"))
+	require.Error(t, err)
+}
+
+// TestDBReopenAfterManyRotations 数据覆盖多次 memtable 轮转后 Close → 重开:
+// 修复前逐条轮转可能把 finTxn 拆进新 WAL (孤儿 FIN), 重开 panic 或丢数据;
+// 修复后请求级预转保证同事务同表, 重开后全部 key 可读且计数一致;
+func TestDBReopenAfterManyRotations(t *testing.T) {
+	dir, err := os.MkdirTemp("", "trainkv-test")
+	require.NoError(t, err)
+	defer removeAll(dir)
+
+	opt := lsm.GetDefaultOpt(dir)
+	opt.MemTableSize = 8 << 20 // 缩小 memtable, 让写入覆盖多次轮转;
+	db, err, callBack := Open(opt)
+	require.NoError(t, err)
+
+	const total = 200000
+	val := []byte("val")
+	for i := 0; i < total; i++ {
+		txn := db.NewTransaction(true)
+		require.NoError(t, txn.Set([]byte(fmt.Sprintf("k%08d", i)), val))
+		_, err = txn.Commit()
+		require.NoError(t, err)
+	}
+	require.NoError(t, db.Close())
+	_ = callBack()
+
+	reDB, err, _ := Open(opt)
+	require.NoError(t, err)
+	defer reDB.Close()
+
+	require.NoError(t, reDB.View(func(txn *Transaction) error {
+		iter := txn.NewIterator(&interfaces.Options{IsAsc: true, IsSetCache: false})
+		defer func() { _ = iter.Close() }()
+		count := 0
+		for iter.Rewind(); iter.Valid(); iter.Next() {
+			count++
+		}
+		require.Equal(t, total, count)
+		return nil
+	}))
 }

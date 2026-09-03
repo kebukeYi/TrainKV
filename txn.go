@@ -402,6 +402,17 @@ func (t *Transaction) commitAndSendToDB() (func() (uint64, error), error) {
 		})
 	}
 
+	// 空事务(无任何写)不落 WAL: 单独的 finTxn 记录没有配对的 BitTxn 数据, 重放时形成
+	// 孤儿 FIN (lastCommitTs==0) → ErrBadTxn, 库无法重开; 直接完成水印即可返回;
+	if len(entries) == 0 {
+		t.entries = entries
+		ret := func() (uint64, error) {
+			manager.doneCommit(commitTs)
+			return commitTs, nil
+		}
+		return ret, nil
+	}
+
 	// finTxn 结束标记 entry 及其 ts 序列化缓冲均为池化事务的 私有领域, 提交完成后, 不清理即可复用;
 	entry := t.finEntry
 	if entry == nil {

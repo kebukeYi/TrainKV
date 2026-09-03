@@ -30,6 +30,8 @@ func OpenMmapFile(fileName string, flag int, maxSz int32) (*MmapFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("unable to open: %s, err:%w", fileName, err)
 	}
+	// 1.新文件;
+	// 2.打开旧文件;
 	fileSize := fi.Size()
 	if fileSize == 0 && maxSz > 0 {
 		// 说明是新创建文件流程, 进行截断文件;
