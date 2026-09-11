@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync/atomic"
 	"testing"
 
 	"github.com/kebukeYi/TrainKV/v2/common"
@@ -17,6 +18,9 @@ import (
 )
 
 var compactTestPath = "/usr/golanddata/trainkv/compact"
+
+// testTxnDoneIndex 测试共享的事务结束水位(替代已移除的 LevelsManger.txnDoneIndex 字段);
+var testTxnDoneIndex atomic.Uint64
 
 var compactOptions = &Options{
 	WorkDir:            compactTestPath,
@@ -46,7 +50,7 @@ var compactOptions = &Options{
 	MaxLevelNum:         common.MaxLevelNum,
 	SSTKeyRangCheckNums: 5000,
 	NumVersionsToKeep:   1,
-	TxnDoneIndexCh:      nil,
+	TxnDoneIndex:        &testTxnDoneIndex,
 	// Txn
 	DetectConflicts: true,
 }
@@ -229,7 +233,7 @@ func TestCompaction(t *testing.T) {
 			}
 			// 手动设置到 l1 层;
 			cdef.dst.dstLevelId = 1
-			lsm.LevelManger.txnDoneIndex.Store(math.MaxUint64)
+			testTxnDoneIndex.Store(math.MaxUint64)
 			// 执行 l0 -> l1 层 合并计划;
 			require.NoError(t, lsm.LevelManger.runCompactDef(-1, 0, cdef))
 			// foo version 1, 2 将会被剔除掉, 只留下最高版本3 ;
@@ -271,7 +275,7 @@ func TestCompaction(t *testing.T) {
 			}
 			cdef.dst.dstLevelId = 1
 			// 手动设置 现在的数据都是可合并状态;
-			lsm.LevelManger.txnDoneIndex.Store(math.MaxUint64)
+			testTxnDoneIndex.Store(math.MaxUint64)
 			require.NoError(t, lsm.LevelManger.runCompactDef(-1, 0, cdef))
 			getAllAndCheck(t, lsm, []keyValVersion{
 				{"foo", "bar", 4, 0},
@@ -316,7 +320,7 @@ func TestCompaction(t *testing.T) {
 				dst:        lsm.LevelManger.levelTargets(),
 			}
 			cdef.dst.dstLevelId = 1
-			lsm.LevelManger.txnDoneIndex.Store(math.MaxUint64)
+			testTxnDoneIndex.Store(math.MaxUint64)
 			require.NoError(t, lsm.LevelManger.runCompactDef(-1, 0, cdef))
 			getAllAndCheck(t, lsm, []keyValVersion{
 				{"foo", "bar", 4, 0}, // 在level2层,l2 没有参与 l0->l1 的合并;
@@ -351,7 +355,7 @@ func TestCompaction(t *testing.T) {
 				dst:        lsm.LevelManger.levelTargets(),
 			}
 			cdef.dst.dstLevelId = 2
-			lsm.LevelManger.txnDoneIndex.Store(math.MaxUint64)
+			testTxnDoneIndex.Store(math.MaxUint64)
 			require.NoError(t, lsm.LevelManger.runCompactDef(-1, 1, cdef))
 			getAllAndCheck(t, lsm, []keyValVersion{
 				{"foo", "bar", 3, 0},
@@ -392,7 +396,7 @@ func TestCompaction(t *testing.T) {
 					dst:        lsm.LevelManger.levelTargets(),
 				}
 				cdef.dst.dstLevelId = 2
-				lsm.LevelManger.txnDoneIndex.Store(math.MaxUint64)
+				testTxnDoneIndex.Store(math.MaxUint64)
 				require.NoError(t, lsm.LevelManger.runCompactDef(-1, 1, cdef))
 				// 处在l1,l2 层中的 fooz 并没有和下层l3 有overlap, 按照常规下, 是会被清理掉的, 但是为什么没有清理掉?
 				// 但是处在 l1,l2 层中的 foo 和l3层有重合, 因此 hasOverlap, 也就被置为 true; 因此属于是连带效应,没有被铲除;
@@ -447,7 +451,7 @@ func TestCompaction(t *testing.T) {
 					dst:        lsm.LevelManger.levelTargets(),
 				}
 				cdef.dst.dstLevelId = 2
-				lsm.LevelManger.txnDoneIndex.Store(math.MaxUint64)
+				testTxnDoneIndex.Store(math.MaxUint64)
 				require.NoError(t, lsm.LevelManger.runCompactDef(-1, 1, cdef))
 				// l1, l2 和 l3 有交集, 因此在合并过程中, 不能贸然把删除标记数据跳过;
 				getAllAndCheck(t, lsm, []keyValVersion{
@@ -483,7 +487,7 @@ func TestCompaction(t *testing.T) {
 					dst:        lsm.LevelManger.levelTargets(),
 				}
 				cdef.dst.dstLevelId = 2
-				lsm.LevelManger.txnDoneIndex.Store(math.MaxUint64)
+				testTxnDoneIndex.Store(math.MaxUint64)
 				require.NoError(t, lsm.LevelManger.runCompactDef(-1, 1, cdef))
 				// 没有出现 重合, 删除标记跳过;
 				getAllAndCheck(t, lsm, []keyValVersion{
@@ -632,7 +636,7 @@ func TestCompaction(t *testing.T) {
 				cdef.nextRange = getKeyRange(lsm.LevelManger.levelHandlers[2].tables...)
 				cdef.dst = lsm.LevelManger.levelTargets()
 				cdef.dst.dstLevelId = 2
-				lsm.LevelManger.txnDoneIndex.Store(math.MaxUint64)
+				testTxnDoneIndex.Store(math.MaxUint64)
 				require.NoError(t, lsm.LevelManger.runCompactDef(-1, 1, cdef))
 				// 所有数据都 被 l2 覆盖了, 删除标记跳过;
 				getAllAndCheck(t, lsm, []keyValVersion{

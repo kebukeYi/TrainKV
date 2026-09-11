@@ -16,13 +16,10 @@ type LevelsManger struct {
 	levelHandlers    []*LevelHandler // 每层的处理器
 	opt              *Options
 	lsm              *LSM              // 上层引用
-	txnDoneIndex     atomic.Uint64     // 所有已读事务的结束索引,方便 compact;
 	cache            *LevelsCache      // 缓存 block 和 sst.index() 数据
 	manifestFile     *ManifestFile     // 增删 sst 元信息;
 	compactIngStatus *compactIngStatus // 所有层的压缩状态信息;
 
-	stopCh         chan struct{}  // 通知 getTxnDoneIndexFromCh 退出;
-	stopWG         sync.WaitGroup // 等待 getTxnDoneIndexFromCh 真正退出;
 	discardStatsWG sync.WaitGroup // 等待 compaction 的 discardStats 发送协程退出;
 }
 
@@ -45,44 +42,25 @@ func (lm *LevelsManger) NextFileID() uint64 {
 
 func (lsm *LSM) InitLevelManger(opt *Options) *LevelsManger {
 	lm := &LevelsManger{
-		lsm:    lsm,
-		opt:    opt,
-		stopCh: make(chan struct{}),
+		lsm: lsm,
+		opt: opt,
 	}
 	lm.compactIngStatus = lsm.newCompactStatus()
 	if err := lm.loadManifestFile(); err != nil {
 		common.Panic(err)
 	}
-	// 日后 close(lm.stopCh), 当前携程能正常退出;
-	lm.stopWG.Add(1)
-	go func() {
-		defer lm.stopWG.Done()
-		lm.getTxnDoneIndexFromCh()
-	}()
 	if err := lm.build(); err != nil {
 		common.Panic(err)
 	}
 	return lm
 }
 
-func (lm *LevelsManger) getTxnDoneIndexFromCh() {
-	if lm.opt.TxnDoneIndexCh == nil {
-		return
-	}
-	for {
-		select {
-		case <-lm.stopCh:
-			return
-		case r := <-lm.opt.TxnDoneIndexCh:
-			if r != 0 {
-				lm.txnDoneIndex.Store(r)
-			}
-		}
-	}
-}
-
+// getDiscardTs 返回事务结束水位; 水位由事务管理器直接发布到共享原子, 这里按需读取, 无通知协程;
 func (lm *LevelsManger) getDiscardTs() uint64 {
-	return lm.txnDoneIndex.Load()
+	if lm.opt.TxnDoneIndex == nil {
+		return 0
+	}
+	return lm.opt.TxnDoneIndex.Load()
 }
 
 func (lm *LevelsManger) loadManifestFile() (err error) {
@@ -226,9 +204,6 @@ func (lm *LevelsManger) flush(imm *MemoryTable) (err error) {
 }
 
 func (lm *LevelsManger) close() error {
-	// 通知 getTxnDoneIndexFromCh() 函数退出;
-	close(lm.stopCh)
-	lm.stopWG.Wait()         // 等 getTxnDoneIndexFromCh 退出后再返回, 防止其仍读 opt.TxnDoneIndexCh;
 	lm.discardStatsWG.Wait() // 等 discardStats 发送协程退出, 防止其仍读 Option.DiscardStatsCh;
 	if err := lm.manifestFile.Close(); err != nil {
 		return err

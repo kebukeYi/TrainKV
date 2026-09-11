@@ -41,7 +41,7 @@ func NewTransactionManager(options *lsm.Options) *TransactionManager {
 		commitMark:      &utils.LimitMark{Name: "commitMark"},
 		closer:          utils.NewCloser(2),
 	}
-	tm.startMark.Init(tm.closer, options.TxnDoneIndexCh)
+	tm.startMark.Init(tm.closer, options.TxnDoneIndex)
 	tm.commitMark.Init(tm.closer, nil)
 	return tm
 }

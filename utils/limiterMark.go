@@ -64,10 +64,10 @@ type LimitMark struct {
 	doneIndex atomic.Uint64 // 已经结束的索引;
 }
 
-func (lm *LimitMark) Init(closer *Closer, doneIndexCh chan uint64) {
+func (lm *LimitMark) Init(closer *Closer, doneIndexMirror *atomic.Uint64) {
 	lm.markCh = make(chan mark, 100)
 	// 流水线似,处理索引;
-	go lm.processOn(closer, doneIndexCh)
+	go lm.processOn(closer, doneIndexMirror)
 }
 
 func (lm *LimitMark) Begin(x uint64) {
@@ -116,7 +116,7 @@ func (lm *LimitMark) WaitForIndexDone(ctx context.Context, index uint64) error {
 	}
 }
 
-func (lm *LimitMark) processOn(closer *Closer, doneIndexCh chan uint64) {
+func (lm *LimitMark) processOn(closer *Closer, doneIndexMirror *atomic.Uint64) {
 	defer closer.Done()
 
 	var minHeap u64Heap
@@ -168,15 +168,9 @@ func (lm *LimitMark) processOn(closer *Closer, doneIndexCh chan uint64) {
 		if curIndex != doneIndex {
 			swapped := lm.doneIndex.CompareAndSwap(doneIndex, curIndex)
 			AssertTrue(swapped)
-			// 通知 compactor , 这个活跃读事务终于结束了, 可以进行数据清理了;
-			if doneIndexCh != nil {
-				go func() {
-					select {
-					case doneIndexCh <- curIndex:
-					case <-closer.CloseSignal:
-						// tm.Stop() 后立即退出, 不再阻塞在 send 上;
-					}
-				}()
+			// 水位直接发布到共享原子; compactor 按需读取(无通道传递/无通知协程/无唤醒);
+			if doneIndexMirror != nil {
+				doneIndexMirror.Store(curIndex)
 			}
 		}
 

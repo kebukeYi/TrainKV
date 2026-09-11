@@ -26,6 +26,7 @@ type TrainKV struct {
 	writeCh            chan *model.Request
 	VlogReplayHead     model.ValuePtr
 	logRotates         int32
+	txnDoneIndex       atomic.Uint64 // 事务结束水位, 由 startMark 发布, compact 按需读取;
 	Closer             closer
 	closeOnce          sync.Once
 	isClosed           atomic.Bool
@@ -58,7 +59,7 @@ func Open(opt *lsm.Options) (*TrainKV, error, func() error) {
 	db.initVlog()
 	opt.DiscardStatsCh = &db.vlog.VLogFileDisCardStaInfo.FlushCh
 
-	db.Opt.TxnDoneIndexCh = make(chan uint64, 1)
+	db.Opt.TxnDoneIndex = &db.txnDoneIndex // 水位共享原子: startMark 发布, compact 按需读取;
 	db.Closer.memtable = utils.NewCloser(1)
 	db.Lsm = lsm.NewLSM(opt, db.Closer.memtable)
 

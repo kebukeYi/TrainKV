@@ -43,7 +43,7 @@ func TestLastLevelCompaction(t *testing.T) {
 		l6.mux.Unlock()
 
 		// ③ 版本水位拉满 + 回拨表龄 (findMaxLevelTables 要求 ≥1h);
-		lsm.LevelManger.txnDoneIndex.Store(math.MaxUint64)
+		testTxnDoneIndex.Store(math.MaxUint64)
 		old := time.Now().Add(-2 * time.Hour)
 		tab.sst.SetCreatedAt(&old)
 

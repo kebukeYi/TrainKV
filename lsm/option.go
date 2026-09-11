@@ -3,6 +3,7 @@ package lsm
 import (
 	"math"
 	"os"
+	"sync/atomic"
 
 	"github.com/kebukeYi/TrainKV/v2/common"
 )
@@ -36,16 +37,16 @@ type Options struct {
 	MaxBatchSize  int64 // 批处理entry总量大小; 1. 2.txn 提交,会进行批处理数量判断;
 
 	// Compact
-	NumCompactors       int         // 合并协程数量;默认2;
-	BaseLevelSize       int64       // 基层中 所期望的文件大小;
-	LevelSizeMultiplier int         // 决定 level 之间期望 总体文件 size 比例, 默认是 10倍;
-	TableSizeMultiplier int         // 决定每层 文件 递增倍数;
-	BaseTableSize       int64       // 基层中 文件所期望的文件大小;
-	NumLevelZeroTables  int         // 第 0 层中, 允许存在的最大表数量;
-	MaxLevelNum         int         // 最大层数,默认是 7 层;
-	SSTKeyRangCheckNums int         // 默认是 5000;
-	NumVersionsToKeep   int         // 相同key, 可存在的不同版本数量;
-	TxnDoneIndexCh      chan uint64 // txn 提交完成, 通知 compact 组件,;
+	NumCompactors       int            // 合并协程数量;默认2;
+	BaseLevelSize       int64          // 基层中 所期望的文件大小;
+	LevelSizeMultiplier int            // 决定 level 之间期望 总体文件 size 比例, 默认是 10倍;
+	TableSizeMultiplier int            // 决定每层 文件 递增倍数;
+	BaseTableSize       int64          // 基层中 文件所期望的文件大小;
+	NumLevelZeroTables  int            // 第 0 层中, 允许存在的最大表数量;
+	MaxLevelNum         int            // 最大层数,默认是 7 层;
+	SSTKeyRangCheckNums int            // 默认是 5000;
+	NumVersionsToKeep   int            // 相同key, 可存在的不同版本数量;
+	TxnDoneIndex        *atomic.Uint64 // 事务结束水位, 由事务管理器直接发布, compact 按需读取;
 
 	// vlogFile GC; 在合并过程中, 统计出哪些 vlog 文件达到失效阈值比, 通知 vlog 组件, 方便其 vlogFile-GC;
 	DiscardStatsCh *chan map[uint32]int64 // 用于 compact 组件向 vlog 组件传递信息;
@@ -93,7 +94,7 @@ func GetDefaultOpt(dirPath string) *Options {
 		MaxLevelNum:         common.MaxLevelNum,
 		SSTKeyRangCheckNums: 5000,
 		NumVersionsToKeep:   1,
-		TxnDoneIndexCh:      nil,
+		TxnDoneIndex:        nil,
 		// Txn
 		DetectConflicts: true,
 	}
