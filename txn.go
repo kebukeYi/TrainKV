@@ -19,14 +19,19 @@ import (
 
 type TransactionManager struct {
 	detectConflicts bool
-	tsLock          sync.Mutex
-	writeChLock     sync.Mutex
-	nextTxnTs       uint64
-	startMark       *utils.LimitMark // startMark 回答"谁还在读" → 指导 compaction 安全回收旧版本;
-	commitMark      *utils.LimitMark // commitMark 回答"谁提交完了" → 保证新事务开启时读到全部已提交数据;
-	commitedTxns    []commitedTxn
-	lastCleanupTs   uint64
-	closer          *utils.Closer
+	// tsLock 保护 nextTxnTs 与 startMark 登记的原子性("发号即登记"):
+	//   所有事务的 startTs() 都只做"读 nextTxnTs + Begin 登记", 不修改共享状态 → 统一走读锁, 可并发进入;
+	//   唯一递增 nextTxnTs 的 newCommitTs()/incrementNextTs() 走写锁, 保证发号互斥;
+	// 顺序性依赖 Begin 的 channel 发送仍在锁内完成: 锁释放前任何提交都无法推进 nextTxnTs,
+	// 因此 FIFO 的 markCh 里不会有越过未登记 ts 的水位推进;
+	tsLock        sync.RWMutex
+	writeChLock   sync.Mutex
+	nextTxnTs     uint64
+	startMark     *utils.LimitMark  // startMark 回答"谁还在读" → 指导 compaction 安全回收旧版本;
+	commitMark    *utils.AtomicMark // commitMark 回答"谁提交完了" → 保证新事务开启时读到全部已提交数据;
+	commitedTxns  []commitedTxn
+	lastCleanupTs uint64
+	closer        *utils.Closer
 }
 
 type commitedTxn struct {
@@ -38,26 +43,27 @@ func NewTransactionManager(options *lsm.Options) *TransactionManager {
 	tm := &TransactionManager{
 		detectConflicts: options.DetectConflicts,
 		startMark:       &utils.LimitMark{Name: "startMark"},
-		commitMark:      &utils.LimitMark{Name: "commitMark"},
-		closer:          utils.NewCloser(2),
+		commitMark:      &utils.AtomicMark{Name: "commitMark"},
+		closer:          utils.NewCloser(1), // startMark 的 processOn 协程;
 	}
 	tm.startMark.Init(tm.closer, options.TxnDoneIndex)
-	tm.commitMark.Init(tm.closer, nil)
+	tm.commitMark.Init()
 	return tm
 }
 
 func (m *TransactionManager) Stop() {
-	//需要等待 2次 done();
 	m.closer.CloseAndWait()
 }
 
 func (m *TransactionManager) startTs(update bool) uint64 {
-	m.tsLock.Lock()
+	// 发号统一用读锁: 只读 nextTxnTs + Begin 登记, 事务之间不互斥;
+	// (写事务无需在此互斥: nextTxnTs 只在 newCommitTs 里递增, 那条路走写锁)
+	m.tsLock.RLock()
 	// 每次申请时, 申请到最新的index, 然后就等待其结束;
 	// 只有最新的结束了, 才说明之前的都提交了, 类似串行;
 	startTs := m.nextTxnTs - 1
-	m.startMark.Begin(startTs)
-	m.tsLock.Unlock()
+	m.startMark.Begin(startTs) // 必须在锁内发送: 见 tsLock 字段说明的顺序性约束;
+	m.tsLock.RUnlock()
 	// 只有纯读事务会在这里等待;
 	if !update {
 		// 纯读事务在开启这一刻就向自己承诺:"所有编号 ≤ startTs 的提交, 都应该看得见";
@@ -112,6 +118,7 @@ func (m *TransactionManager) newCommitTs(txn *Transaction) (uint64, bool) {
 	m.cleanCommitedTransaction()
 	commitTs = m.nextTxnTs
 	m.nextTxnTs++
+	// 7 号提交已经上路了，但还没落地。往后推水位的时候，别越过我;
 	m.commitMark.Begin(commitTs)
 	utils.AssertTrue(commitTs >= m.lastCleanupTs)
 	if m.detectConflicts {
@@ -225,6 +232,7 @@ func (db *TrainKV) NewTransaction(update bool) *Transaction {
 		txn.pendingKeys = nil
 		txn.conflictKeys = nil
 	}
+	// todo 阻塞严重;
 	txn.startTs = db.transactionManager.startTs(update)
 	return txn
 }

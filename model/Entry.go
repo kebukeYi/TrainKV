@@ -64,6 +64,7 @@ func (e *Entry) EstimateSize(valThreshold int64) int {
 	}
 }
 
+// todo 占据cpu性能; 分配空间也最大; 看能不能优化一下;
 func (e *Entry) SafeCopy() Entry {
 	entry := Entry{}
 	entry.Key = SafeCopy(nil, e.Key)

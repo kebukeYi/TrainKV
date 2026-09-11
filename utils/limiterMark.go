@@ -65,7 +65,9 @@ type LimitMark struct {
 }
 
 func (lm *LimitMark) Init(closer *Closer, doneIndexMirror *atomic.Uint64) {
-	lm.markCh = make(chan mark, 100)
+	// 容量实验: 100 -> 8192. 纯读实测 Begin/Done 是持 tsLock 发送的,
+	// 偶发阻塞会放大锁排队; 容量调大只把"阻塞"变"缓冲"(每个 mark 48B, 8192 约 400KB);
+	lm.markCh = make(chan mark, 8192)
 	// 流水线似,处理索引;
 	go lm.processOn(closer, doneIndexMirror)
 }
