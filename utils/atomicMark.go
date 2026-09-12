@@ -32,6 +32,7 @@ func (m *AtomicMark) Init() {
 }
 
 // Begin 仅更新最大索引; 不做任何跟踪与唤醒;
+// begin的调用是具备 顺序性; 但是完成时的done()调用 不一定是顺序性;
 func (m *AtomicMark) Begin(x uint64) {
 	m.lastIndex.Store(x)
 }
@@ -50,25 +51,35 @@ func (m *AtomicMark) GetLastIndex() uint64 {
 	return m.lastIndex.Load()
 }
 
+// begin的调用是具备 顺序性; 但是完成时的done()调用 不一定是顺序性;
 // Done 标记索引完成: 顺序完成走 CAS 快路径, 乱序完成压堆等待吸收;
 func (m *AtomicMark) Done(x uint64) {
+	// 快路径: 期望顺序发生;
 	for {
+		// 当前最新已结束水位;
 		d := m.doneIndex.Load()
+		// x:7;  d:5;
 		if x != d+1 {
+			// 不一致时, 将 x:7 放入池中,等待 x:6的唤醒;
 			break
 		}
+		// 顺序的话, 执行cas;
 		if m.doneIndex.CompareAndSwap(d, x) {
 			// 消费堆中下一个元素; absorb 可能把水位连推多个 index,
-			// 因此必须用吸收后的最终水位唤醒, 否则 (x, 新水位] 的等待者会漏唤醒;
+			// 因此必须用消费后的最终水位唤醒, 否则 (x, 新水位] 的等待者会漏唤醒;
 			m.absorb()
 			m.wakeWaiters(m.GetDoneIndex())
 			return
 		}
 	}
+
+	// 慢路径: 存在乱序发生;
+	// d:5; heap: [7,8,9,10], 在等待6的到来;
 	m.mu.Lock()
 	m.pending.push(x)
 	m.heapLen.Store(int32(len(m.pending)))
 	m.mu.Unlock()
+
 	// 压堆后必须再尝试吸收一次: 存在如下竞态窗口 —— 本协程读到 doneIndex 在快路径 CAS 之前,
 	// 而 push 发生在快路径 absorb 之后(快路径当时看到堆为空), 该索引就永远留在堆里,
 	// 水位停住且不会再有 Done 来推动 → 所有 WaitForIndexDone 死等.

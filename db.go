@@ -65,6 +65,8 @@ func Open(opt *lsm.Options) (*TrainKV, error, func() error) {
 
 	db.transactionManager = NewTransactionManager(opt)
 	db.transactionManager.nextTxnTs = db.MaxVersion()
+	// 发号计数播种: 首个 ts = MaxVersion(即 nextTxnTs-1);
+	db.transactionManager.initStartTs(db.transactionManager.nextTxnTs)
 	db.transactionManager.startMark.Done(db.transactionManager.nextTxnTs)
 	// commitMark 为 AtomicMark: 用 SetDoneIndex 播种水位(重放完成, 之前版本均已提交);
 	db.transactionManager.commitMark.SetDoneIndex(db.transactionManager.nextTxnTs)

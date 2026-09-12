@@ -17,18 +17,32 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/utils"
 )
 
+// tsCounter 是某个 startTs 上的活跃事务引用计数("发号即登记"的聚合形式):
+//   - 发号 inc: 计数 0→1 时才向 startMark 发送 Begin(该 ts 的首个活跃事务);
+//   - 结束 dec: 计数 1→0 时才发送 Done(该 ts 的最后一个活跃事务);
+//
+// 纯读场景所有事务共享同一个 ts, 计数在读者交替间从不归零 → 稳态 0 条水位消息,
+// markCh/processOn 彻底退出读热路径; 混合负载下消息数也从"2 条/op"降为"2 条/ts"。
+type tsCounter struct {
+	ts   uint64
+	refs atomic.Int64
+}
+
 type TransactionManager struct {
 	detectConflicts bool
-	// tsLock 保护 nextTxnTs 与 startMark 登记的原子性("发号即登记"):
-	//   所有事务的 startTs() 都只做"读 nextTxnTs + Begin 登记", 不修改共享状态 → 统一走读锁, 可并发进入;
-	//   唯一递增 nextTxnTs 的 newCommitTs()/incrementNextTs() 走写锁, 保证发号互斥;
-	// 顺序性依赖 Begin 的 channel 发送仍在锁内完成: 锁释放前任何提交都无法推进 nextTxnTs,
+	// tsLock 保护 nextTxnTs 与发号计数的原子性("发号即登记"):
+	//   所有事务的 startTs() 只做"读 nextTxnTs + inc 计数" → 走读锁, 可并发进入;
+	//   唯一递增 nextTxnTs 的 newCommitTs()/incrementNextTs() 走写锁, 并在提交时退役旧 ts 计数;
+	// 顺序性: inc(0→1) 触发的 Begin 必须仍在锁内发送 —— 锁释放前任何提交都无法推进 nextTxnTs,
 	// 因此 FIFO 的 markCh 里不会有越过未登记 ts 的水位推进;
 	tsLock        sync.RWMutex
 	writeChLock   sync.Mutex
 	nextTxnTs     uint64
-	startMark     *utils.LimitMark  // startMark 回答"谁还在读" → 指导 compaction 安全回收旧版本;
-	commitMark    *utils.AtomicMark // commitMark 回答"谁提交完了" → 保证新事务开启时读到全部已提交数据;
+	curCnt        atomic.Pointer[tsCounter] // 当前发号 ts 的计数器; 随 newCommitTs 退役;
+	refMu         sync.Mutex                // 保护 retired,提供并发安全;
+	retired       map[uint64]*tsCounter     // 已退役但仍有活跃事务的 ts → 剩余计数;
+	startMark     *utils.LimitMark          // startMark 回答"谁还在读" → 指导 compaction 安全回收旧版本;
+	commitMark    *utils.AtomicMark         // commitMark 回答"谁提交完了" → 保证新事务开启时读到全部已提交数据;
 	commitedTxns  []commitedTxn
 	lastCleanupTs uint64
 	closer        *utils.Closer
@@ -44,6 +58,7 @@ func NewTransactionManager(options *lsm.Options) *TransactionManager {
 		detectConflicts: options.DetectConflicts,
 		startMark:       &utils.LimitMark{Name: "startMark"},
 		commitMark:      &utils.AtomicMark{Name: "commitMark"},
+		retired:         make(map[uint64]*tsCounter),
 		closer:          utils.NewCloser(1), // startMark 的 processOn 协程;
 	}
 	tm.startMark.Init(tm.closer, options.TxnDoneIndex)
@@ -56,13 +71,22 @@ func (m *TransactionManager) Stop() {
 }
 
 func (m *TransactionManager) startTs(update bool) uint64 {
-	// 发号统一用读锁: 只读 nextTxnTs + Begin 登记, 事务之间不互斥;
+	// 发号统一用读锁: 只读 nextTxnTs + inc 计数, 事务之间不互斥;
 	// (写事务无需在此互斥: nextTxnTs 只在 newCommitTs 里递增, 那条路走写锁)
 	m.tsLock.RLock()
 	// 每次申请时, 申请到最新的index, 然后就等待其结束;
 	// 只有最新的结束了, 才说明之前的都提交了, 类似串行;
 	startTs := m.nextTxnTs - 1
-	m.startMark.Begin(startTs) // 必须在锁内发送: 见 tsLock 字段说明的顺序性约束;
+	c := m.curCnt.Load()
+	// 不变量: 持读锁期间 nextTxnTs/curCnt 是一致快照, 事务只会发到"当前 ts"上;
+	// 注意: 不能在这里用 CondPanicf —— 变参 ...any 会装箱逃逸, 热路径每 op 一次分配;
+	if c == nil || c.ts != startTs {
+		panic(fmt.Sprintf("startTs: ts=%d 与当前计数器不一致(登记丢失?)", startTs))
+	}
+	if c.refs.Add(1) == 1 {
+		// 0→1: 该 ts 的首个活跃事务, 必须在锁内发送(见 tsLock 字段的顺序性约束);
+		m.startMark.Begin(startTs)
+	}
 	m.tsLock.RUnlock()
 	// 只有纯读事务会在这里等待;
 	if !update {
@@ -106,6 +130,7 @@ func (m *TransactionManager) hasConflict(txn *Transaction) bool {
 	}
 	return false
 }
+
 func (m *TransactionManager) newCommitTs(txn *Transaction) (uint64, bool) {
 	m.tsLock.Lock()
 	defer m.tsLock.Unlock()
@@ -118,6 +143,8 @@ func (m *TransactionManager) newCommitTs(txn *Transaction) (uint64, bool) {
 	m.cleanCommitedTransaction()
 	commitTs = m.nextTxnTs
 	m.nextTxnTs++
+	// 发号推进到新 ts: 旧 ts 计数退役(仍有活跃事务则延后到其结束再发 Done);
+	m.retireStartTs(commitTs)
 	// 7 号提交已经上路了，但还没落地。往后推水位的时候，别越过我;
 	m.commitMark.Begin(commitTs)
 	utils.AssertTrue(commitTs >= m.lastCleanupTs)
@@ -160,10 +187,51 @@ func (m *TransactionManager) cleanCommitedTransaction() {
 	m.commitedTxns = tmp
 }
 func (m *TransactionManager) doneStart(txn *Transaction) {
-	if !txn.startDone {
-		txn.startDone = true
-		m.startMark.Done(txn.startTs)
+	if txn.startDone {
+		return
 	}
+	txn.startDone = true
+	x := txn.startTs
+	c := m.curCnt.Load()
+	if c == nil || c.ts != x {
+		// 事务跨过了提交: 其 ts 已退役, 去 retired 里找剩余计数;
+		m.refMu.Lock()
+		c = m.retired[x]
+		m.refMu.Unlock()
+	}
+	if c == nil {
+		panic(fmt.Sprintf("doneStart: ts=%d 找不到计数器(重复结束/登记丢失?)", x))
+	}
+	if c.refs.Add(-1) == 0 {
+		// 1→0: 该 ts 的最后一个活跃事务; 若已退役顺手清理计数表, 再发布 Done;
+		if cur := m.curCnt.Load(); cur == nil || cur.ts != x {
+			m.refMu.Lock()
+			if m.retired[x] == c {
+				delete(m.retired, x)
+			}
+			m.refMu.Unlock()
+		}
+		m.startMark.Done(x)
+	}
+}
+
+// initStartTs 由 Open 在确定初始 nextTxnTs 后调用, 建立首个 ts 计数器;
+func (m *TransactionManager) initStartTs(ts uint64) {
+	m.curCnt.Store(&tsCounter{ts: ts})
+}
+
+// retireStartTs 在 newCommitTs 推进 nextTxnTs 后调用(已持写锁):
+// 旧 ts 计数若仍被活跃事务持有则移入 retired, 由最后一个结束者补发 Done;
+// 提交之后的新事务只会发号到 newTs 上;
+func (m *TransactionManager) retireStartTs(newTs uint64) {
+	old := m.curCnt.Load()
+	if old != nil && old.refs.Load() > 0 {
+		// 先挂 retired 再发布新计数器: 保证 dec 侧无论读到哪个指针都能找到计数;
+		m.refMu.Lock()
+		m.retired[old.ts] = old
+		m.refMu.Unlock()
+	}
+	m.curCnt.Store(&tsCounter{ts: newTs})
 }
 
 type Transaction struct {
