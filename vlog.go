@@ -694,6 +694,7 @@ func (vlog *ValueLog) pickVlogFile(discardRatio float64) *VLogFile {
 	}{math.MaxUint32, 0}
 
 	vlog.VLogFileDisCardStaInfo.mux.RLock()
+
 	for _, sortedFileId := range sortedFileIDs {
 		if sortedFileId == vlog.maxFid.Load() {
 			continue

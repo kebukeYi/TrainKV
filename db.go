@@ -231,6 +231,8 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 					collected = false
 				}
 			}
+			// 1. 要么通道中没有数据了;
+			// 2. 要么本批次 达到阈值了;
 
 			// SyncWrites 下并发提交的汇合窗口: 短暂等待同一同步周期内先后到达的请求加入本批,
 			// 让一次刷盘覆盖更多提交; 串行提交(本批与上一批均仅 1 个请求)不等待, 无额外延迟;
@@ -258,6 +260,7 @@ func (db *TrainKV) handleWriteCh(closer *utils.Closer) {
 					}
 				}
 			}
+
 			lastBatchReqLen = reqLen
 
 			// 令牌空闲: 本协程直接写盘, 省去写协程的创建与调度 (串行提交场景);
