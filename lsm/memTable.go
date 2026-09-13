@@ -200,7 +200,12 @@ func (lsm *LSM) openMemTable(walFid uint64) (*MemoryTable, error) {
 	if err != nil {
 		return nil, common.Wraps(err, "#openMemTable recovery2SkipList failed, valid end offset: %d", endOff)
 	}
-	err = walFile.file.Truncate(int64(endOff))
+	// endOff == 0 表示 WAL 中无任何有效记录(崩溃后残留的"预分配全零 WAL");
+	// 此时不能再走 Truncate: ftruncate(0) 之后 mremap(new_size=0) 返回 EINVAL,
+	// 会让这类库永久无法重开; 保留稀疏的预分配文件即可, 下次重放同样判定为空;
+	if endOff > 0 {
+		err = walFile.file.Truncate(int64(endOff))
+	}
 	return mem, err
 }
 

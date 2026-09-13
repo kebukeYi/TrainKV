@@ -170,7 +170,13 @@ func (vlog *VLogFile) EncodeEntryAt(entry *model.Entry, offset uint32) (int, err
 		if defaultSize := int64(vlog.opt.ValueLogFileSize) * 2; defaultSize > growTo {
 			growTo = defaultSize
 		}
-		if err := vlog.f.Truncate(growTo); err != nil {
+		// Truncate 内部 mremap(MREMAP_MAYMOVE) 可能把映射搬到新地址;
+		// 读者持有 VLogFile.Lock.RLock 期间直接引用旧映射做 SafeCopy, 扩容必须用写锁互斥,
+		// 否则会读到已解除映射的地址 (SIGSEGV, 大 value 并发读写必现);
+		vlog.Lock.Lock()
+		err := vlog.f.Truncate(growTo)
+		vlog.Lock.Unlock()
+		if err != nil {
 			return 0, err
 		}
 	}

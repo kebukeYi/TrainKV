@@ -378,6 +378,11 @@ func (db *TrainKV) writeToLSM(req *model.Request) error {
 }
 
 func (db *TrainKV) ShouldWriteValueToLSM(entry *model.Entry) bool {
+	// finTxn 的 value 是 commitTs 明文, recovery2SkipList 重放时直接 ParseUint;
+	// 极小阈值(如 1)下它会被判进 vlog, WAL 里只剩 ValuePtr → 重开必然 ErrBadTxn;
+	if entry.Meta&common.BitFinTxn > 0 {
+		return true
+	}
 	return int64(len(entry.Value)) < db.Opt.ValueThreshold
 }
 
