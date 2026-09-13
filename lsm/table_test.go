@@ -15,7 +15,7 @@ import (
 
 var sstID uint64
 
-var sstTestPath = "/usr/golanddata/trainkv/table"
+var sstTestPath = "/tmp/golanddata/trainkv/table"
 
 func getTestTableOptions() *Options {
 	return &Options{

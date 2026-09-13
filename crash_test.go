@@ -19,10 +19,10 @@ const crashEntryNum = 50
 // 子进程写入数据后不 Close 直接退出, 父进程重新打开数据库校验数据完整性;
 func TestCrashRecovery(t *testing.T) {
 	t.Run("clean-crash", func(t *testing.T) {
-		runCrashRecovery(t, "/usr/golanddata/trainkv/crash_clean", false)
+		runCrashRecovery(t, "/tmp/golanddata/trainkv/crash_clean", false)
 	})
 	t.Run("torn-wal-tail", func(t *testing.T) {
-		runCrashRecovery(t, "/usr/golanddata/trainkv/crash_torn", true)
+		runCrashRecovery(t, "/tmp/golanddata/trainkv/crash_torn", true)
 	})
 }
 

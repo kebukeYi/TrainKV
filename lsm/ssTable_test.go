@@ -13,7 +13,7 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/utils"
 )
 
-var dirPath = "/usr/golanddata/trainkv/sst"
+var dirPath = "/tmp/golanddata/trainkv/sst"
 
 func TestOpenSStable(t *testing.T) {
 	tableName := filepath.Join(dirPath, "00001.sst")

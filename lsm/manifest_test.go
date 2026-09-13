@@ -6,7 +6,7 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/utils"
 )
 
-var manifestTestPath = "/usr/golanddata/trainkv/manifest"
+var manifestTestPath = "/tmp/golanddata/trainkv/manifest"
 
 func TestOpenManifestFile(t *testing.T) {
 	clearDir(manifestTestPath)

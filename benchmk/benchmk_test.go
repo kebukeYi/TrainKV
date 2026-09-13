@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var benchMarkDir = "/usr/golanddata/triankv/benchmk2"
+var benchMarkDir = "/tmp/golanddata/triankv/benchmk2"
 
 func clearDir(dir string) {
 	_, err := os.Stat(dir)

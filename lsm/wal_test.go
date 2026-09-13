@@ -11,7 +11,7 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/utils"
 )
 
-var walTestPath = "/usr/golanddata/trainkv/wal"
+var walTestPath = "/tmp/golanddata/trainkv/wal"
 
 var r = rand.New(rand.NewSource(time.Now().UnixNano()))
 

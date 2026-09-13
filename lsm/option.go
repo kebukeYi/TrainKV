@@ -57,8 +57,7 @@ type Options struct {
 
 const KvWriteChCapacity = 1000
 
-// const maxValueThreshold = 1 << 20
-const maxValueThreshold = 32
+const maxValueThreshold = 1 << 20
 
 func GetDefaultOpt(dirPath string) *Options {
 	return &Options{

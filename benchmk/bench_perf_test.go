@@ -19,7 +19,7 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/lsm"
 )
 
-var perfDataDir = "/usr/golanddata/trainkv/perf2"
+var perfDataDir = "/tmp/golanddata/trainkv/perf2"
 
 const (
 	perfKeyNum = 100000 // 读数据集规模: 100K * 512B ≈ 50MB, 大于 10MB memtable, 触发轮转;

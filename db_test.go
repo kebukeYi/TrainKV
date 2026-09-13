@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var dbTestPath = "/usr/golanddata/trainkv/db"
+var dbTestPath = "/tmp/golanddata/trainkv/db"
 
 func TestReOpen(t *testing.T) {
 	dir := dbTestPath

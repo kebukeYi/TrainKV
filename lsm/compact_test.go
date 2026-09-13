@@ -17,7 +17,7 @@ import (
 	"github.com/kebukeYi/TrainKV/v2/utils"
 )
 
-var compactTestPath = "/usr/golanddata/trainkv/compact"
+var compactTestPath = "/tmp/golanddata/trainkv/compact"
 
 // testTxnDoneIndex 测试共享的事务结束水位(替代已移除的 LevelsManger.txnDoneIndex 字段);
 var testTxnDoneIndex atomic.Uint64

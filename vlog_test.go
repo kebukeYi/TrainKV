@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var vlogTestPath = "/usr/golanddata/trainkv/vlog"
+var vlogTestPath = "/tmp/golanddata/trainkv/vlog"
 
 func TestValueLog_Entry(t *testing.T) {
 	// 清理目录

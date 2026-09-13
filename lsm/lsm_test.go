@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var lsmTestPath = "/usr/golanddata/trainkv/lsm"
+var lsmTestPath = "/tmp/golanddata/trainkv/lsm"
 
 func TestLSM_Get(t *testing.T) {
 	clearDir(lsmTestPath)
