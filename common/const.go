@@ -7,27 +7,32 @@ import (
 )
 
 const (
-	MaxLevelNum                       = 7
-	VlogFileDiscardStatsKey           = "VlogFileDiscard" // For storing lfDiscardStats
-	ManifestFilename                  = "MANIFEST"
-	ManifestRewriteFilename           = "REWRITEMANIFEST"
-	TxnKey                            = "!train!txn!fin"
-	LockFile                          = "LOCKFILE"
-	ManifestDeletionsRewriteThreshold = 10000 // 次
-	MaxKeySize                        = 65000 // B
-	ManifestDeletionsRatio            = 10
-	ManifestFileHeaderLen             = 8
-	ManifestFileCrcLen                = 8
-	DefaultFileFlag                   = os.O_RDWR | os.O_CREATE | os.O_APPEND
-	DefaultFileMode                   = 0666 // 666
-	MaxHeaderSize                     = 21   // 基于可变长编码, vlogFile其最可能的编码;
-	VlogHeaderSize                    = 0
-	WriteChBatchThreshold             = 900  // 写通道, 攒批请求数达到该值即强制写盘, 须小于 KvWriteChCapacity(1000);
-	SyncGroupCommitWait               = time.Millisecond // SyncWrites 攒批汇合窗口: 本批已有多请求时, 等待该时长吸收并发提交再刷盘, 减少同步次数;
+	MaxLevelNum                       = 7                                     //
+	VlogFileDiscardStatsKey           = "VlogFileDiscard"                     // For storing lfDiscardStats
+	ManifestFilename                  = "MANIFEST"                            //
+	ManifestRewriteFilename           = "REWRITEMANIFEST"                     //
+	TxnKey                            = "!train!txn!fin"                      //
+	LockFile                          = "LOCKFILE"                            //
+	ManifestDeletionsRewriteThreshold = 10000                                 // 次
+	MaxKeySize                        = 65000                                 // B
+	ManifestDeletionsRatio            = 10                                    //
+	ManifestFileHeaderLen             = 8                                     //
+	ManifestFileCrcLen                = 8                                     //
+	DefaultFileFlag                   = os.O_RDWR | os.O_CREATE | os.O_APPEND //
+	DefaultFileMode                   = 0666                                  // 666
+	MaxHeaderSize                     = 21                                    // 基于可变长编码, vlogFile其最可能的编码;
+	VlogHeaderSize                    = 0                                     //
+	WriteChBatchThreshold             = 900                                   // 写通道, 攒批请求数达到该值即强制写盘, 须小于 KvWriteChCapacity;
+	SyncGroupCommitWait               = time.Millisecond                      // SyncWrites 攒批汇合窗口: 本批已有多请求时, 等待该时长吸收并发提交再刷盘, 减少同步次数;
 )
 
 const LevelMaxStaleDataSize = 10 << 20    // 10MB
 const MaxAllocatorInitialSize = 256 << 20 // 256MB
+
+// MaxTs 哨兵版本号: 只给内部元数据记录用(如 vlog discard-stats, 见 vlog.go#processDiscardStats),
+// 它按"精确 ts 命中"的方式被读取, 不属于用户版本序列 —— 不能参与事务发号, 否则
+// nextTxnTs 会溢出归 0 (见 lsm.MaxVersion);
+const MaxTs = ^uint64(0)
 
 // entry meta
 const (

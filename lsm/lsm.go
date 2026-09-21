@@ -153,14 +153,23 @@ func (lsm *LSM) Get(keyTs []byte) (model.Entry, error) {
 	return lsm.LevelManger.Get(keyTs)
 }
 
+// MaxVersion 返回用户数据的最大版本号, 用于事务发号 (Open: nextTxnTs = MaxVersion)。
+// 内部元数据记录(如 vlog discard-stats)以 common.MaxTs 作哨兵, 它不是用户版本:
+// 若把哨兵算进来, nextTxnTs 会溢出归 0, 此后新事务拿到的 startTs/commitTs 退回极小值,
+// 破坏水位不变量 (commitTs >= lastCleanupTs 断言失败), 库虽能打开但一写就崩;
 func (lsm *LSM) MaxVersion() uint64 {
-	lsm.RLock()
 	var maxVersion uint64
-	maxVersion = lsm.memoryTable.maxVersion
-	for _, table := range lsm.immemoryTables {
-		if table.maxVersion > maxVersion {
-			maxVersion = table.maxVersion
+	// 哨兵不参与取最大值;
+	bump := func(v uint64) {
+		if v != common.MaxTs && v > maxVersion {
+			maxVersion = v
 		}
+	}
+
+	lsm.RLock()
+	bump(lsm.memoryTable.maxVersion)
+	for _, table := range lsm.immemoryTables {
+		bump(table.maxVersion)
 	}
 	lsm.RUnlock()
 
@@ -169,9 +178,7 @@ func (lsm *LSM) MaxVersion() uint64 {
 		leh := lsm.LevelManger.levelHandlers[i]
 		leh.mux.RLock()
 		for _, table := range leh.tables {
-			if v := table.MaxVersion(); v > maxVersion {
-				maxVersion = v
-			}
+			bump(table.MaxVersion())
 		}
 		leh.mux.RUnlock()
 	}

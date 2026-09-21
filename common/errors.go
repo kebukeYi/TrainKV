@@ -26,7 +26,8 @@ var (
 	ErrBlockEOF      = errors.New("block out of index")
 
 	ErrWalInvalidCrc = errors.New("wallFile: invalid crc")
-	ErrBadTxn        = errors.New("wallFile: bad txn")
+	ErrBadTxn        = errors.New("wallFile: bad TxnBin")
+	ErrBadTxnFin     = errors.New("wallFile: bad TxnFin")
 	ErrBadReadMagic  = errors.New("read magic failed")
 	ErrBadMagic      = errors.New("bad magic")
 	ErrBadCRC        = errors.New("bad crc")

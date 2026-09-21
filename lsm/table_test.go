@@ -47,7 +47,7 @@ func clearDir(dir string) error {
 	if err := os.RemoveAll(dir); err != nil {
 		common.Panic(err)
 	}
-	os.Mkdir(dir, os.ModePerm)
+	os.MkdirAll(dir, os.ModePerm)
 	return nil
 }
 

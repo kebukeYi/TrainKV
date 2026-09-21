@@ -516,6 +516,7 @@ func (t *Transaction) commitAndSendToDB() (func() (uint64, error), error) {
 		manager.doneCommit(commitTs)
 		return nil, err
 	}
+
 	// 写入通道成功; 释放锁, 允许其他事务写入或者读;
 	ret := func() (uint64, error) {
 		// 释放了锁后, 阻塞等待lsm结果; 然后才允许, 结束当前水印;

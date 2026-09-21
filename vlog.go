@@ -442,7 +442,7 @@ func (vlog *ValueLog) handleDiscardStats() {
 			return err
 		}
 		entries := []*model.Entry{{
-			Key:   model.KeyWithTs([]byte(common.VlogFileDiscardStatsKey), math.MaxUint64),
+			Key:   model.KeyWithTs([]byte(common.VlogFileDiscardStatsKey), common.MaxTs),
 			Value: encodeMap,
 		}}
 		request, err := vlog.Db.SendToWriteCh(entries)
@@ -831,22 +831,16 @@ func (vlog *ValueLog) gcReWriteLog(logFile *VLogFile) error {
 
 func (vlog *ValueLog) sendDiscardStats() error {
 	key := []byte(common.VlogFileDiscardStatsKey)
-	keyTs := model.KeyWithTs(key, math.MaxUint64)
+	keyTs := model.KeyWithTs(key, common.MaxTs)
 	entry, err := vlog.Db.get(keyTs)
 	if err != nil || entry == nil {
 		return err
 	}
+	// 不能再按 ValuePtr 解析一次: db.get 返回的 value 已经解引用完毕(值在 vlog 的话,
+	// 已从 vlog 读出正文), 而 Meta 上的 BitValuePointer 位是保留的——它表示"该 value
+	// 原本存于 vlog", 并不代表 value 还是指针; 旧代码据此再解一次, 会把 JSON 正文的前
+	// 12 字节当成 ValuePtr, 拿一个不存在的 fid 去读 vlog → Open panic, 库无法重开;
 	val := entry.Value
-	if model.IsValPtr(entry) {
-		var vp model.ValuePtr
-		vp.Decode(val)
-		rets, callBack, err := vlog.Read(&vp)
-		if err != nil {
-			return err
-		}
-		val = model.SafeCopy(nil, rets)
-		model.RunCallback(callBack)
-	}
 	if len(val) == 0 {
 		return nil
 	}

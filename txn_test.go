@@ -14,7 +14,7 @@ import (
 
 func removeAll(dir string) {
 	_ = os.RemoveAll(dir)
-	os.Mkdir(dir, os.ModePerm)
+	os.MkdirAll(dir, os.ModePerm)
 }
 
 func TestTransactionBasic(t *testing.T) {

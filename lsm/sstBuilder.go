@@ -118,8 +118,9 @@ func (ssb *SstBuilder) Add(e *model.Entry, isStale bool) {
 	// todo 当前 sst bloom 中 加入 祛除 Key 的 Ts版本号;
 	ssb.keyHashes = append(ssb.keyHashes, utils.Hash(model.ParseKey(keyTs)))
 
-	// 提取出真实的递增 commitTs 作为 version;
-	if version := model.ParseTsVersion(keyTs); version > ssb.maxVersion {
+	// 提取出真实的递增 commitTs 作为 version; 同 memTable.put: 内部元数据的哨兵 ts 不参与,
+	// 否则它会成为本 SST 的 maxVersion, 盖住真实最大版本并影响 L0 排序/发号;
+	if version := model.ParseTsVersion(keyTs); version != common.MaxTs && version > ssb.maxVersion {
 		ssb.maxVersion = version
 	}
 

@@ -77,9 +77,11 @@ func (m *MemoryTable) Put(e *model.Entry) error {
 }
 
 // put 写入跳表并维护 maxVersion; 恢复(重放)路径与在线写路径共用;
+// 内部元数据记录(vlog discard-stats, ts 用 common.MaxTs 哨兵)不参与版本统计:
+// 它若成为本表的 maxVersion, 会把真实的最大用户版本盖住, 重开后发号就退回去了;
 func (m *MemoryTable) put(e *model.Entry) {
 	m.skipList.Put(e)
-	if v := model.ParseTsVersion(e.Key); v > m.maxVersion {
+	if v := model.ParseTsVersion(e.Key); v != common.MaxTs && v > m.maxVersion {
 		m.maxVersion = v
 	}
 }
@@ -242,7 +244,7 @@ func (m *MemoryTable) recovery2SkipList() (uint32, error) {
 			}
 			parseUint, err := strconv.ParseUint(string(entry.Value), 10, 64)
 			if err != nil || parseUint != lastCommitTs {
-				return validEndOffset, common.ErrBadTxn
+				return validEndOffset, common.ErrBadTxnFin
 			}
 			lastCommitTs = 0
 			validEndOffset = readAt
@@ -251,7 +253,6 @@ func (m *MemoryTable) recovery2SkipList() (uint32, error) {
 			}
 			entries = entries[:0]
 		default:
-			// 非 keepTogether 的数据;
 			if lastCommitTs != 0 {
 				return validEndOffset, common.ErrBadTxn
 			}
