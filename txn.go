@@ -35,14 +35,16 @@ type TransactionManager struct {
 	//   唯一递增 nextTxnTs 的 newCommitTs()/incrementNextTs() 走写锁, 并在提交时退役旧 ts 计数;
 	// 顺序性: inc(0→1) 触发的 Begin 必须仍在锁内发送 —— 锁释放前任何提交都无法推进 nextTxnTs,
 	// 因此 FIFO 的 markCh 里不会有越过未登记 ts 的水位推进;
-	tsLock        sync.RWMutex
-	writeChLock   sync.Mutex
-	nextTxnTs     uint64
-	curCnt        atomic.Pointer[tsCounter] // 当前发号 ts 的计数器; 随 newCommitTs 退役;
-	refMu         sync.Mutex                // 保护 retired,提供并发安全;
-	retired       map[uint64]*tsCounter     // 已退役但仍有活跃事务的 ts → 剩余计数;
-	startMark     *utils.LimitMark          // startMark 回答"谁还在读" → 指导 compaction 安全回收旧版本;
-	commitMark    *utils.AtomicMark         // commitMark 回答"谁提交完了" → 保证新事务开启时读到全部已提交数据;
+	tsLock      sync.RWMutex
+	writeChLock sync.Mutex
+	nextTxnTs   uint64
+	curCnt      atomic.Pointer[tsCounter] // 当前发号 ts 的计数器; 随 newCommitTs 退役;
+	refMu       sync.Mutex                // 保护 retired,提供并发安全;
+	retired     map[uint64]*tsCounter     // 已退役但仍有活跃事务的 ts → 剩余计数;
+	// startMark = 读者的生死簿：Begin 是"借出去"，Done 是"还回来"，compaction 拿着它决定旧的能不能扔;
+	// commitMark = 写者的落地签收：Begin 是"发货了"，Done 是"签收了"，读事务拿着它等自己的快照凑齐;
+	startMark     *utils.LimitMark  // startMark 回答"谁还在读" → 指导 compaction 安全回收旧版本;
+	commitMark    *utils.AtomicMark // commitMark 回答"谁提交完了" → 保证新事务开启时读到全部已提交数据;
 	commitedTxns  []commitedTxn
 	lastCleanupTs uint64
 	closer        *utils.Closer
@@ -85,12 +87,18 @@ func (m *TransactionManager) startTs(update bool) uint64 {
 	}
 	if c.refs.Add(1) == 1 {
 		// 0→1: 该 ts 的首个活跃事务, 必须在锁内发送(见 tsLock 字段的顺序性约束);
+		// 放置水位, 等待被消费;
 		m.startMark.Begin(startTs)
 	}
 	m.tsLock.RUnlock()
 	// 只有纯读事务会在这里等待;
 	if !update {
-		// 纯读事务在开启这一刻就向自己承诺:"所有编号 ≤ startTs 的提交, 都应该看得见";
+		// startMark.start():
+		//1.记录当前TS正在有人读, 防止被compact()清理掉;
+		//2.wait(), 等待这个ts的 commitTs 数据已经安全落盘,否则自己将会读到旧数据;
+		// startMark.done():
+		//1.告诉compact() 小于等于这个的 ts 可以安全删除了;
+		// 纯读事务在开启这一刻就承诺:" 所有编号 ≤ startTs 的提交都已经落盘, 都应该看得见";
 		// 写事务的承诺, 延迟到首次读 LSM 时兑现(ensureStartTsReady), 纯写事务不付这笔等待;
 		err := m.commitMark.WaitForIndexDone(context.Background(), startTs)
 		common.Check(err)
@@ -305,8 +313,8 @@ func (db *TrainKV) NewTransaction(update bool) *Transaction {
 	return txn
 }
 
-// ensureStartTsReady 兑现 "所有 ≤ startTs 的提交都可见" 的承诺;
-// 写事务只有在真正读 LSM 时才需要, 纯写事务全程不付这笔等待,只需 lock() 等待 commitTs ;
+// ensureStartTsReady 兑现 "所有 ≤  的提交都可见" 的承诺;
+// 写事务 只有在真正读 LSM 时才需要, 纯startTs写事务全程不付这笔等待,只需 lock() 等待 commitTs ;
 func (t *Transaction) ensureStartTsReady() {
 	if t.startTsReady {
 		return
@@ -552,14 +560,7 @@ func (t *Transaction) Discard() {
 }
 
 func (t *Transaction) RollBack() {
-	// 归还池化的 entry, 避免从 EntryPool 借出的对象随事务废弃而泄漏;
-	for _, en := range t.pendingKeys {
-		en.Release()
-	}
-	t.pendingKeys = nil
-	t.conflictKeys = nil
-	t.readKeys = nil
-	t.db = nil
+	t.Discard()
 }
 
 func (db *TrainKV) Update(fn func(txn *Transaction) error) error {

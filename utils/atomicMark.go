@@ -60,7 +60,7 @@ func (m *AtomicMark) Done(x uint64) {
 		d := m.doneIndex.Load()
 		// x:7;  d:5;
 		if x != d+1 {
-			// 不一致时, 将 x:7 放入池中,等待 x:6的唤醒;
+			// 不一致时, 将 x:7 放入池中, 等待 x:6的唤醒;
 			break
 		}
 		// 顺序的话, 执行cas;
@@ -73,7 +73,7 @@ func (m *AtomicMark) Done(x uint64) {
 		}
 	}
 
-	// 慢路径: 存在乱序发生;
+	// 慢路径: 存在乱序发生,并发提交时, done() 执行时机, 顺序不一致;
 	// d:5; heap: [7,8,9,10], 在等待6的到来;
 	m.mu.Lock()
 	m.pending.push(x)
@@ -95,7 +95,9 @@ func (m *AtomicMark) absorb() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for len(m.pending) > 0 {
+		// 已经结束的最大 commitTs;
 		d := m.doneIndex.Load()
+		// 若存在不连续的 commitTs, 那就不消费,必须遵循 commitTs 顺序消费;
 		if m.pending[0] != d+1 {
 			break
 		}
